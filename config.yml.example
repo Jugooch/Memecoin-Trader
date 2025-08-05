@@ -1,0 +1,62 @@
+# Memecoin Trading Bot Configuration Template
+# Copy this file to config.yml and fill in your API keys
+
+# Free RPC endpoint - no paid subscription needed
+rpc_endpoint: "https://api.mainnet-beta.solana.com"
+
+# BitQuery API Token (get from https://bitquery.io)
+bitquery_token: "your_bitquery_token_here"
+
+# Moralis API Keys - You can add multiple keys for rotation
+# Get from https://moralis.io (sign up for free accounts)
+moralis_keys:
+  - your_first_moralis_key_here
+  - your_second_moralis_key_here  # Optional: add more for rotation
+  - your_third_moralis_key_here   # Optional: add more for rotation
+
+# Legacy single key support (will be converted to list)
+moralis_key: your_moralis_key_here
+
+# Optional QuickNode (only needed for automated live trading)
+quicknode_endpoint: ""  # Leave empty to disable
+quicknode_api_key: ""   # Leave empty to disable
+
+# Alpha wallet addresses (discovered by alpha_discovery_v2.py)
+watched_wallets:
+  # Add proven alpha wallet addresses here
+  # - wallet_address_1
+  # - wallet_address_2
+
+# Trading parameters
+threshold_alpha_buys: 3        # Number of alpha wallets needed to trigger trade
+min_liquidity_usd: 1000       # Minimum liquidity required
+time_window_sec: 120          # Time window to wait for alpha activity (seconds)
+max_trade_pct: 0.05           # Max % of capital per trade (5%)
+tp_multiplier: 2.0            # Take profit multiplier (2x)
+stop_loss_pct: 0.7            # Stop loss percentage (30% loss)
+
+# Trading execution mode
+trading_mode: "simulation"    # Options: "simulation", "alerts", "auto"
+# simulation = Paper trading only
+# alerts = Generate buy/sell alerts for manual execution  
+# auto = Fully automated trading (requires QuickNode)
+
+# Trading limits
+trading:
+  initial_capital: 100.0      # Starting capital ($)
+  max_trades_per_day: 10      # Daily trade limit
+  min_time_between_trades: 30 # Minimum seconds between trades
+
+# Pump.fun configuration
+pump_fun:
+  program_address: "6EF8rrecthHAuSStzpf6aXr9HWs8jgPVr5S6fqF6P"
+  api_endpoint: "https://pumpapi.fun"
+  
+# Logging configuration
+logging:
+  level: "INFO"               # DEBUG, INFO, WARNING, ERROR
+  file: "logs/trading.log"
+
+# Database configuration
+database:
+  file: "trades.db"

@@ -1,0 +1,7 @@
+requests>=2.31.0
+aiohttp>=3.8.5
+pyyaml>=6.0.1
+aiofiles>=23.1.0
+asyncio
+json
+sqlite3

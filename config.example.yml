@@ -1,0 +1,44 @@
+# Memecoin Trading Bot Configuration
+# Copy this file to config.yml and fill in your API keys
+
+# RPC and API Configuration
+rpc_endpoint: "https://api.mainnet-beta.solana.com"
+bitquery_token: "YOUR_BITQUERY_API_TOKEN"
+moralis_key: "YOUR_MORALIS_API_KEY"
+quicknode_endpoint: "YOUR_QUICKNODE_ENDPOINT"
+quicknode_api_key: "YOUR_QUICKNODE_API_KEY"
+
+# Alpha Wallets to Monitor
+# Add proven smart money wallet addresses here
+watched_wallets:
+  - "11111111111111111111111111111111"  # Example - replace with real addresses
+  - "22222222222222222222222222222222"  # Add more proven alpha wallets
+
+# Trading Parameters
+threshold_alpha_buys: 3          # Minimum alpha wallet buys to trigger trade
+min_liquidity_usd: 1000         # Minimum liquidity in USD
+time_window_sec: 120            # Time window to detect alpha activity (seconds)
+max_trade_pct: 0.05             # Maximum % of capital per trade
+tp_multiplier: 2.0              # Take profit multiplier (2x = 100% profit)
+stop_loss_pct: 0.7              # Stop loss percentage (0.7 = 30% loss)
+paper_mode: true                # Set to false for live trading
+
+# Trading Limits
+trading:
+  initial_capital: 100.0        # Starting capital amount
+  max_trades_per_day: 10        # Maximum trades per day
+  min_time_between_trades: 30   # Minimum seconds between trades
+
+# Pump.fun Configuration
+pump_fun:
+  program_address: "6EF8rrecthHAuSStzpf6aXr9HWs8jgPVrj5S6fqF6P"
+  api_endpoint: "https://pumpapi.fun"
+
+# Logging Configuration
+logging:
+  level: "INFO"                 # DEBUG, INFO, WARNING, ERROR
+  file: "logs/trading.log"
+
+# Database Configuration
+database:
+  file: "trades.db"
