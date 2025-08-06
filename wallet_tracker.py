@@ -51,11 +51,11 @@ class WalletTracker:
                     # Check if this is a buy (to_token is our mint)
                     if swap.get('to_token') == mint_address and wallet in self.watched_wallets:
                         alpha_buyers.add(wallet)
-                        self.logger.info(f"🔥 ALPHA WALLET DETECTED: {wallet[:8]}... bought {mint_address[:8]}...")
+                        self.logger.info(f"ALPHA WALLET DETECTED: {wallet[:8]}... bought {mint_address[:8]}...")
                 
                 # Check if we've hit the threshold
                 if len(alpha_buyers) >= threshold_buys:
-                    self.logger.info(f"🚀 ALPHA SIGNAL TRIGGERED! {len(alpha_buyers)} alpha wallets bought {mint_address[:8]}...")
+                    self.logger.info(f"ALPHA SIGNAL TRIGGERED! {len(alpha_buyers)} alpha wallets bought {mint_address[:8]}...")
                     return True
                 
                 # Wait before checking again

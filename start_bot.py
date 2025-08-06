@@ -45,8 +45,8 @@ class BotManager:
                 self._periodic_alerts_check(monitor)
             ]
             
-            print("✅ Bot initialized successfully")
-            print(f"Paper mode: {self.bot.config.paper_mode} | 💰 Capital: ${self.bot.config.initial_capital} | 🎯 Max trades/day: {self.bot.config.max_trades_per_day}")
+            print("Bot initialized successfully")
+            print(f"Paper mode: {self.bot.config.paper_mode} | Capital: ${self.bot.config.initial_capital} | Max trades/day: {self.bot.config.max_trades_per_day}")
             print("Starting monitoring (detailed logs in logs/trading.log)...")
             
             self.running = True
@@ -59,20 +59,20 @@ class BotManager:
             )
             
         except KeyboardInterrupt:
-            print("\n🛑 Shutdown requested by user")
+            print("\nShutdown requested by user")
             await self.shutdown()
         except Exception as e:
-            print(f"❌ Bot startup failed: {e}")
+            print(f"Bot startup failed: {e}")
             sys.exit(1)
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
-        print(f"\n📡 Received signal {signum}")
+        print(f"\nReceived signal {signum}")
         asyncio.create_task(self.shutdown())
 
     async def shutdown(self):
         """Gracefully shutdown the bot"""
-        print("🔄 Shutting down bot...")
+        print("Shutting down bot...")
         self.running = False
         
         if self.bot:
@@ -101,7 +101,7 @@ class BotManager:
             # Cleanup
             await self.bot.trading_engine.cleanup()
             
-        print("✅ Bot shutdown complete")
+        print("Bot shutdown complete")
         sys.exit(0)
 
     async def _periodic_health_check(self, system_monitor: SystemMonitor):
@@ -112,10 +112,10 @@ class BotManager:
                 
                 # Log warnings for high resource usage
                 if health['memory_used_pct'] > 80:
-                    print(f"⚠️  High memory usage: {health['memory_used_pct']:.1f}%")
+                    print(f"WARNING: High memory usage: {health['memory_used_pct']:.1f}%")
                 
                 if health['cpu_used_pct'] > 80:
-                    print(f"⚠️  High CPU usage: {health['cpu_used_pct']:.1f}%")
+                    print(f"WARNING: High CPU usage: {health['cpu_used_pct']:.1f}%")
                 
                 # Check network connectivity (only show if critical services are down)
                 connectivity = await system_monitor.check_network_connectivity()
@@ -148,7 +148,7 @@ class BotManager:
                 alerts = await monitor.check_performance_alerts()
                 
                 for alert in alerts:
-                    icon = "🚨" if alert['type'] == 'critical' else "⚠️" if alert['type'] == 'warning' else "ℹ️"
+                    icon = "[CRITICAL]" if alert['type'] == 'critical' else "[WARNING]" if alert['type'] == 'warning' else "[INFO]"
                     print(f"{icon} {alert['message']}")
                 
                 await asyncio.sleep(1800)  # Check every 30 minutes

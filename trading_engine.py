@@ -162,7 +162,9 @@ class TradingEngine:
             "success": True,
             "tokens_sold": tokens_to_sell,
             "price": current_price,
+            "usd_amount": usd_received,
             "usd_received": usd_received,
+            "sol_amount": usd_received / 20,  # Mock SOL price
             "profit": profit,
             "profit_pct": profit_pct,
             "paper_mode": True

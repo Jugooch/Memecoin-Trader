@@ -102,8 +102,8 @@ class PerformanceMonitor:
         
         # Calculate metrics
         total_trades = len(trade_history)
-        profitable_trades = sum(1 for trade in trade_history if trade.get('profit', 0) > 0)
-        total_profit = sum(trade.get('profit', 0) for trade in trade_history)
+        profitable_trades = sum(1 for trade in trade_history if (trade.get('profit') or 0) > 0)
+        total_profit = sum(trade.get('profit') or 0 for trade in trade_history)
         
         win_rate = profitable_trades / total_trades * 100 if total_trades > 0 else 0
         avg_profit_per_trade = total_profit / total_trades if total_trades > 0 else 0
@@ -114,7 +114,7 @@ class PerformanceMonitor:
         max_drawdown = 0
         
         for trade in reversed(trade_history):  # Oldest first
-            running_total += trade.get('profit', 0)
+            running_total += trade.get('profit') or 0
             if running_total > peak:
                 peak = running_total
             else:

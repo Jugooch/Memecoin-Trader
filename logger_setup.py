@@ -51,4 +51,9 @@ def setup_logging(level: str = "INFO", log_file: str = "logs/trading.log"):
     logger = logging.getLogger("MemecoinBot")
     logger.info(f"Logging initialized - Level: {level}, File: {log_file}")
     
+    # Suppress noisy GQL transport logs
+    logging.getLogger("gql.transport.aiohttp").setLevel(logging.WARNING)
+    logging.getLogger("gql.transport.websockets").setLevel(logging.WARNING)
+    logging.getLogger("gql.transport").setLevel(logging.WARNING)
+    
     return logger

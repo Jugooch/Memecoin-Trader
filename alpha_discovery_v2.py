@@ -17,21 +17,21 @@ Uses time-delayed analysis to find proven performers
   - Error resilience: Handles API failures gracefully
   - Cloud-ready: Designed for 24/7 operation
 
-  🎯 Test The Advanced Version:
+  Test The Advanced Version:
 
   python alpha_discovery_v2.py
 
   This approach waits 24 hours to validate token success, then only promotes wallets that bought winners early.
   It's the difference between:
 
-  ❌ Old way: "This wallet bought early" (might be random)✅ New way: "This wallet bought early on 5 tokens that
+  Old way: "This wallet bought early" (might be random) | New way: "This wallet bought early on 5 tokens that
   all succeeded" (proven alpha)
 
-  This is the professional-grade solution that will actually find real alpha wallets! 🎯
+  This is the professional-grade solution that will actually find real alpha wallets!
 
 ● Let me clarify exactly how this works:
 
-  🕐 How The Timing Works:
+  How The Timing Works:
 
   When You Run It NOW:
 
@@ -46,7 +46,7 @@ Uses time-delayed analysis to find proven performers
   - Every 6 hours, it repeats the analysis with fresh 24-48 hour old data
   - Gets new alpha wallets as more tokens mature and prove success
 
-  📊 Example Timeline:
+  Example Timeline:
 
   Day 1: Token "MEME" launches at 10:00 AM
   Day 2: At 10:00 AM, bot analyzes "MEME"
@@ -57,7 +57,7 @@ Uses time-delayed analysis to find proven performers
          → Analyzes tokens from Day 1 4:00 PM
          → Finds more alpha wallets from different successful tokens
 
-  🚀 When You Run The Script:
+  When You Run The Script:
 
   python alpha_discovery_v2.py  # Runs immediately, analyzes past 24-48 hours
 
@@ -66,7 +66,7 @@ Uses time-delayed analysis to find proven performers
   The 6-hour delay is only for the continuous loop - it's designed so when you deploy to cloud, it keeps finding
   new alpha wallets every 6 hours without you doing anything.
 
-  TL;DR: Run it now, get results now. The 24-48 hour lookback gives you PROVEN data, not fresh untested data. 🎯
+  TL;DR: Run it now, get results now. The 24-48 hour lookback gives you PROVEN data, not fresh untested data.
 
   This is much smarter than analyzing brand-new tokens that might fail!
 """
@@ -483,7 +483,7 @@ async def main():
         finder = ProvenAlphaFinder(bitquery, moralis, database)
         alpha_wallets = await finder.discover_alpha_wallets()
         
-        print(f"\n🎯 Discovered {len(alpha_wallets)} proven alpha wallets:")
+        print(f"\nDiscovered {len(alpha_wallets)} proven alpha wallets:")
         for i, wallet in enumerate(alpha_wallets[:10], 1):
             print(f"  #{i}: {wallet}")
         
@@ -494,7 +494,7 @@ async def main():
             # Update main bot config
             await finder._update_bot_config(alpha_wallets)
             
-            print(f"\n✅ These wallets have been validated through time-delayed analysis")
+            print(f"\nOK - These wallets have been validated through time-delayed analysis")
             print(f"   They consistently bought successful tokens within first 10 minutes")
             print(f"   Config updated with {len(alpha_wallets)} alpha wallets!")
     

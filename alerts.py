@@ -77,25 +77,25 @@ class TradingAlerts:
     async def _display_alert(self, alert: Dict):
         """Display alert in console"""
         print("\n" + "="*60)
-        print(f"🚨 {alert['type']} - {alert['urgency']} URGENCY")
+        print(f"ALERT: {alert['type']} - {alert['urgency']} URGENCY")
         print("="*60)
         print(f"⏰ Time: {alert['timestamp']}")
         print(f"🪙 Token: {alert.get('token_name', 'Unknown')} ({alert.get('token_symbol', 'Unknown')})")
-        print(f"📍 Address: {alert['mint']}")
+        print(f"Address: {alert['mint']}")
         
         if alert['type'] == 'BUY_SIGNAL':
-            print(f"💰 Liquidity: ${alert['liquidity_usd']:,.0f}")
-            print(f"👥 Alpha Buyers: {alert['alpha_buyers']}")
-            print(f"💵 Suggested Amount: ${alert['suggested_amount_usd']}")
-            print(f"🎯 Take Profit: {alert['take_profit_target']}")
-            print(f"🛑 Stop Loss: {alert['stop_loss']}")
+            print(f"Liquidity: ${alert['liquidity_usd']:,.0f}")
+            print(f"Alpha Buyers: {alert['alpha_buyers']}")
+            print(f"Suggested Amount: ${alert['suggested_amount_usd']}")
+            print(f"Take Profit: {alert['take_profit_target']}")
+            print(f"Stop Loss: {alert['stop_loss']}")
         else:
-            print(f"💹 Entry Price: ${alert['entry_price']:.6f}")
-            print(f"📈 Current Price: ${alert['current_price']:.6f}")
-            print(f"📊 Profit: {alert['profit_pct']:.1f}%")
-            print(f"🔔 Reason: {alert['reason'].replace('_', ' ').title()}")
+            print(f"Entry Price: ${alert['entry_price']:.6f}")
+            print(f"Current Price: ${alert['current_price']:.6f}")
+            print(f"Profit: {alert['profit_pct']:.1f}%")
+            print(f"Reason: {alert['reason'].replace('_', ' ').title()}")
         
-        print("\n📋 INSTRUCTIONS:")
+        print("\nINSTRUCTIONS:")
         for step, instruction in alert['instructions'].items():
             print(f"  {step}. {instruction}")
         
@@ -137,7 +137,7 @@ class TradingAlerts:
             with open(filename, 'w') as f:
                 json.dump(self.alerts, f, indent=2, default=str)
             
-            print(f"✅ Alerts exported to {filename}")
+            print(f"OK - Alerts exported to {filename}")
             return filename
         except Exception as e:
             self.logger.error(f"Failed to export alerts: {e}")

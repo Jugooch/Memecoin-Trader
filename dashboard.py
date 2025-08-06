@@ -31,9 +31,9 @@ class Dashboard:
         while True:
             self.clear_screen()
             
-            print("🤖 MEMECOIN TRADING BOT DASHBOARD")
+            print("MEMECOIN TRADING BOT DASHBOARD")
             print("=" * 50)
-            print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"Date/Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             print()
             
             # Portfolio Summary
@@ -52,7 +52,7 @@ class Dashboard:
             await self.display_active_positions()
             print()
             
-            print("🔄 Refreshing in 30 seconds... (Ctrl+C to exit)")
+            print("Refreshing in 30 seconds... (Ctrl+C to exit)")
             
             try:
                 await asyncio.sleep(30)
@@ -61,26 +61,26 @@ class Dashboard:
 
     async def display_portfolio_summary(self):
         """Display portfolio summary"""
-        print("💰 PORTFOLIO SUMMARY")
+        print("PORTFOLIO SUMMARY")
         print("-" * 20)
         
         try:
             summary = await self.monitor.get_daily_summary()
             
-            print(f"📊 Trades Today: {summary['trades_executed']}")
-            print(f"✅ Success Rate: {summary['trade_success_rate']:.1f}%")
-            print(f"💵 Today's Profit: ${summary['total_profit']:.2f}")
-            print(f"🔗 API Calls: {summary['api_calls']} (Error Rate: {summary['api_error_rate']:.1f}%)")
-            print(f"🔍 Tokens Analyzed: {summary['tokens_analyzed']}")
-            print(f"⚡ Alpha Signals: {summary['alpha_signals']} ({summary['alpha_signal_rate']:.1f}%)")
+            print(f"Trades Today: {summary['trades_executed']}")
+            print(f"Success Rate: {summary['trade_success_rate']:.1f}%")
+            print(f"Today's Profit: ${summary['total_profit']:.2f}")
+            print(f"API Calls: {summary['api_calls']} (Error Rate: {summary['api_error_rate']:.1f}%)")
+            print(f"Tokens Analyzed: {summary['tokens_analyzed']}")
+            print(f"Alpha Signals: {summary['alpha_signals']} ({summary['alpha_signal_rate']:.1f}%)")
             print(f"⏱️  Uptime: {summary['uptime_hours']:.1f} hours")
             
         except Exception as e:
-            print(f"❌ Error loading portfolio: {e}")
+            print(f"ERROR: Error loading portfolio: {e}")
 
     async def display_recent_trades(self):
         """Display recent trades"""
-        print("📈 RECENT TRADES (Last 10)")
+        print("RECENT TRADES (Last 10)")
         print("-" * 25)
         
         try:
@@ -100,16 +100,16 @@ class Dashboard:
                 profit_str = f"${profit:.2f}" if profit else "Pending"
                 pct_str = f"({profit_pct:.1f}%)" if profit_pct else ""
                 
-                status = "🟢" if profit and profit > 0 else "🔴" if profit and profit < 0 else "🟡"
+                status = "PROFIT" if profit and profit > 0 else "LOSS" if profit and profit < 0 else "PENDING"
                 
                 print(f"{status} {timestamp} | {action:4} | {mint} | {profit_str} {pct_str}")
                 
         except Exception as e:
-            print(f"❌ Error loading trades: {e}")
+            print(f"ERROR: Error loading trades: {e}")
 
     async def display_performance_metrics(self):
         """Display performance metrics"""
-        print("📊 PERFORMANCE METRICS (Last 7 days)")
+        print("PERFORMANCE METRICS (Last 7 days)")
         print("-" * 35)
         
         try:
@@ -123,11 +123,11 @@ class Dashboard:
             print(f"Max Drawdown: {report.get('max_drawdown', 0):.1f}%")
             
         except Exception as e:
-            print(f"❌ Error loading performance: {e}")
+            print(f"ERROR: Error loading performance: {e}")
 
     async def display_active_positions(self):
         """Display active positions"""
-        print("🎯 ACTIVE POSITIONS")
+        print("ACTIVE POSITIONS")
         print("-" * 18)
         
         try:
@@ -143,15 +143,15 @@ class Dashboard:
                 amount = pos.get('current_amount', 0)
                 sol_invested = pos.get('sol_invested', 0)
                 
-                print(f"🪙 {mint} | Entry: ${entry_price:.6f} | Amount: {amount:.0f} | Invested: {sol_invested:.3f} SOL")
+                print(f"TOKEN {mint} | Entry: ${entry_price:.6f} | Amount: {amount:.0f} | Invested: {sol_invested:.3f} SOL")
                 
         except Exception as e:
-            print(f"❌ Error loading positions: {e}")
+            print(f"ERROR: Error loading positions: {e}")
 
     async def show_detailed_report(self):
         """Show detailed performance report"""
         self.clear_screen()
-        print("📊 DETAILED PERFORMANCE REPORT")
+        print("DETAILED PERFORMANCE REPORT")
         print("=" * 40)
         
         try:
@@ -189,7 +189,7 @@ class Dashboard:
                     print(f"  {date}: {trades} trades, ${profit:.2f}, {win_rate:.1f}% win rate")
             
         except Exception as e:
-            print(f"❌ Error generating report: {e}")
+            print(f"ERROR: Error generating report: {e}")
         
         print("\nPress Enter to return to dashboard...")
         input()
@@ -199,9 +199,9 @@ class Dashboard:
         try:
             filename = f"performance_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             await self.monitor.export_metrics(filename)
-            print(f"✅ Data exported to {filename}")
+            print(f"OK - Data exported to {filename}")
         except Exception as e:
-            print(f"❌ Export failed: {e}")
+            print(f"ERROR: Export failed: {e}")
         
         input("Press Enter to continue...")
 
@@ -211,7 +211,7 @@ class Dashboard:
         
         while True:
             self.clear_screen()
-            print("🤖 MEMECOIN BOT DASHBOARD")
+            print("MEMECOIN BOT DASHBOARD")
             print("=" * 30)
             print("1. Live Dashboard")
             print("2. Detailed Report")
@@ -228,7 +228,7 @@ class Dashboard:
             elif choice == '3':
                 await self.export_data()
             elif choice == '4':
-                print("👋 Goodbye!")
+                print("Goodbye!")
                 break
             else:
                 print("Invalid option. Please try again.")
@@ -241,9 +241,9 @@ async def main():
     try:
         await dashboard.run_interactive()
     except KeyboardInterrupt:
-        print("\n👋 Dashboard closed")
+        print("\nDashboard closed")
     except Exception as e:
-        print(f"💥 Dashboard error: {e}")
+        print(f"ERROR: Dashboard error: {e}")
 
 
 if __name__ == "__main__":

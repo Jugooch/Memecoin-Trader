@@ -135,7 +135,8 @@ class MemecoinTradingBot:
             self.monitor_new_tokens(),
             self.manage_active_positions(),
             self.daily_reset_task(),
-            self.periodic_summary_task()
+            self.periodic_summary_task(),
+            self.heartbeat_task()
         )
 
     async def monitor_new_tokens(self):
@@ -291,25 +292,32 @@ class MemecoinTradingBot:
                     'action': 'BUY',
                     'amount': trade_amount,
                     'price': result['price'],
+                    'sol_amount': result.get('sol_amount', 0),
+                    'tokens_amount': result.get('tokens_received', 0),
                     'timestamp': datetime.now(),
-                    'paper_mode': self.config.paper_mode
+                    'paper_mode': self.config.paper_mode,
+                    'metadata': {
+                        'symbol': metadata.get('symbol', 'UNKNOWN'),
+                        'name': metadata.get('name', 'Unknown Token')
+                    }
                 })
                 
                 self.trades_today += 1
                 self.last_trade_time = time.time()
                 
                 # Start monitoring for exit conditions
-                asyncio.create_task(self.monitor_position(mint_address, result))
+                asyncio.create_task(self.monitor_position(mint_address, result, metadata))
                 
         except Exception as e:
             self.logger.error(f"Trade execution failed: {e}")
 
-    async def monitor_position(self, mint_address: str, entry_data: Dict):
+    async def monitor_position(self, mint_address: str, entry_data: Dict, metadata: Dict = None):
         """Monitor position for take profit and stop loss"""
         entry_price = entry_data['price']
         tp_price = entry_price * self.config.tp_multiplier
         sl_price = entry_price * self.config.stop_loss_pct
         peak_price = entry_price
+        symbol = metadata.get('symbol', 'UNKNOWN') if metadata else 'UNKNOWN'
         
         self.logger.info(f"Monitoring position {mint_address}, TP: {tp_price}, SL: {sl_price}")
         
@@ -322,13 +330,52 @@ class MemecoinTradingBot:
                 
                 # Take profit condition
                 if current_price >= tp_price:
-                    await self.trading_engine.sell_token(mint_address, 0.5, self.config.paper_mode)
+                    sell_result = await self.trading_engine.sell_token(mint_address, 0.5, self.config.paper_mode)
+                    if sell_result.get('success'):
+                        # Record the sell trade with profit/loss
+                        await self.database.record_trade({
+                            'mint': mint_address,
+                            'action': 'SELL',
+                            'amount': sell_result.get('usd_amount', 0),
+                            'price': current_price,
+                            'sol_amount': sell_result.get('sol_amount', 0),
+                            'tokens_amount': sell_result.get('tokens_sold', 0),
+                            'timestamp': datetime.now(),
+                            'paper_mode': self.config.paper_mode,
+                            'profit': sell_result.get('profit', 0),
+                            'profit_pct': sell_result.get('profit_pct', 0),
+                            'exit_reason': 'TAKE_PROFIT',
+                            'metadata': {
+                                'symbol': symbol,
+                                'type': 'sell'
+                            }
+                        })
                     self.logger.info(f"Take profit executed for {mint_address}")
                     tp_price = current_price * 1.5  # Adjust for remaining position
                 
                 # Stop loss condition
-                if current_price <= sl_price or current_price <= peak_price * 0.8:
-                    await self.trading_engine.sell_token(mint_address, 1.0, self.config.paper_mode)
+                # Only use trailing stop if we're in profit (peak > entry * 1.1)
+                if current_price <= sl_price or (peak_price > entry_price * 1.1 and current_price <= peak_price * 0.85):
+                    sell_result = await self.trading_engine.sell_token(mint_address, 1.0, self.config.paper_mode)
+                    if sell_result.get('success'):
+                        # Record the sell trade with profit/loss
+                        await self.database.record_trade({
+                            'mint': mint_address,
+                            'action': 'SELL',
+                            'amount': sell_result.get('usd_amount', 0),
+                            'price': current_price,
+                            'sol_amount': sell_result.get('sol_amount', 0),
+                            'tokens_amount': sell_result.get('tokens_sold', 0),
+                            'timestamp': datetime.now(),
+                            'paper_mode': self.config.paper_mode,
+                            'profit': sell_result.get('profit', 0),
+                            'profit_pct': sell_result.get('profit_pct', 0),
+                            'exit_reason': 'STOP_LOSS',
+                            'metadata': {
+                                'symbol': symbol,
+                                'type': 'sell'
+                            }
+                        })
                     self.logger.info(f"Stop loss executed for {mint_address}")
                     break
                 
@@ -354,6 +401,28 @@ class MemecoinTradingBot:
             self.trades_today = 0
             self.logger.info("Daily trade counter reset")
     
+    async def heartbeat_task(self):
+        """Show periodic heartbeat status instead of constant WebSocket spam"""
+        last_ws_activity = time.time()
+        ws_active = True
+        
+        while self.running:
+            await asyncio.sleep(30)  # Every 30 seconds
+            
+            # Check if we're still receiving data
+            current_time = time.time()
+            if self.tokens_processed > 0 or self.alpha_checks_performed > 0:
+                last_ws_activity = current_time
+                ws_active = True
+            elif current_time - last_ws_activity > 60:  # No activity for 60 seconds
+                ws_active = False
+            
+            # Only show heartbeat if no other activity
+            if ws_active and self.tokens_processed == 0:
+                self.logger.debug("WebSocket active - monitoring for new tokens...")
+            elif not ws_active:
+                self.logger.warning("No WebSocket activity detected - checking connection...")
+    
     async def periodic_summary_task(self):
         """Log periodic summary to show the bot is working"""
         last_tokens_processed = 0
@@ -366,14 +435,79 @@ class MemecoinTradingBot:
             tokens_this_period = self.tokens_processed - last_tokens_processed
             alpha_checks_this_period = self.alpha_checks_performed - last_alpha_checks
             
-            # Simple summary of activity
-            if tokens_this_period > 0 or alpha_checks_this_period > 0:
-                self.logger.info(f"📊 5min Summary: {tokens_this_period} tokens scanned, "
+            # Get recent trades from the last 5 minutes
+            try:
+                recent_trades = await self.database.get_trade_history(limit=50)
+                
+                # Filter trades from last 5 minutes
+                five_min_ago = time.time() - 300
+                period_trades = []
+                for t in recent_trades:
+                    timestamp = t.get('timestamp', 0)
+                    # Convert timestamp to float if it's a string
+                    if isinstance(timestamp, str):
+                        try:
+                            timestamp = float(timestamp)
+                        except (ValueError, TypeError):
+                            timestamp = 0
+                    if timestamp > five_min_ago:
+                        period_trades.append(t)
+                
+                # Prepare trade summary
+                trade_summary = ""
+                if period_trades:
+                    total_bought = sum(t.get('sol_amount', 0) for t in period_trades if t.get('action') == 'BUY')
+                    total_sold = sum(t.get('sol_amount', 0) for t in period_trades if t.get('action') == 'SELL')
+                    profits = sum(t.get('profit', 0) for t in period_trades if t.get('profit') is not None)
+                    
+                    trade_details = []
+                    for trade in period_trades[:3]:  # Show up to 3 most recent trades
+                        # Get symbol from metadata or directly from trade
+                        metadata = trade.get('metadata', {})
+                        if isinstance(metadata, str):
+                            try:
+                                import json
+                                metadata = json.loads(metadata)
+                            except:
+                                metadata = {}
+                        token_name = metadata.get('symbol') or trade.get('symbol', 'Unknown')
+                        trade_type = trade.get('action', 'unknown').lower()
+                        amount = trade.get('sol_amount', 0)
+                        profit = trade.get('profit', None)
+                        
+                        if trade_type == 'buy':
+                            usd_amount = trade.get('amount', 0)
+                            trade_details.append(f"  • Bought {token_name} for ${usd_amount:.2f}")
+                        elif trade_type == 'sell':
+                            usd_amount = trade.get('amount', 0)
+                            profit_str = f" ({profit:+.2f}% profit)" if profit is not None else ""
+                            trade_details.append(f"  • Sold {token_name} for ${usd_amount:.2f}{profit_str}")
+                    
+                    trade_summary = f"\nTrade Activity:\n" + "\n".join(trade_details)
+                    if profits != 0:
+                        trade_summary += f"\n  Period P&L: {profits:+.2f}%"
+                
+                # Build summary message
+                if tokens_this_period > 0 or alpha_checks_this_period > 0 or period_trades:
+                    summary = f"5min Summary: {tokens_this_period} tokens scanned, " \
+                             f"{alpha_checks_this_period} alpha checks, " \
+                             f"{len(period_trades)} trades executed, " \
+                             f"${self.current_capital:.2f} capital"
+                    
+                    if trade_summary:
+                        summary += trade_summary
+                    
+                    self.logger.info(summary)
+                else:
+                    self.logger.info("Bot running - monitoring pump.fun launches and alpha wallets...")
+                    
+            except Exception as e:
+                self.logger.error(f"Error generating trade summary: {e}")
+                # Fallback to simple summary
+                self.logger.info(f"5min Summary: {tokens_this_period} tokens scanned, "
                                f"{alpha_checks_this_period} alpha checks, "
                                f"{self.trades_today} trades today, "
                                f"${self.current_capital:.2f} capital")
-            else:
-                self.logger.info("🤖 Bot running - monitoring pump.fun launches and alpha wallets...")
                 
             last_tokens_processed = self.tokens_processed
             last_alpha_checks = self.alpha_checks_performed
