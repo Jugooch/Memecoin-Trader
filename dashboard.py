@@ -9,8 +9,8 @@ import time
 from datetime import datetime
 import json
 
-from database import Database
-from monitoring import PerformanceMonitor
+from src.core.database import Database
+from src.utils.monitoring import PerformanceMonitor
 
 
 class Dashboard:

@@ -79,9 +79,9 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import json
 
-from bitquery_client import BitqueryClient
-from moralis_client import MoralisClient
-from database import Database
+from src.clients.bitquery_client import BitqueryClient
+from src.clients.moralis_client import MoralisClient
+from src.core.database import Database
 
 
 class ProvenAlphaFinder:
@@ -428,7 +428,9 @@ class ProvenAlphaFinder:
         try:
             # Read current config
             import yaml
-            with open('config.yml', 'r') as f:
+            import os
+            config_path = 'config/config.yml' if os.path.exists('config/config.yml') else 'config.yml'
+            with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
             
             # Get current wallets
@@ -441,7 +443,7 @@ class ProvenAlphaFinder:
             config['watched_wallets'] = updated_wallets[:50]
             
             # Save updated config
-            with open('config.yml', 'w') as f:
+            with open(config_path, 'w') as f:
                 yaml.safe_dump(config, f, default_flow_style=False)
             
             self.logger.info(f"Updated config with {len(updated_wallets)} alpha wallets")
@@ -468,7 +470,9 @@ async def main():
     logger.info("Starting Alpha Discovery V2...")
     
     # Load config
-    with open('config.yml', 'r') as f:
+    import os
+    config_path = 'config/config.yml' if os.path.exists('config/config.yml') else 'config.yml'
+    with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     
     # Initialize clients

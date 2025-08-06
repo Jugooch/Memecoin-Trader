@@ -13,8 +13,8 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent))
 
 from main import MemecoinTradingBot
-from monitoring import PerformanceMonitor, SystemMonitor
-from logger_setup import setup_logging
+from src.utils.monitoring import PerformanceMonitor, SystemMonitor
+from src.utils.logger_setup import setup_logging
 
 
 class BotManager:
@@ -165,12 +165,14 @@ def main():
         print("Python 3.8 or higher is required")
         sys.exit(1)
     
-    # Check config file exists
+    # Check config file exists (try both locations)
     config_file = "config.yml"
     if not os.path.exists(config_file):
-        print(f"Config file {config_file} not found")
-        print("Please copy config.yml.example to config.yml and configure your API keys")
-        sys.exit(1)
+        config_file = os.path.join("config", "config.yml")
+        if not os.path.exists(config_file):
+            print(f"Config file not found")
+            print("Please copy config/config.yml.example to config/config.yml and configure your API keys")
+            sys.exit(1)
     
     # Create logs directory
     os.makedirs("logs", exist_ok=True)

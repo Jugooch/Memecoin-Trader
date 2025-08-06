@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List
 import json
 
-from database import Database
+from src.core.database import Database
 
 
 class PerformanceMonitor:

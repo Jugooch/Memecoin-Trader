@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from typing import List, Set, Dict
-from moralis_client import MoralisClient
+from src.clients.moralis_client import MoralisClient
 
 
 class WalletTracker:

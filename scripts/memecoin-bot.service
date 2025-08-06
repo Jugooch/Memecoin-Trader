@@ -1,0 +1,24 @@
+[Unit]
+Description=Memecoin Trading Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/memecoin-trader
+ExecStart=/home/ubuntu/memecoin-trader/scripts/start_all.sh
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/ubuntu/memecoin-trader/logs/service.log
+StandardError=append:/home/ubuntu/memecoin-trader/logs/service_error.log
+
+# Environment
+Environment="PYTHONUNBUFFERED=1"
+
+# Resource limits
+LimitNOFILE=65536
+MemoryLimit=2G
+
+[Install]
+WantedBy=multi-user.target

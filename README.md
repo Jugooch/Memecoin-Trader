@@ -238,17 +238,17 @@ Built-in resilience features:
 
 Project structure:
 ```
-├── main.py              # Main bot orchestrator
-├── bitquery_client.py   # Bitquery GraphQL client
-├── moralis_client.py    # Moralis API client
-├── pumpfun_client.py    # Pump.fun trading client
-├── wallet_tracker.py    # Alpha wallet monitoring
-├── trading_engine.py    # Trade execution logic
-├── database.py          # Data persistence
-├── monitoring.py        # Performance tracking
-├── logger_setup.py      # Logging configuration
-├── start_bot.py         # Startup script
-└── config.yml           # Configuration file
+  src/
+  ├── clients/     (API clients)
+  ├── core/        (Trading engine, database, wallet tracker)
+  ├── discovery/   (Alpha wallet discovery)
+  └── utils/       (Monitoring, logging)
+
+  scripts/
+  ├── start_all.sh              (Main startup script)
+  ├── alpha_discovery_scheduler.py  (6-hour scheduler)
+  ├── health_check.py           (Monitor bot health)
+  └── memecoin-bot.service      (Systemd service)
 ```
 
 ## Contributing

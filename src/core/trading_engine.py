@@ -9,8 +9,8 @@ from typing import Dict, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
-from pumpfun_client import PumpFunClient
-from moralis_client import MoralisClient
+from src.clients.pumpfun_client import PumpFunClient
+from src.clients.moralis_client import MoralisClient
 
 
 @dataclass

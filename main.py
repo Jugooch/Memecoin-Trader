@@ -20,13 +20,13 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from bitquery_client import BitqueryClient
-from moralis_client import MoralisClient
-from pumpfun_client import PumpFunClient
-from wallet_tracker import WalletTracker
-from trading_engine import TradingEngine
-from database import Database
-from logger_setup import setup_logging
+from src.clients.bitquery_client import BitqueryClient
+from src.clients.moralis_client import MoralisClient
+from src.clients.pumpfun_client import PumpFunClient
+from src.core.wallet_tracker import WalletTracker
+from src.core.trading_engine import TradingEngine
+from src.core.database import Database
+from src.utils.logger_setup import setup_logging
 
 
 @dataclass
@@ -86,6 +86,9 @@ class MemecoinTradingBot:
         self.last_token_cleanup = time.time()
 
     def _load_config(self, config_path: str) -> TradingConfig:
+        # Check both old and new config locations
+        if not os.path.exists(config_path):
+            config_path = os.path.join('config', config_path)
         with open(config_path, 'r') as f:
             config_data = yaml.safe_load(f)
         

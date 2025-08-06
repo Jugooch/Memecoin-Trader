@@ -10,9 +10,9 @@ from typing import Dict, List, Set
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-from bitquery_client import BitqueryClient
-from moralis_client import MoralisClient
-from database import Database
+from src.clients.bitquery_client import BitqueryClient
+from src.clients.moralis_client import MoralisClient
+from src.core.database import Database
 
 
 class AlphaWalletFinder:
