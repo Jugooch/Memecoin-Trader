@@ -81,6 +81,10 @@ class MemecoinTradingBot:
         self.tokens_processed = 0
         self.alpha_checks_performed = 0
         
+        # In-memory trade history for summaries (to avoid database issues)
+        self.recent_trades = []  # List of trade dicts with timestamps
+        self.trade_history_duration = 604800  # Keep 7 days of trade history (7 * 24 * 60 * 60)
+        
         # Token deduplication to avoid processing same token multiple times
         self.processed_tokens = {}  # Now stores {token: timestamp} for cleanup
         self.token_cache_duration = 1800  # Remember processed tokens for 30 minutes
@@ -274,6 +278,17 @@ class MemecoinTradingBot:
             self.logger.debug(f"Cleaned up {len(expired_tokens)} old processed tokens")
             
         self.last_token_cleanup = current_time
+    
+    def _cleanup_old_trades(self):
+        """Remove trades older than trade_history_duration from memory"""
+        current_time = time.time()
+        cutoff_time = current_time - self.trade_history_duration
+        
+        # Keep only trades within the retention period
+        self.recent_trades = [
+            trade for trade in self.recent_trades 
+            if trade.get('timestamp', 0) > cutoff_time
+        ]
 
     async def execute_trade(self, mint_address: str, metadata: Dict, liquidity: Dict):
         """Execute a trade on the token"""
@@ -290,21 +305,34 @@ class MemecoinTradingBot:
             )
             
             if result['success']:
-                # Record trade
-                await self.database.record_trade({
+                # Create trade record
+                trade_record = {
                     'mint': mint_address,
                     'action': 'BUY',
                     'amount': trade_amount,
                     'price': result['price'],
                     'sol_amount': result.get('sol_amount', 0),
                     'tokens_amount': result.get('tokens_received', 0),
-                    'timestamp': datetime.now(),
+                    'timestamp': time.time(),  # Use unix timestamp for in-memory
                     'paper_mode': self.config.paper_mode,
                     'metadata': {
                         'symbol': metadata.get('symbol', 'UNKNOWN'),
                         'name': metadata.get('name', 'Unknown Token')
                     }
-                })
+                }
+                
+                # Add to in-memory trade history
+                self.recent_trades.append(trade_record)
+                self._cleanup_old_trades()  # Clean up old trades from memory
+                
+                # Try to record in database (but don't fail if it doesn't work)
+                try:
+                    db_record = trade_record.copy()
+                    db_record['timestamp'] = datetime.now()  # Database expects datetime
+                    await self.database.record_trade(db_record)
+                except Exception as db_error:
+                    self.logger.warning(f"Failed to save trade to database: {db_error}")
+                    # Continue anyway - we have it in memory
                 
                 self.trades_today += 1
                 self.last_trade_time = time.time()
@@ -336,15 +364,15 @@ class MemecoinTradingBot:
                 if current_price >= tp_price:
                     sell_result = await self.trading_engine.sell_token(mint_address, 0.5, self.config.paper_mode)
                     if sell_result.get('success'):
-                        # Record the sell trade with profit/loss
-                        await self.database.record_trade({
+                        # Create sell trade record
+                        sell_record = {
                             'mint': mint_address,
                             'action': 'SELL',
                             'amount': sell_result.get('usd_amount', 0),
                             'price': current_price,
                             'sol_amount': sell_result.get('sol_amount', 0),
                             'tokens_amount': sell_result.get('tokens_sold', 0),
-                            'timestamp': datetime.now(),
+                            'timestamp': time.time(),  # Use unix timestamp for in-memory
                             'paper_mode': self.config.paper_mode,
                             'profit': sell_result.get('profit', 0),
                             'profit_pct': sell_result.get('profit_pct', 0),
@@ -353,7 +381,19 @@ class MemecoinTradingBot:
                                 'symbol': symbol,
                                 'type': 'sell'
                             }
-                        })
+                        }
+                        
+                        # Add to in-memory trade history
+                        self.recent_trades.append(sell_record)
+                        self._cleanup_old_trades()
+                        
+                        # Try to record in database (but don't fail if it doesn't work)
+                        try:
+                            db_record = sell_record.copy()
+                            db_record['timestamp'] = datetime.now()  # Database expects datetime
+                            await self.database.record_trade(db_record)
+                        except Exception as db_error:
+                            self.logger.warning(f"Failed to save sell trade to database: {db_error}")
                     self.logger.info(f"Take profit executed for {mint_address}")
                     tp_price = current_price * 1.5  # Adjust for remaining position
                 
@@ -362,15 +402,15 @@ class MemecoinTradingBot:
                 if current_price <= sl_price or (peak_price > entry_price * 1.1 and current_price <= peak_price * 0.85):
                     sell_result = await self.trading_engine.sell_token(mint_address, 1.0, self.config.paper_mode)
                     if sell_result.get('success'):
-                        # Record the sell trade with profit/loss
-                        await self.database.record_trade({
+                        # Create sell trade record
+                        sell_record = {
                             'mint': mint_address,
                             'action': 'SELL',
                             'amount': sell_result.get('usd_amount', 0),
                             'price': current_price,
                             'sol_amount': sell_result.get('sol_amount', 0),
                             'tokens_amount': sell_result.get('tokens_sold', 0),
-                            'timestamp': datetime.now(),
+                            'timestamp': time.time(),  # Use unix timestamp for in-memory
                             'paper_mode': self.config.paper_mode,
                             'profit': sell_result.get('profit', 0),
                             'profit_pct': sell_result.get('profit_pct', 0),
@@ -379,7 +419,19 @@ class MemecoinTradingBot:
                                 'symbol': symbol,
                                 'type': 'sell'
                             }
-                        })
+                        }
+                        
+                        # Add to in-memory trade history
+                        self.recent_trades.append(sell_record)
+                        self._cleanup_old_trades()
+                        
+                        # Try to record in database (but don't fail if it doesn't work)
+                        try:
+                            db_record = sell_record.copy()
+                            db_record['timestamp'] = datetime.now()  # Database expects datetime
+                            await self.database.record_trade(db_record)
+                        except Exception as db_error:
+                            self.logger.warning(f"Failed to save sell trade to database: {db_error}")
                     self.logger.info(f"Stop loss executed for {mint_address}")
                     break
                 
@@ -439,23 +491,14 @@ class MemecoinTradingBot:
             tokens_this_period = self.tokens_processed - last_tokens_processed
             alpha_checks_this_period = self.alpha_checks_performed - last_alpha_checks
             
-            # Get recent trades from the last 5 minutes
+            # Get recent trades from the last 5 minutes from in-memory storage
             try:
-                recent_trades = await self.database.get_trade_history(limit=50)
-                
                 # Filter trades from last 5 minutes
                 five_min_ago = time.time() - 300
-                period_trades = []
-                for t in recent_trades:
-                    timestamp = t.get('timestamp', 0)
-                    # Convert timestamp to float if it's a string
-                    if isinstance(timestamp, str):
-                        try:
-                            timestamp = float(timestamp)
-                        except (ValueError, TypeError):
-                            timestamp = 0
-                    if timestamp > five_min_ago:
-                        period_trades.append(t)
+                period_trades = [
+                    trade for trade in self.recent_trades
+                    if trade.get('timestamp', 0) > five_min_ago
+                ]
                 
                 # Prepare trade summary
                 trade_summary = ""
