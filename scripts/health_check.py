@@ -14,6 +14,16 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent))
 
+try:
+    from src.utils.config_loader import load_config, get_database_path, get_log_path
+    config = load_config()
+    DB_PATH = get_database_path(config)
+    LOG_PATH = get_log_path(config)
+except:
+    # Fallback to hardcoded paths if config loading fails
+    DB_PATH = 'trades.db'
+    LOG_PATH = 'logs/trading.log'
+
 
 def check_bot_health():
     """Check if bot is healthy"""
@@ -25,7 +35,7 @@ def check_bot_health():
     
     # Check 1: Database exists and is accessible
     try:
-        db_path = 'trades.db'
+        db_path = DB_PATH
         if os.path.exists(db_path):
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
@@ -85,7 +95,7 @@ def check_bot_health():
     
     # Check 3: Log files exist and are recent
     try:
-        log_file = 'logs/trading.log'
+        log_file = LOG_PATH
         if os.path.exists(log_file):
             # Check if log was modified in last hour
             mtime = os.path.getmtime(log_file)
@@ -111,8 +121,10 @@ def check_bot_health():
     
     # Check 4: Config file exists
     try:
-        config_paths = ['config/config.yml', 'config.yml']
-        config_found = any(os.path.exists(p) for p in config_paths)
+        # Use config loader to check if config is accessible
+        from src.utils.config_loader import load_config
+        load_config()  # Will raise exception if not found
+        config_found = True
         
         health_status['checks']['config'] = {
             'status': 'OK' if config_found else 'ERROR',
@@ -122,10 +134,13 @@ def check_bot_health():
         if not config_found:
             health_status['healthy'] = False
     except Exception as e:
+        config_found = False
         health_status['checks']['config'] = {
             'status': 'ERROR',
-            'message': str(e)
+            'message': str(e),
+            'config_found': config_found
         }
+        health_status['healthy'] = False
     
     return health_status
 

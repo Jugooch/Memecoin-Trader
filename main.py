@@ -28,6 +28,7 @@ from src.core.wallet_tracker import WalletTracker
 from src.core.trading_engine import TradingEngine
 from src.core.database import Database
 from src.utils.logger_setup import setup_logging
+from src.utils.config_loader import load_config, validate_required_keys
 
 
 @dataclass
@@ -98,17 +99,14 @@ class MemecoinTradingBot:
         self.last_token_cleanup = time.time()
 
     def _load_config(self, config_path: str) -> TradingConfig:
-        # Check both old and new config locations
-        if not os.path.exists(config_path):
-            config_path = os.path.join('config', config_path)
-        with open(config_path, 'r') as f:
-            config_data = yaml.safe_load(f)
+        # Use shared config loader
+        config_data = load_config(config_path)
         
-        # Handle both single key and multiple keys format
-        moralis_keys = config_data.get('moralis_keys', [])
-        if not moralis_keys:
-            # Fallback to single key format
-            moralis_keys = [config_data['moralis_key']]
+        # Validate required configuration
+        validate_required_keys(config_data)
+        
+        # Extract moralis keys (already normalized by config_loader)
+        moralis_keys = config_data.get('moralis_keys', [config_data.get('moralis_key', '')])
         
         return TradingConfig(
             rpc_endpoint=config_data['rpc_endpoint'],

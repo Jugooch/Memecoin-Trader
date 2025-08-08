@@ -19,6 +19,7 @@ from src.clients.bitquery_client import BitqueryClient
 from src.clients.moralis_client import MoralisClient
 from src.core.database import Database
 from src.discovery.alpha_discovery_v2 import ProvenAlphaFinder
+from src.utils.config_loader import load_config, get_database_path
 
 
 async def run_discovery():
@@ -28,16 +29,13 @@ async def run_discovery():
     logging.info("="*60)
     
     try:
-        # Load config
-        import yaml
-        config_path = 'config/config.yml' if os.path.exists('config/config.yml') else 'config.yml'
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
+        # Load config using shared loader
+        config = load_config('config.yml')
         
         # Initialize clients
         bitquery = BitqueryClient(config['bitquery_token'])
         moralis = MoralisClient(config.get('moralis_keys', config.get('moralis_key')))
-        database = Database(config['database']['file'])
+        database = Database(get_database_path(config))
         
         await database.initialize()
         

@@ -11,11 +11,14 @@ import json
 
 from src.core.database import Database
 from src.utils.monitoring import PerformanceMonitor
+from src.utils.config_loader import load_config, get_database_path
 
 
 class Dashboard:
-    def __init__(self):
-        self.db = Database()
+    def __init__(self, config_path: str = "config.yml"):
+        # Load config to get proper database path
+        config = load_config(config_path)
+        self.db = Database(get_database_path(config))
         self.monitor = PerformanceMonitor(self.db)
 
     async def initialize(self):

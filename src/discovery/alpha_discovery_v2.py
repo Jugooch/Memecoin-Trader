@@ -82,6 +82,7 @@ import json
 from src.clients.bitquery_client import BitqueryClient
 from src.clients.moralis_client import MoralisClient
 from src.core.database import Database
+from src.utils.config_loader import load_config
 
 
 class ProvenAlphaFinder:
@@ -426,12 +427,9 @@ class ProvenAlphaFinder:
     async def _update_bot_config(self, new_wallets: List[str]):
         """Update bot config with new alpha wallets"""
         try:
-            # Read current config
+            # Read current config using shared loader
             import yaml
-            import os
-            config_path = 'config/config.yml' if os.path.exists('config/config.yml') else 'config.yml'
-            with open(config_path, 'r') as f:
-                config = yaml.safe_load(f)
+            config = load_config('config.yml')
             
             # Get current wallets
             current_wallets = set(config.get('watched_wallets', []))
@@ -441,6 +439,18 @@ class ProvenAlphaFinder:
             
             # Limit to top 50 wallets (manageable size)
             config['watched_wallets'] = updated_wallets[:50]
+            
+            # Find the actual config file path to write to
+            import os
+            possible_paths = ['config.yml', 'config/config.yml']
+            config_path = None
+            for path in possible_paths:
+                if os.path.exists(path):
+                    config_path = path
+                    break
+            
+            if not config_path:
+                config_path = 'config.yml'  # Default if none exist
             
             # Save updated config
             with open(config_path, 'w') as f:
@@ -469,15 +479,12 @@ async def main():
     logger = logging.getLogger(__name__)
     logger.info("Starting Alpha Discovery V2...")
     
-    # Load config
-    import os
-    config_path = 'config/config.yml' if os.path.exists('config/config.yml') else 'config.yml'
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
+    # Load config using shared loader
+    config = load_config('config.yml')
     
     # Initialize clients
     bitquery = BitqueryClient(config['bitquery_token'])
-    moralis = MoralisClient(config['moralis_key'])
+    moralis = MoralisClient(config.get('moralis_keys', config.get('moralis_key')))
     database = Database()
     
     await database.initialize()

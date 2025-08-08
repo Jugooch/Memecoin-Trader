@@ -131,9 +131,9 @@ memecoin-trader/
 │   │   ├── trading_engine.py
 │   │   └── wallet_tracker.py
 │   ├── discovery/           # Alpha wallet discovery
-│   │   ├── alpha_discovery_v2.py
-│   │   └── alpha_finder.py
+│   │   └── alpha_discovery_v2.py
 │   └── utils/               # Utilities
+│       ├── config_loader.py  # Shared config loading
 │       ├── logger_setup.py
 │       └── monitoring.py
 ├── scripts/                 # Deployment scripts
