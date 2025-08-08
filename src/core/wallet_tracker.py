@@ -17,6 +17,16 @@ class WalletTracker:
         # Cache for recent activity
         self.recent_activity = {}
         self.cache_duration = 300  # 5 minutes
+        
+        # Wallet performance tracking
+        self.wallet_performance = {}  # {wallet: {'trades': [], 'stats': {}}}
+        self.wallet_tiers = {}  # {wallet: 'S', 'A', 'B', 'C'}
+        self.tier_investment_multipliers = {
+            'S': 2.0,   # 10% of capital
+            'A': 1.4,   # 7% of capital  
+            'B': 1.0,   # 5% of capital (base)
+            'C': 0.6    # 3% of capital
+        }
 
     async def check_alpha_activity(self, mint_address: str, time_window_sec: int, threshold_buys: int, moralis_client=None) -> bool:
         """
@@ -71,6 +81,90 @@ class WalletTracker:
         else:
             self.logger.debug(f"No alpha wallet activity found for {mint_address[:8]}...")
         return False
+    
+    async def check_alpha_activity_detailed(self, mint_address: str, time_window_sec: int, moralis_client=None) -> Dict:
+        """
+        Enhanced alpha activity check that returns detailed wallet information
+        Returns: {
+            'alpha_wallets': set of wallet addresses,
+            'wallet_tiers': {wallet: tier},
+            'confidence_score': 0-100,
+            'investment_multiplier': float
+        }
+        """
+        self.logger.debug(f"Checking detailed alpha activity for {mint_address}")
+        
+        start_time = time.time()
+        alpha_buyers = set()
+        
+        if not moralis_client:
+            self.logger.error("Moralis client not provided")
+            return {'alpha_wallets': set(), 'wallet_tiers': {}, 'confidence_score': 0, 'investment_multiplier': 0.6}
+            
+        moralis = moralis_client
+        
+        while time.time() - start_time < time_window_sec:
+            try:
+                swaps = await moralis.get_token_swaps(mint_address, limit=100)
+                
+                for swap in swaps:
+                    swap_time = self._parse_timestamp(swap.get('timestamp'))
+                    
+                    if time.time() - swap_time > time_window_sec:
+                        continue
+                    
+                    wallet = swap.get('wallet', '')
+                    
+                    if swap.get('to_token') == mint_address and wallet in self.watched_wallets:
+                        alpha_buyers.add(wallet)
+                        self.logger.info(f"ALPHA WALLET DETECTED: {wallet[:8]}... bought {mint_address[:8]}...")
+                
+                if len(alpha_buyers) >= 1:  # Return early if we have at least one
+                    break
+                
+                await asyncio.sleep(5)
+                
+            except Exception as e:
+                self.logger.error(f"Error checking alpha activity: {e}")
+                await asyncio.sleep(2)
+        
+        # Calculate wallet tiers and scores
+        wallet_tiers = {}
+        tier_scores = []
+        
+        for wallet in alpha_buyers:
+            tier = self.get_wallet_tier(wallet)
+            wallet_tiers[wallet] = tier
+            
+            # Tier scoring: S=40, A=30, B=20, C=10
+            tier_score = {'S': 40, 'A': 30, 'B': 20, 'C': 10}.get(tier, 5)
+            tier_scores.append(tier_score)
+        
+        # Calculate confidence score and investment multiplier
+        if not alpha_buyers:
+            return {'alpha_wallets': set(), 'wallet_tiers': {}, 'confidence_score': 0, 'investment_multiplier': 0.6}
+        
+        # Base confidence from number of wallets
+        wallet_count_score = min(len(alpha_buyers) * 15, 60)  # Max 60 from count
+        
+        # Average tier score
+        avg_tier_score = sum(tier_scores) / len(tier_scores)
+        
+        # Total confidence
+        confidence_score = wallet_count_score + avg_tier_score
+        
+        # Investment multiplier based on best tier present
+        best_tier_multiplier = max(self.tier_investment_multipliers.get(t, 0.6) for t in wallet_tiers.values())
+        
+        self.logger.info(f"Alpha analysis for {mint_address[:8]}: {len(alpha_buyers)} wallets, "
+                        f"confidence: {confidence_score:.1f}, multiplier: {best_tier_multiplier:.1f}x")
+        
+        return {
+            'alpha_wallets': alpha_buyers,
+            'wallet_tiers': wallet_tiers,
+            'confidence_score': confidence_score,
+            'investment_multiplier': best_tier_multiplier
+        }
 
     def _parse_timestamp(self, timestamp) -> float:
         """Parse timestamp to unix time"""
@@ -84,6 +178,87 @@ class WalletTracker:
             except:
                 return time.time()
         return time.time()
+
+    def get_wallet_tier(self, wallet_address: str) -> str:
+        """Get the performance tier for a wallet (S, A, B, C)"""
+        if wallet_address in self.wallet_tiers:
+            return self.wallet_tiers[wallet_address]
+        
+        # Default tier for new wallets
+        return 'B'  # Assume average performance initially
+    
+    def update_wallet_tier(self, wallet_address: str, win_rate: float, avg_profit_pct: float):
+        """Update wallet tier based on performance metrics"""
+        if win_rate >= 0.70 and avg_profit_pct >= 100:
+            tier = 'S'
+        elif win_rate >= 0.60 and avg_profit_pct >= 50:
+            tier = 'A'
+        elif win_rate >= 0.50 and avg_profit_pct >= 20:
+            tier = 'B'
+        else:
+            tier = 'C'
+        
+        old_tier = self.wallet_tiers.get(wallet_address, 'B')
+        self.wallet_tiers[wallet_address] = tier
+        
+        if old_tier != tier:
+            self.logger.info(f"Wallet {wallet_address[:8]} tier updated: {old_tier} -> {tier}")
+    
+    def record_wallet_trade(self, wallet_address: str, token: str, action: str, entry_price: float, 
+                          exit_price: float = None, profit_pct: float = None):
+        """Record a trade for performance tracking"""
+        if wallet_address not in self.wallet_performance:
+            self.wallet_performance[wallet_address] = {'trades': [], 'stats': {}}
+        
+        trade = {
+            'token': token,
+            'action': action,
+            'entry_price': entry_price,
+            'exit_price': exit_price,
+            'profit_pct': profit_pct,
+            'timestamp': time.time()
+        }
+        
+        self.wallet_performance[wallet_address]['trades'].append(trade)
+        
+        # Keep only last 30 trades per wallet to avoid memory bloat
+        if len(self.wallet_performance[wallet_address]['trades']) > 30:
+            self.wallet_performance[wallet_address]['trades'] = \
+                self.wallet_performance[wallet_address]['trades'][-30:]
+        
+        # Update stats and tier if we have complete trades
+        if exit_price and profit_pct is not None:
+            self._update_wallet_stats(wallet_address)
+    
+    def _update_wallet_stats(self, wallet_address: str):
+        """Update wallet statistics and tier"""
+        trades = self.wallet_performance[wallet_address]['trades']
+        completed_trades = [t for t in trades if t.get('profit_pct') is not None]
+        
+        if len(completed_trades) < 5:  # Need minimum trades for reliable stats
+            return
+        
+        # Calculate stats
+        wins = sum(1 for t in completed_trades if t['profit_pct'] > 0)
+        win_rate = wins / len(completed_trades)
+        avg_profit = sum(t['profit_pct'] for t in completed_trades) / len(completed_trades)
+        
+        self.wallet_performance[wallet_address]['stats'] = {
+            'win_rate': win_rate,
+            'avg_profit_pct': avg_profit,
+            'total_trades': len(completed_trades),
+            'last_updated': time.time()
+        }
+        
+        # Update tier
+        self.update_wallet_tier(wallet_address, win_rate, avg_profit)
+    
+    def get_wallet_stats(self, wallet_address: str) -> Dict:
+        """Get performance stats for a wallet"""
+        if wallet_address not in self.wallet_performance:
+            return {}
+        
+        return self.wallet_performance[wallet_address].get('stats', {})
 
     async def analyze_wallet_patterns(self, wallet_address: str, moralis_client=None) -> Dict:
         """Analyze trading patterns of a specific wallet"""

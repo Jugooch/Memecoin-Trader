@@ -85,6 +85,13 @@ class MemecoinTradingBot:
         self.recent_trades = []  # List of trade dicts with timestamps
         self.trade_history_duration = 604800  # Keep 7 days of trade history (7 * 24 * 60 * 60)
         
+        # Token safety tracking
+        self.token_safety_cache = {}  # Cache safety scores to avoid re-checking
+        
+        # Execution latency tracking
+        self.execution_latencies = []  # Store recent latencies for monitoring
+        self.latency_history_duration = 3600  # Keep 1 hour of latency data
+        
         # Token deduplication to avoid processing same token multiple times
         self.processed_tokens = {}  # Now stores {token: timestamp} for cleanup
         self.token_cache_duration = 1800  # Remember processed tokens for 30 minutes
@@ -162,6 +169,9 @@ class MemecoinTradingBot:
 
     async def process_new_token(self, token_event: Dict):
         """Process a newly launched token"""
+        # Start latency tracking
+        token_detected_time = time.time()
+        
         mint_address = token_event['mint']
         deployer = token_event['deployer']
         
@@ -215,17 +225,67 @@ class MemecoinTradingBot:
                 self.logger.error(f"Failed to get token data for {mint_address}: {e}")
             return
         
-        # Track alpha wallet activity
+        # Track alpha wallet activity with enhanced analysis
         self.alpha_checks_performed += 1
-        alpha_signal = await self.wallet_tracker.check_alpha_activity(
+        alpha_check_start_time = time.time()
+        
+        alpha_analysis = await self.wallet_tracker.check_alpha_activity_detailed(
             mint_address, 
             self.config.time_window_sec,
-            self.config.threshold_alpha_buys,
             self.moralis
         )
         
-        if alpha_signal:
-            await self.execute_trade(mint_address, metadata, liquidity)
+        alpha_check_end_time = time.time()
+        
+        # Check if we should execute trade based on confidence and thresholds
+        confidence_score = alpha_analysis['confidence_score']
+        investment_multiplier = alpha_analysis['investment_multiplier']
+        alpha_wallets = alpha_analysis['alpha_wallets']
+        wallet_tiers = alpha_analysis['wallet_tiers']
+        
+        # Dynamic threshold based on wallet quality
+        min_confidence = 50
+        
+        if confidence_score >= min_confidence and len(alpha_wallets) > 0:
+            # Check token safety before trading
+            safety_check = await self.check_token_safety(mint_address, metadata, liquidity)
+            
+            if not safety_check['safe']:
+                rug_score = safety_check['rug_score']
+                warnings = safety_check['warnings']
+                self.logger.warning(f"Token {mint_address[:8]} failed safety check: "
+                                  f"Score: {rug_score}, Warnings: {warnings}")
+                return  # Skip this trade
+            
+            # Log the trade decision
+            tier_summary = ', '.join([f"{addr[:8]}({tier})" for addr, tier in wallet_tiers.items()])
+            self.logger.info(f"TRADE SIGNAL: {mint_address[:8]} - Confidence: {confidence_score:.1f}, "
+                           f"Multiplier: {investment_multiplier:.1f}x, Safety: {safety_check['rug_score']}, "
+                           f"Wallets: {tier_summary}")
+            
+            # Track execution latency
+            trade_executed_time = time.time()
+            total_latency = trade_executed_time - token_detected_time
+            alpha_latency = alpha_check_end_time - alpha_check_start_time
+            
+            # Record latency metrics
+            latency_record = {
+                'total_latency': total_latency,
+                'alpha_check_latency': alpha_latency,
+                'token': mint_address[:8],
+                'timestamp': trade_executed_time
+            }
+            
+            self.execution_latencies.append(latency_record)
+            self._cleanup_old_latencies()
+            
+            # Warn if latency is too high
+            if total_latency > 3.0:  # More than 3 seconds
+                self.logger.warning(f"High execution latency: {total_latency:.1f}s "
+                                  f"(alpha: {alpha_latency:.1f}s) for {mint_address[:8]}")
+            
+            await self.execute_trade(mint_address, metadata, liquidity, 
+                                   confidence_score, investment_multiplier, wallet_tiers)
 
     def _can_trade(self) -> bool:
         """Check if we can execute a new trade"""
@@ -289,10 +349,116 @@ class MemecoinTradingBot:
             trade for trade in self.recent_trades 
             if trade.get('timestamp', 0) > cutoff_time
         ]
+    
+    def _cleanup_old_latencies(self):
+        """Remove old latency records from memory"""
+        current_time = time.time()
+        cutoff_time = current_time - self.latency_history_duration
+        
+        # Keep only latencies within the retention period
+        self.execution_latencies = [
+            latency for latency in self.execution_latencies 
+            if latency.get('timestamp', 0) > cutoff_time
+        ]
+    
+    async def check_token_safety(self, mint_address: str, metadata: Dict, liquidity: Dict) -> Dict:
+        """
+        Check token safety and calculate rug risk score
+        Returns: {'safe': bool, 'rug_score': 0-100, 'warnings': []}
+        """
+        # Check cache first
+        if mint_address in self.token_safety_cache:
+            cache_entry = self.token_safety_cache[mint_address]
+            if time.time() - cache_entry['timestamp'] < 300:  # 5 minute cache
+                return cache_entry['result']
+        
+        warnings = []
+        rug_score = 0  # 0 = safe, 100 = definite rug
+        
+        try:
+            # Check liquidity amount (basic check)
+            liquidity_usd = liquidity.get('liquidity_usd', 0)
+            if liquidity_usd < 1000:  # Less than $1k liquidity
+                rug_score += 30
+                warnings.append("Low liquidity (<$1k)")
+            elif liquidity_usd < 5000:  # Less than $5k liquidity
+                rug_score += 15
+                warnings.append("Low liquidity (<$5k)")
+            
+            # Check holder concentration using Moralis
+            try:
+                holders_info = await self.moralis.get_token_holders(mint_address)
+                total_supply = holders_info.get('total_supply', 1)
+                
+                # Check top holders
+                top_10_percentage = 0
+                holders = holders_info.get('holders', [])[:10]
+                
+                for holder in holders:
+                    holder_balance = holder.get('balance', 0)
+                    percentage = (holder_balance / total_supply) * 100 if total_supply > 0 else 0
+                    top_10_percentage += percentage
+                
+                if top_10_percentage > 80:  # Top 10 holders own >80%
+                    rug_score += 40
+                    warnings.append("High concentration (top 10 hold >80%)")
+                elif top_10_percentage > 60:  # Top 10 holders own >60%
+                    rug_score += 25
+                    warnings.append("High concentration (top 10 hold >60%)")
+                
+            except Exception as e:
+                self.logger.debug(f"Could not check holders for {mint_address}: {e}")
+                rug_score += 10  # Penalty for not being able to check
+            
+            # Check recent transaction patterns for honeypot behavior
+            try:
+                swaps = await self.moralis.get_token_swaps(mint_address, limit=50)
+                buy_count = sum(1 for s in swaps if s.get('to_token') == mint_address)
+                sell_count = sum(1 for s in swaps if s.get('from_token') == mint_address)
+                
+                if buy_count > 0 and sell_count == 0:
+                    rug_score += 50
+                    warnings.append("No sells detected (possible honeypot)")
+                elif sell_count < buy_count * 0.1:  # Less than 10% sells vs buys
+                    rug_score += 30
+                    warnings.append("Very few sells vs buys (honeypot risk)")
+                
+            except Exception as e:
+                self.logger.debug(f"Could not check swaps for {mint_address}: {e}")
+            
+            # Calculate final safety
+            is_safe = rug_score < 70  # Conservative threshold
+            
+            result = {
+                'safe': is_safe,
+                'rug_score': min(rug_score, 100),
+                'warnings': warnings
+            }
+            
+            # Cache result
+            self.token_safety_cache[mint_address] = {
+                'result': result,
+                'timestamp': time.time()
+            }
+            
+            self.logger.info(f"Token safety check for {mint_address[:8]}: "
+                           f"Score: {rug_score}, Safe: {is_safe}, Warnings: {len(warnings)}")
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Error checking token safety for {mint_address}: {e}")
+            return {'safe': False, 'rug_score': 100, 'warnings': ['Safety check failed']}
 
-    async def execute_trade(self, mint_address: str, metadata: Dict, liquidity: Dict):
-        """Execute a trade on the token"""
-        trade_amount = self.current_capital * self.config.max_trade_pct
+    async def execute_trade(self, mint_address: str, metadata: Dict, liquidity: Dict, 
+                          confidence_score: float = 50, investment_multiplier: float = 1.0, 
+                          wallet_tiers: Dict = None):
+        """Execute a trade on the token with scaled investment based on alpha wallet quality"""
+        # Calculate base trade amount
+        base_trade_amount = self.current_capital * self.config.max_trade_pct
+        
+        # Scale investment based on alpha wallet tiers
+        trade_amount = base_trade_amount * investment_multiplier
         
         self.logger.info(f"Executing trade on {mint_address}, amount: ${trade_amount}")
         
@@ -305,16 +471,20 @@ class MemecoinTradingBot:
             )
             
             if result['success']:
-                # Create trade record
+                # Create trade record with enhanced analytics
                 trade_record = {
                     'mint': mint_address,
                     'action': 'BUY',
                     'amount': trade_amount,
+                    'base_amount': base_trade_amount,
                     'price': result['price'],
                     'sol_amount': result.get('sol_amount', 0),
                     'tokens_amount': result.get('tokens_received', 0),
                     'timestamp': time.time(),  # Use unix timestamp for in-memory
                     'paper_mode': self.config.paper_mode,
+                    'confidence_score': confidence_score,
+                    'investment_multiplier': investment_multiplier,
+                    'wallet_tiers': wallet_tiers or {},
                     'metadata': {
                         'symbol': metadata.get('symbol', 'UNKNOWN'),
                         'name': metadata.get('name', 'Unknown Token')
@@ -344,95 +514,60 @@ class MemecoinTradingBot:
             self.logger.error(f"Trade execution failed: {e}")
 
     async def monitor_position(self, mint_address: str, entry_data: Dict, metadata: Dict = None):
-        """Monitor position for take profit and stop loss"""
+        """Monitor position with tiered exit strategy"""
         entry_price = entry_data['price']
-        tp_price = entry_price * self.config.tp_multiplier
-        sl_price = entry_price * self.config.stop_loss_pct
         peak_price = entry_price
         symbol = metadata.get('symbol', 'UNKNOWN') if metadata else 'UNKNOWN'
         
-        self.logger.info(f"Monitoring position {mint_address}, TP: {tp_price}, SL: {sl_price}")
+        # Tiered exit levels
+        tp1_price = entry_price * 2.0  # 2x - take 30% profit
+        tp2_price = entry_price * 3.0  # 3x - take another 30% profit
+        sl_price = entry_price * self.config.stop_loss_pct
         
-        while True:
+        # Track what percentage we've already sold
+        remaining_position = 1.0  # Start with 100%
+        tp1_executed = False
+        tp2_executed = False
+        
+        self.logger.info(f"Monitoring position {mint_address}: TP1: {tp1_price:.8f}, TP2: {tp2_price:.8f}, SL: {sl_price:.8f}")
+        
+        while remaining_position > 0.05:  # Continue until less than 5% left
             try:
                 current_price = await self.moralis.get_current_price(mint_address)
                 
+                # Track peak price for trailing stop
                 if current_price > peak_price:
                     peak_price = current_price
                 
-                # Take profit condition
-                if current_price >= tp_price:
-                    sell_result = await self.trading_engine.sell_token(mint_address, 0.5, self.config.paper_mode)
-                    if sell_result.get('success'):
-                        # Create sell trade record
-                        sell_record = {
-                            'mint': mint_address,
-                            'action': 'SELL',
-                            'amount': sell_result.get('usd_amount', 0),
-                            'price': current_price,
-                            'sol_amount': sell_result.get('sol_amount', 0),
-                            'tokens_amount': sell_result.get('tokens_sold', 0),
-                            'timestamp': time.time(),  # Use unix timestamp for in-memory
-                            'paper_mode': self.config.paper_mode,
-                            'profit': sell_result.get('profit', 0),
-                            'profit_pct': sell_result.get('profit_pct', 0),
-                            'exit_reason': 'TAKE_PROFIT',
-                            'metadata': {
-                                'symbol': symbol,
-                                'type': 'sell'
-                            }
-                        }
-                        
-                        # Add to in-memory trade history
-                        self.recent_trades.append(sell_record)
-                        self._cleanup_old_trades()
-                        
-                        # Try to record in database (but don't fail if it doesn't work)
-                        try:
-                            db_record = sell_record.copy()
-                            db_record['timestamp'] = datetime.now()  # Database expects datetime
-                            await self.database.record_trade(db_record)
-                        except Exception as db_error:
-                            self.logger.warning(f"Failed to save sell trade to database: {db_error}")
-                    self.logger.info(f"Take profit executed for {mint_address}")
-                    tp_price = current_price * 1.5  # Adjust for remaining position
+                # First take profit at 2x - sell 30%
+                if current_price >= tp1_price and not tp1_executed:
+                    sell_percentage = 0.3  # Sell 30% of total position
+                    await self._execute_partial_exit(mint_address, sell_percentage, current_price, 
+                                                   'TP1_2X', symbol)
+                    remaining_position -= sell_percentage
+                    tp1_executed = True
+                    self.logger.info(f"TP1 executed for {mint_address}: sold 30% at 2x, {remaining_position*100:.0f}% remaining")
                 
-                # Stop loss condition
-                # Only use trailing stop if we're in profit (peak > entry * 1.1)
-                if current_price <= sl_price or (peak_price > entry_price * 1.1 and current_price <= peak_price * 0.85):
-                    sell_result = await self.trading_engine.sell_token(mint_address, 1.0, self.config.paper_mode)
-                    if sell_result.get('success'):
-                        # Create sell trade record
-                        sell_record = {
-                            'mint': mint_address,
-                            'action': 'SELL',
-                            'amount': sell_result.get('usd_amount', 0),
-                            'price': current_price,
-                            'sol_amount': sell_result.get('sol_amount', 0),
-                            'tokens_amount': sell_result.get('tokens_sold', 0),
-                            'timestamp': time.time(),  # Use unix timestamp for in-memory
-                            'paper_mode': self.config.paper_mode,
-                            'profit': sell_result.get('profit', 0),
-                            'profit_pct': sell_result.get('profit_pct', 0),
-                            'exit_reason': 'STOP_LOSS',
-                            'metadata': {
-                                'symbol': symbol,
-                                'type': 'sell'
-                            }
-                        }
-                        
-                        # Add to in-memory trade history
-                        self.recent_trades.append(sell_record)
-                        self._cleanup_old_trades()
-                        
-                        # Try to record in database (but don't fail if it doesn't work)
-                        try:
-                            db_record = sell_record.copy()
-                            db_record['timestamp'] = datetime.now()  # Database expects datetime
-                            await self.database.record_trade(db_record)
-                        except Exception as db_error:
-                            self.logger.warning(f"Failed to save sell trade to database: {db_error}")
-                    self.logger.info(f"Stop loss executed for {mint_address}")
+                # Second take profit at 3x - sell another 30%
+                elif current_price >= tp2_price and not tp2_executed and tp1_executed:
+                    sell_percentage = 0.3 / remaining_position  # 30% of original, adjusted for remaining
+                    await self._execute_partial_exit(mint_address, sell_percentage, current_price, 
+                                                   'TP2_3X', symbol)
+                    remaining_position -= 0.3  # 30% of original position
+                    tp2_executed = True
+                    self.logger.info(f"TP2 executed for {mint_address}: sold another 30% at 3x, {remaining_position*100:.0f}% remaining")
+                
+                # Stop loss or trailing stop condition
+                should_stop_loss = (
+                    current_price <= sl_price or  # Basic stop loss
+                    (peak_price > entry_price * 1.5 and current_price <= peak_price * 0.85)  # Trailing stop after 50% gain
+                )
+                
+                if should_stop_loss:
+                    # Sell remaining position
+                    await self._execute_partial_exit(mint_address, 1.0, current_price, 
+                                                   'STOP_LOSS', symbol)
+                    self.logger.info(f"Stop loss executed for {mint_address}: sold remaining {remaining_position*100:.0f}%")
                     break
                 
                 await asyncio.sleep(2)  # Poll every 2 seconds
@@ -440,6 +575,45 @@ class MemecoinTradingBot:
             except Exception as e:
                 self.logger.error(f"Error monitoring position {mint_address}: {e}")
                 await asyncio.sleep(5)
+    
+    async def _execute_partial_exit(self, mint_address: str, sell_percentage: float, 
+                                  current_price: float, exit_reason: str, symbol: str):
+        """Execute a partial position exit and record the trade"""
+        sell_result = await self.trading_engine.sell_token(mint_address, sell_percentage, self.config.paper_mode)
+        
+        if sell_result.get('success'):
+            # Create sell trade record
+            sell_record = {
+                'mint': mint_address,
+                'action': 'SELL',
+                'amount': sell_result.get('usd_amount', 0),
+                'price': current_price,
+                'sol_amount': sell_result.get('sol_amount', 0),
+                'tokens_amount': sell_result.get('tokens_sold', 0),
+                'timestamp': time.time(),  # Use unix timestamp for in-memory
+                'paper_mode': self.config.paper_mode,
+                'profit': sell_result.get('profit', 0),
+                'profit_pct': sell_result.get('profit_pct', 0),
+                'exit_reason': exit_reason,
+                'sell_percentage': sell_percentage,
+                'metadata': {
+                    'symbol': symbol,
+                    'type': 'sell',
+                    'exit_strategy': 'tiered'
+                }
+            }
+            
+            # Add to in-memory trade history
+            self.recent_trades.append(sell_record)
+            self._cleanup_old_trades()
+            
+            # Try to record in database (but don't fail if it doesn't work)
+            try:
+                db_record = sell_record.copy()
+                db_record['timestamp'] = datetime.now()  # Database expects datetime
+                await self.database.record_trade(db_record)
+            except Exception as db_error:
+                self.logger.warning(f"Failed to save sell trade to database: {db_error}")
 
     async def manage_active_positions(self):
         """Manage all active trading positions"""
@@ -500,12 +674,25 @@ class MemecoinTradingBot:
                     if trade.get('timestamp', 0) > five_min_ago
                 ]
                 
-                # Prepare trade summary
+                # Prepare enhanced trade summary
                 trade_summary = ""
                 if period_trades:
-                    total_bought = sum(t.get('sol_amount', 0) for t in period_trades if t.get('action') == 'BUY')
-                    total_sold = sum(t.get('sol_amount', 0) for t in period_trades if t.get('action') == 'SELL')
+                    buy_trades = [t for t in period_trades if t.get('action') == 'BUY']
+                    sell_trades = [t for t in period_trades if t.get('action') == 'SELL']
+                    
+                    total_bought = sum(t.get('sol_amount', 0) for t in buy_trades)
+                    total_sold = sum(t.get('sol_amount', 0) for t in sell_trades)
                     profits = sum(t.get('profit', 0) for t in period_trades if t.get('profit') is not None)
+                    
+                    # Calculate enhanced metrics
+                    avg_confidence = sum(t.get('confidence_score', 0) for t in buy_trades) / max(len(buy_trades), 1)
+                    avg_multiplier = sum(t.get('investment_multiplier', 1.0) for t in buy_trades) / max(len(buy_trades), 1)
+                    
+                    # Count wallet tiers involved
+                    tier_counts = {'S': 0, 'A': 0, 'B': 0, 'C': 0}
+                    for trade in buy_trades:
+                        for tier in trade.get('wallet_tiers', {}).values():
+                            tier_counts[tier] = tier_counts.get(tier, 0) + 1
                     
                     trade_details = []
                     for trade in period_trades[:3]:  # Show up to 3 most recent trades
@@ -524,15 +711,34 @@ class MemecoinTradingBot:
                         
                         if trade_type == 'buy':
                             usd_amount = trade.get('amount', 0)
-                            trade_details.append(f"  • Bought {token_name} for ${usd_amount:.2f}")
+                            confidence = trade.get('confidence_score', 0)
+                            multiplier = trade.get('investment_multiplier', 1.0)
+                            tiers = list(trade.get('wallet_tiers', {}).values())
+                            tier_str = f"[{','.join(tiers)}]" if tiers else ""
+                            trade_details.append(f"  • Bought {token_name} for ${usd_amount:.2f} "
+                                               f"(conf: {confidence:.0f}, {multiplier:.1f}x) {tier_str}")
                         elif trade_type == 'sell':
                             usd_amount = trade.get('amount', 0)
                             profit_str = f" ({profit:+.2f}% profit)" if profit is not None else ""
                             trade_details.append(f"  • Sold {token_name} for ${usd_amount:.2f}{profit_str}")
                     
+                    # Enhanced trade summary
                     trade_summary = f"\nTrade Activity:\n" + "\n".join(trade_details)
+                    
+                    if len(buy_trades) > 0:
+                        tier_summary = ", ".join([f"{tier}:{count}" for tier, count in tier_counts.items() if count > 0])
+                        trade_summary += f"\n  Avg Confidence: {avg_confidence:.0f}, Avg Multiplier: {avg_multiplier:.1f}x"
+                        trade_summary += f"\n  Alpha Tiers: {tier_summary}"
+                    
                     if profits != 0:
                         trade_summary += f"\n  Period P&L: {profits:+.2f}%"
+                
+                # Add latency information
+                recent_latencies = [l for l in self.execution_latencies if l['timestamp'] > five_min_ago]
+                if recent_latencies:
+                    avg_total_latency = sum(l['total_latency'] for l in recent_latencies) / len(recent_latencies)
+                    avg_alpha_latency = sum(l['alpha_check_latency'] for l in recent_latencies) / len(recent_latencies)
+                    trade_summary += f"\n  Avg Latency: {avg_total_latency:.1f}s (alpha: {avg_alpha_latency:.1f}s)"
                 
                 # Build summary message
                 if tokens_this_period > 0 or alpha_checks_this_period > 0 or period_trades:
