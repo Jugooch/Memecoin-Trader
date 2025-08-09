@@ -108,9 +108,12 @@ class BitqueryClient:
             # Fallback to polling recent launches
             while True:
                 try:
-                    recent_tokens = await self.get_recent_token_launches(limit=10)
-                    for token in recent_tokens:
-                        yield token
+                    recent_trades = await self.get_recent_token_launches(limit=10)
+                    for trade in recent_trades:
+                        # Parse the raw trade data to extract token info
+                        token_data = self._parse_dex_trade(trade)
+                        if token_data:
+                            yield token_data
                     await asyncio.sleep(30)  # Poll every 30 seconds
                 except Exception as poll_error:
                     self.logger.error(f"Polling error: {poll_error}")
@@ -192,66 +195,78 @@ class BitqueryClient:
             self.logger.error(f"Error parsing token creation: {e}")
             return None
 
-    async def get_recent_token_launches(self, limit: int = 50) -> List[Dict]:
-        """Get recent token launches via query (fallback method)"""
+    async def get_recent_token_launches(self, limit: int = 50, start_time: str = None, end_time: str = None) -> List[Dict]:
+        """Get recent token launches via query with optional time filtering"""
         if not self.client:
             await self.initialize()
+        
+        # Build time filter if provided (BitQuery uses 'since' and 'till', not 'between')
+        time_filter = ""
+        if start_time and end_time:
+            time_filter = f'Block: {{ Time: {{ since: "{start_time}", till: "{end_time}" }} }}'
+        elif start_time:
+            time_filter = f'Block: {{ Time: {{ since: "{start_time}" }} }}'
+        elif end_time:
+            time_filter = f'Block: {{ Time: {{ till: "{end_time}" }} }}'
             
-        query = gql("""
-            query {
-              Solana {
+        query = gql(f"""
+            query {{
+              Solana {{
                 DEXTrades(
-                  where: {
-                    Trade: { Dex: { ProtocolName: { is: "pump" } } }
-                    Transaction: { Result: { Success: true } }
-                  }
-                  limit: { count: 10 }
-                  orderBy: { descending: Block_Time }
-                ) {
-                  Block { Time }
-                  Trade {
-                    Dex {
+                  where: {{
+                    Trade: {{ Dex: {{ ProtocolName: {{ is: "pump" }} }} }}
+                    Transaction: {{ Result: {{ Success: true }} }}
+                    {time_filter}
+                  }}
+                  limit: {{ count: {limit} }}
+                  orderBy: {{ descending: Block_Time }}
+                ) {{
+                  Block {{ Time }}
+                  Trade {{
+                    Dex {{
                       ProtocolFamily
                       ProtocolName
-                    }
-                    Buy {
+                    }}
+                    Buy {{
                       Amount
-                      Account { Address }
-                      Currency {
+                      Account {{ Address }}
+                      Currency {{
                         MintAddress
                         Symbol
                         Name
-                      }
-                    }
-                    Sell {
+                      }}
+                    }}
+                    Sell {{
                       Amount
-                      Account { Address }
-                      Currency {
+                      Account {{ Address }}
+                      Currency {{
                         MintAddress
                         Symbol
                         Name
-                      }
-                    }
-                  }
-                  Transaction { 
+                      }}
+                    }}
+                  }}
+                  Transaction {{ 
                     Signature 
                     Signer
-                  }
-                }
-              }
-            }
+                  }}
+                }}
+              }}
+            }}
         """)
         
         try:
+            # Debug: Log the GraphQL time filter being used
+            self.logger.info(f"Executing BitQuery with filter: '{time_filter if time_filter else 'NO FILTER'}'")
             result = await self.client.execute_async(query)
             
-            tokens = []
-            for trade in result['Solana']['DEXTrades']:
-                token_data = self._parse_dex_trade(trade)
-                if token_data:
-                    tokens.append(token_data)
-                    
-            return tokens
+            # Return raw trades for alpha discovery - let caller handle parsing
+            trades = result['Solana']['DEXTrades']
+            
+            # Log summary instead of full data to avoid flooding console
+            self.logger.info(f"BitQuery client returned {len(trades)} trades")
+            
+            return trades
             
         except Exception as e:
             self.logger.error(f"Error fetching recent launches: {e}")

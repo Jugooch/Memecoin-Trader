@@ -32,6 +32,11 @@ class WalletTracker:
         self.wallet_last_activity = {}  # {wallet: timestamp}
         self.inactive_threshold_hours = 6  # Mark as inactive after 6 hours of no activity
         self.inactive_wallets = set()  # Wallets that haven't traded recently
+        
+        # Deduplication cache for alpha detections
+        self.alpha_detection_cache = {}  # {"token:wallet": timestamp}
+        self.dedup_cache_ttl = 900  # 15 minutes TTL for deduplication
+        self.dedupe_stats = {'total_checks': 0, 'deduped_checks': 0}  # Statistics
 
     async def check_alpha_activity(self, mint_address: str, time_window_sec: int, threshold_buys: int, moralis_client=None) -> bool:
         """
@@ -65,6 +70,19 @@ class WalletTracker:
                     
                     # Check if this is a buy (to_token is our mint)
                     if swap.get('to_token') == mint_address and wallet in self.watched_wallets:
+                        # Simple deduplication for basic check
+                        dedupe_key = f"{mint_address}:{wallet}"
+                        current_time = time.time()
+                        
+                        self.dedupe_stats['total_checks'] += 1
+                        
+                        if dedupe_key in self.alpha_detection_cache:
+                            last_seen = self.alpha_detection_cache[dedupe_key]
+                            if current_time - last_seen < self.dedup_cache_ttl:
+                                self.dedupe_stats['deduped_checks'] += 1
+                                continue
+                        
+                        self.alpha_detection_cache[dedupe_key] = current_time
                         alpha_buyers.add(wallet)
                         self.logger.info(f"ALPHA WALLET DETECTED: {wallet[:8]}... bought {mint_address[:8]}...")
                 
@@ -80,9 +98,13 @@ class WalletTracker:
                 self.logger.error(f"Error checking alpha activity: {e}")
                 await asyncio.sleep(2)
         
-        # Only log if we found some activity, otherwise it's just noise
+        # Clean up old deduplication entries
+        self._cleanup_dedup_cache()
+        
+        # Log results with deduplication stats
         if len(alpha_buyers) > 0:
-            self.logger.info(f"Alpha check complete: {len(alpha_buyers)}/{threshold_buys} alpha wallets bought {mint_address[:8]}...")
+            dedup_saved = self.dedupe_stats['deduped_checks']
+            self.logger.info(f"Alpha check complete: {len(alpha_buyers)}/{threshold_buys} alpha wallets bought {mint_address[:8]}... (saved {dedup_saved} duplicate API calls)")
         else:
             self.logger.debug(f"No alpha wallet activity found for {mint_address[:8]}...")
         return False
@@ -121,14 +143,31 @@ class WalletTracker:
                     wallet = swap.get('wallet', '')
                     
                     if swap.get('to_token') == mint_address and wallet in self.watched_wallets:
+                        # Deduplication check
+                        dedupe_key = f"{mint_address}:{wallet}"
+                        current_time = time.time()
+                        
+                        self.dedupe_stats['total_checks'] += 1
+                        
+                        # Check if we've already processed this wallet-token pair recently
+                        if dedupe_key in self.alpha_detection_cache:
+                            last_seen = self.alpha_detection_cache[dedupe_key]
+                            if current_time - last_seen < self.dedup_cache_ttl:
+                                self.dedupe_stats['deduped_checks'] += 1
+                                continue  # Skip duplicate detection
+                        
+                        # New detection - add to cache and process
+                        self.alpha_detection_cache[dedupe_key] = current_time
                         alpha_buyers.add(wallet)
+                        
                         # Update wallet activity timestamp
                         self.update_wallet_activity(wallet)
                         self.logger.info(f"ALPHA WALLET DETECTED: {wallet[:8]}... bought {mint_address[:8]}...")
                 
                 # Only break when we reach the required threshold
                 if len(alpha_buyers) >= threshold_alpha_buys:
-                    self.logger.info(f"Threshold reached: {len(alpha_buyers)}/{threshold_alpha_buys} alpha wallets")
+                    dedup_saved = self.dedupe_stats['deduped_checks']
+                    self.logger.info(f"Threshold reached: {len(alpha_buyers)}/{threshold_alpha_buys} alpha wallets (saved {dedup_saved} API calls)")
                     break
                 
                 await asyncio.sleep(5)
@@ -165,8 +204,12 @@ class WalletTracker:
         # Investment multiplier based on best tier present
         best_tier_multiplier = max(self.tier_investment_multipliers.get(t, 0.6) for t in wallet_tiers.values())
         
+        # Clean up old deduplication entries
+        self._cleanup_dedup_cache()
+        
+        dedup_saved = self.dedupe_stats['deduped_checks']
         self.logger.info(f"Alpha analysis for {mint_address[:8]}: {len(alpha_buyers)} wallets, "
-                        f"confidence: {confidence_score:.1f}, multiplier: {best_tier_multiplier:.1f}x")
+                        f"confidence: {confidence_score:.1f}, multiplier: {best_tier_multiplier:.1f}x (saved {dedup_saved} duplicate calls)")
         
         return {
             'alpha_wallets': alpha_buyers,
@@ -402,3 +445,33 @@ class WalletTracker:
         """Get set of currently inactive wallets"""
         self.check_inactive_wallets()  # Update inactive status first
         return self.inactive_wallets.copy()
+    
+    def _cleanup_dedup_cache(self):
+        """Clean up old entries from deduplication cache"""
+        current_time = time.time()
+        expired_keys = [
+            key for key, timestamp in self.alpha_detection_cache.items()
+            if current_time - timestamp > self.dedup_cache_ttl
+        ]
+        
+        for key in expired_keys:
+            del self.alpha_detection_cache[key]
+            
+        if expired_keys:
+            self.logger.debug(f"Cleaned up {len(expired_keys)} expired deduplication entries")
+    
+    def get_deduplication_stats(self) -> Dict:
+        """Get deduplication statistics"""
+        total = self.dedupe_stats['total_checks']
+        deduped = self.dedupe_stats['deduped_checks']
+        
+        return {
+            'total_checks': total,
+            'deduped_checks': deduped,
+            'savings_pct': (deduped / total * 100) if total > 0 else 0,
+            'cache_size': len(self.alpha_detection_cache)
+        }
+    
+    def reset_dedup_stats(self):
+        """Reset deduplication statistics"""
+        self.dedupe_stats = {'total_checks': 0, 'deduped_checks': 0}

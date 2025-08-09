@@ -28,8 +28,8 @@ if [ ! -f "config/config.yml" ]; then
     exit 1
 fi
 
-# Start alpha discovery scheduler in background
-nohup "$PYTHON" scripts/alpha_discovery_scheduler.py > logs/alpha_discovery_scheduler.log 2>&1 &
+# Start alpha accumulator (continuous discovery) in background
+nohup "$PYTHON" scripts/run_alpha_accumulator.py --loop > logs/alpha_accumulator.log 2>&1 &
 
 # Start main trading bot (will keep the systemd service alive)
 "$PYTHON" start_bot.py

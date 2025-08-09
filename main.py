@@ -212,8 +212,12 @@ class MemecoinTradingBot:
                 self.logger.debug(f"Token {mint_address} failed filters")
                 return
             
+            # Get wallet status for enhanced logging
+            active_wallets = self.wallet_tracker.get_active_wallets()
+            total_wallets = len(self.wallet_tracker.watched_wallets)
+            
             # If we get here, token passed basic filters - now it's worth logging
-            self.logger.info(f"Token {mint_address[:8]}... passed initial filters - checking alpha activity")
+            self.logger.info(f"Token {mint_address[:8]}... passed initial filters - checking alpha activity (watching {len(active_wallets)}/{total_wallets} active wallets)")
                 
         except Exception as e:
             # Only log 404s at debug level since they're common for new tokens
@@ -235,6 +239,7 @@ class MemecoinTradingBot:
         )
         
         alpha_check_end_time = time.time()
+        alpha_check_duration = alpha_check_end_time - alpha_check_start_time
         
         # Check if we should execute trade based on confidence and thresholds
         confidence_score = alpha_analysis['confidence_score']
@@ -242,10 +247,17 @@ class MemecoinTradingBot:
         alpha_wallets = alpha_analysis['alpha_wallets']
         wallet_tiers = alpha_analysis['wallet_tiers']
         
+        # Enhanced logging with timing and deduplication info
+        if len(alpha_wallets) > 0:
+            tier_summary = ', '.join([f"{w[:8]}({t})" for w, t in wallet_tiers.items()])
+            self.logger.debug(f"Alpha check completed in {alpha_check_duration:.1f}s: {len(alpha_wallets)}/{self.config.threshold_alpha_buys} wallets detected, confidence: {confidence_score:.1f}, wallets: [{tier_summary}]")
+        else:
+            self.logger.debug(f"Alpha check completed in {alpha_check_duration:.1f}s: no alpha wallets found for {mint_address[:8]}...")
+        
         # Dynamic threshold based on wallet quality
         min_confidence = 50
         
-        if confidence_score >= min_confidence and len(alpha_wallets) > 0:
+        if confidence_score >= min_confidence and len(alpha_wallets) >= self.config.threshold_alpha_buys:
             # Check token safety before trading
             safety_check = await self.check_token_safety(mint_address, metadata, liquidity)
             
@@ -744,6 +756,14 @@ class MemecoinTradingBot:
                     avg_alpha_latency = sum(l['alpha_check_latency'] for l in recent_latencies) / len(recent_latencies)
                     trade_summary += f"\n  Avg Latency: {avg_total_latency:.1f}s (alpha: {avg_alpha_latency:.1f}s)"
                 
+                # Add active wallet information and check for recycling needs
+                active_wallets = self.wallet_tracker.get_active_wallets()
+                inactive_wallets = self.wallet_tracker.get_inactive_wallets()
+                total_wallets = len(self.wallet_tracker.watched_wallets)
+                
+                # Get deduplication stats
+                dedup_stats = self.wallet_tracker.get_deduplication_stats()
+                
                 # Build summary message
                 if tokens_this_period > 0 or alpha_checks_this_period > 0 or period_trades:
                     summary = f"5min Summary: {tokens_this_period} tokens scanned, " \
@@ -751,23 +771,165 @@ class MemecoinTradingBot:
                              f"{len(period_trades)} trades executed, " \
                              f"${self.current_capital:.2f} capital"
                     
+                    # Add wallet status
+                    summary += f"\n  Alpha Wallets: {len(active_wallets)}/{total_wallets} active, {len(inactive_wallets)} inactive"
+                    
+                    # Add deduplication savings if significant
+                    if dedup_stats['deduped_checks'] > 0:
+                        summary += f"\n  API Savings: {dedup_stats['deduped_checks']} duplicate calls avoided ({dedup_stats['savings_pct']:.1f}%)"
+                    
                     if trade_summary:
                         summary += trade_summary
                     
                     self.logger.info(summary)
                 else:
-                    self.logger.info("Bot running - monitoring pump.fun launches and alpha wallets...")
+                    self.logger.info(f"Bot running - monitoring pump.fun launches. Alpha wallets: {len(active_wallets)}/{total_wallets} active")
+                
+                # Check if we need to trigger alpha wallet recycling
+                await self._check_wallet_recycling_needs(len(active_wallets))
                     
             except Exception as e:
                 self.logger.error(f"Error generating trade summary: {e}")
-                # Fallback to simple summary
-                self.logger.info(f"5min Summary: {tokens_this_period} tokens scanned, "
-                               f"{alpha_checks_this_period} alpha checks, "
-                               f"{self.trades_today} trades today, "
-                               f"${self.current_capital:.2f} capital")
+                # Fallback to simple summary with basic wallet info
+                try:
+                    active_count = len(self.wallet_tracker.get_active_wallets())
+                    total_count = len(self.wallet_tracker.watched_wallets)
+                    self.logger.info(f"5min Summary: {tokens_this_period} tokens scanned, "
+                                   f"{alpha_checks_this_period} alpha checks, "
+                                   f"{self.trades_today} trades today, "
+                                   f"${self.current_capital:.2f} capital, "
+                                   f"{active_count}/{total_count} wallets active")
+                except:
+                    self.logger.info(f"5min Summary: {tokens_this_period} tokens scanned, "
+                                   f"{alpha_checks_this_period} alpha checks, "
+                                   f"{self.trades_today} trades today, "
+                                   f"${self.current_capital:.2f} capital")
                 
+            # Reset deduplication stats after logging
+            self.wallet_tracker.reset_dedup_stats()
+            
             last_tokens_processed = self.tokens_processed
             last_alpha_checks = self.alpha_checks_performed
+    
+    async def _check_wallet_recycling_needs(self, active_wallet_count: int):
+        """Check if we need to trigger alpha wallet discovery due to low active wallet count"""
+        min_active_threshold = 25  # Trigger recycling if we have < 25 active wallets
+        critical_threshold = 15    # Critical level for immediate action
+        
+        if active_wallet_count < critical_threshold:
+            self.logger.warning(f"CRITICAL: Only {active_wallet_count} active alpha wallets remaining! Triggering immediate discovery...")
+            await self._trigger_alpha_discovery("critical")
+        elif active_wallet_count < min_active_threshold:
+            # Check if we've triggered discovery recently
+            current_time = time.time()
+            last_discovery = getattr(self, '_last_discovery_trigger', 0)
+            
+            # Only trigger discovery once every 2 hours to avoid spam
+            if current_time - last_discovery > 7200:  # 2 hours
+                self.logger.warning(f"Low active wallet count ({active_wallet_count}). Triggering alpha wallet discovery...")
+                await self._trigger_alpha_discovery("low_count")
+                self._last_discovery_trigger = current_time
+            else:
+                self.logger.debug(f"Active wallet count low ({active_wallet_count}) but discovery triggered recently")
+    
+    async def _trigger_alpha_discovery(self, trigger_reason: str):
+        """Trigger alpha wallet discovery process"""
+        try:
+            self.logger.info(f"Starting alpha wallet discovery (reason: {trigger_reason})...")
+            
+            # Import and run discovery
+            from src.discovery.alpha_discovery_v2 import ProvenAlphaFinder
+            
+            # Create discovery instance
+            finder = ProvenAlphaFinder(
+                bitquery=self.bitquery,
+                moralis=self.moralis, 
+                database=self.database
+            )
+            
+            # Run discovery
+            new_wallets = await finder.discover_alpha_wallets()
+            
+            if new_wallets:
+                # Add new wallets to the tracker
+                old_count = len(self.wallet_tracker.watched_wallets)
+                for wallet in new_wallets:
+                    self.wallet_tracker.add_watched_wallet(wallet)
+                
+                new_count = len(self.wallet_tracker.watched_wallets)
+                added_count = new_count - old_count
+                
+                self.logger.info(f"Alpha discovery complete: added {added_count} new wallets (total: {new_count})")
+                
+                # Save to database
+                await finder._save_discovered_wallets(new_wallets)
+                
+                # Update config file with score-aware selection
+                try:
+                    await self._update_config_with_new_wallets(finder, new_wallets)
+                except Exception as e:
+                    self.logger.warning(f"Could not update config file: {e}")
+                    
+            else:
+                self.logger.warning("Alpha discovery found no new wallets")
+                
+        except Exception as e:
+            self.logger.error(f"Error during alpha wallet discovery: {e}")
+    
+    async def _update_config_with_new_wallets(self, finder, new_wallets: List[str]):
+        """Update config file with score-aware wallet selection"""
+        config_path = "config.yml"
+        
+        try:
+            import os
+            
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f)
+                
+                # Get all wallet scores from the database for intelligent selection
+                all_wallets = set(config.get('watched_wallets', [])) | set(new_wallets)
+                
+                # If we have too many wallets (>50), use score-based selection
+                if len(all_wallets) > 50:
+                    # Get scored wallet data from database
+                    try:
+                        # This is a simplified approach - in a real implementation, 
+                        # you'd query the database for wallet scores
+                        scored_wallets = []
+                        for wallet in all_wallets:
+                            stats = self.wallet_tracker.get_wallet_stats(wallet)
+                            score = stats.get('avg_profit_pct', 0) * stats.get('win_rate', 0.5)
+                            scored_wallets.append((wallet, score))
+                        
+                        # Sort by score and take top 50
+                        scored_wallets.sort(key=lambda x: x[1], reverse=True)
+                        top_wallets = [w[0] for w in scored_wallets[:50]]
+                        
+                        self.logger.info(f"Selected top 50 wallets by performance score (from {len(all_wallets)} candidates)")
+                        
+                    except Exception as e:
+                        # Fallback to simple approach if scoring fails
+                        self.logger.warning(f"Score-based selection failed ({e}), using simple approach")
+                        top_wallets = list(all_wallets)[:50]
+                        
+                    config['watched_wallets'] = top_wallets
+                else:
+                    config['watched_wallets'] = list(all_wallets)
+                
+                # Backup the old config
+                backup_path = f"{config_path}.backup.{int(time.time())}"
+                import shutil
+                shutil.copy2(config_path, backup_path)
+                
+                # Write new config
+                with open(config_path, 'w') as f:
+                    yaml.dump(config, f, default_flow_style=False)
+                
+                self.logger.info(f"Updated config with {len(config['watched_wallets'])} wallets (backed up to {backup_path})")
+            
+        except Exception as e:
+            self.logger.warning(f"Could not update config file: {e}")
 
     async def stop(self):
         """Stop the trading bot"""

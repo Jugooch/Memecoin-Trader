@@ -48,14 +48,17 @@ quicknode_endpoint: ""  # Leave empty for simulation mode
 quicknode_api_key: ""
 ```
 
-### 3. Discover Alpha Wallets (Recommended)
+### 3. Start Alpha Wallet Discovery (Recommended)
 
 ```bash
-# Run the advanced alpha wallet discovery system
-python src/discovery/alpha_discovery_v2.py
+# PRODUCTION: Run continuous alpha wallet discovery (recommended)
+python scripts/run_alpha_accumulator.py --loop
+
+# TESTING: Run one-off analysis
+python -m src.discovery.alpha_discovery_v2
 ```
 
-This will automatically find proven alpha wallets and update your config.
+The accumulator runs continuously and automatically finds proven alpha wallets over time, updating your config.
 
 ### 4. Start the Bot
 

@@ -360,6 +360,7 @@ class MoralisClient:
             self.logger.error(f"Error getting swaps for {mint_address}: {e}")
             return []
 
+
     async def get_wallet_portfolio(self, wallet_address: str) -> Dict:
         """Get wallet's token portfolio"""
         url = f"{self.base_url}/account/mainnet/{wallet_address}/portfolio"
@@ -434,6 +435,7 @@ class MoralisClient:
         except Exception as e:
             self.logger.error(f"Error getting holders for {mint_address}: {e}")
             return {'holder_count': 0, 'holder_stats': {}}
+
 
     async def close(self):
         """Close the HTTP session"""

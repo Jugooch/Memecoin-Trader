@@ -390,6 +390,7 @@ class Database:
             ))
             await db.commit()
 
+
     async def close(self):
         """Close database connections"""
         pass  # aiosqlite handles connection cleanup automatically
