@@ -95,7 +95,7 @@ class MemecoinTradingBot:
         
         # Token deduplication to avoid processing same token multiple times
         self.processed_tokens = {}  # Now stores {token: timestamp} for cleanup
-        self.token_cache_duration = 1800  # Remember processed tokens for 30 minutes
+        self.token_cache_duration = 600  # Remember processed tokens for 10 minutes (reduced from 30)
         self.last_token_cleanup = time.time()
 
     def _load_config(self, config_path: str) -> TradingConfig:
@@ -230,7 +230,8 @@ class MemecoinTradingBot:
         alpha_analysis = await self.wallet_tracker.check_alpha_activity_detailed(
             mint_address, 
             self.config.time_window_sec,
-            self.moralis
+            self.moralis,
+            self.config.threshold_alpha_buys
         )
         
         alpha_check_end_time = time.time()
@@ -334,6 +335,11 @@ class MemecoinTradingBot:
             
         if expired_tokens:
             self.logger.debug(f"Cleaned up {len(expired_tokens)} old processed tokens")
+        
+        # Check for inactive alpha wallets while we're doing cleanup
+        newly_inactive = self.wallet_tracker.check_inactive_wallets()
+        if newly_inactive:
+            self.logger.info(f"Marked {len(newly_inactive)} wallets as inactive: {[w[:8]+'...' for w in newly_inactive[:3]]}")
             
         self.last_token_cleanup = current_time
     

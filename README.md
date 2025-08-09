@@ -13,6 +13,7 @@ Intelligent Solana memecoin trading bot that follows proven alpha wallets to ide
 - **⚡ Real-time Monitoring**: Live alpha wallet activity detection
 - **📱 Performance Tracking**: Complete trade history and analytics
 - **🛠️ Production Ready**: Error handling, rate limiting, graceful degradation
+- **⚙️ Centralized Config**: Smart config loading with validation and path resolution
 
 ## Quick Start
 
@@ -26,7 +27,7 @@ pip install -r requirements.txt
 
 ```bash
 # Copy the configuration template
-cp config.yml.example config.yml
+cp config/config.yml.example config.yml
 
 # Edit config.yml with your API credentials
 nano config.yml
@@ -51,7 +52,7 @@ quicknode_api_key: ""
 
 ```bash
 # Run the advanced alpha wallet discovery system
-python alpha_discovery_v2.py
+python src/discovery/alpha_discovery_v2.py
 ```
 
 This will automatically find proven alpha wallets and update your config.
@@ -62,7 +63,21 @@ This will automatically find proven alpha wallets and update your config.
 python start_bot.py
 ```
 
-## Configuration
+## Configuration System
+
+The bot uses a centralized configuration system with smart path resolution and validation.
+
+### Configuration File Location
+The bot automatically searches for `config.yml` in multiple locations:
+- Current directory: `./config.yml`
+- Config directory: `./config/config.yml` 
+- Project root variations
+
+### Configuration Template
+Copy the template and customize:
+```bash
+cp config/config.yml.example config.yml
+```
 
 ### Trading Modes
 Choose your execution mode in `config.yml`:
@@ -139,7 +154,7 @@ The bot includes an advanced alpha wallet discovery system that automatically fi
 
 ### Run Discovery:
 ```bash
-python alpha_discovery_v2.py
+python src/discovery/alpha_discovery_v2.py
 ```
 
 ### Manual Alpha Wallets:
@@ -169,10 +184,34 @@ watched_wallets:
 
 Start with paper trading to test the strategy:
 
-1. Set `paper_mode: true` in config
-2. Monitor performance for several days
+1. Set `trading_mode: "simulation"` in config.yml
+2. Monitor performance for several days using `python dashboard.py`
 3. Analyze win rate and profit metrics
 4. Switch to live trading when confident
+
+## Multiple Entry Points
+
+The bot provides several ways to run depending on your needs:
+
+### Production Use
+```bash
+python start_bot.py    # Full production mode with monitoring
+```
+
+### Development/Testing
+```bash
+python main.py         # Core bot only, minimal overhead
+```
+
+### Monitoring
+```bash
+python dashboard.py    # Performance dashboard and analytics
+```
+
+### Discovery
+```bash
+python src/discovery/alpha_discovery_v2.py   # Find new alpha wallets
+```
 
 ## Monitoring & Analytics
 
@@ -190,14 +229,19 @@ View performance reports:
 # Check daily summary
 tail -f logs/trading.log
 
-# Generate performance report
+# View live dashboard
+python dashboard.py
+
+# Generate performance report  
 python -c "
 import asyncio
-from monitoring import PerformanceMonitor
-from database import Database
+from src.core.database import Database
+from src.utils.monitoring import PerformanceMonitor
+from src.utils.config_loader import load_config, get_database_path
 
 async def report():
-    db = Database()
+    config = load_config()
+    db = Database(get_database_path(config))
     await db.initialize()
     monitor = PerformanceMonitor(db)
     report = await monitor.generate_performance_report(7)
@@ -228,27 +272,43 @@ Built-in resilience features:
 ## Safety Features
 
 - Paper mode for risk-free testing
-- Position size limits
-- Daily trade limits
-- Stop loss protection
-- API key encryption support
-- No automatic mainnet transactions
+- Position size limits (5% max per trade)
+- Daily trade limits (configurable)
+- Stop loss protection (30% max loss)
+- Comprehensive configuration validation
+- Smart error handling and fallbacks
+- No automatic mainnet transactions without explicit configuration
 
 ## Development
 
 Project structure:
 ```
-  src/
-  ├── clients/     (API clients)
-  ├── core/        (Trading engine, database, wallet tracker)
-  ├── discovery/   (Alpha wallet discovery)
-  └── utils/       (Monitoring, logging)
-
-  scripts/
-  ├── start_all.sh              (Main startup script)
-  ├── alpha_discovery_scheduler.py  (6-hour scheduler)
-  ├── health_check.py           (Monitor bot health)
-  └── memecoin-bot.service      (Systemd service)
+├── main.py                    # Core bot implementation
+├── start_bot.py              # Production launcher with monitoring
+├── dashboard.py              # Performance monitoring dashboard
+├── config.yml                # Your configuration (create from template)
+├── src/
+│   ├── clients/              # API clients
+│   │   ├── bitquery_client.py
+│   │   ├── moralis_client.py 
+│   │   └── pumpfun_client.py
+│   ├── core/                 # Core trading logic
+│   │   ├── database.py
+│   │   ├── trading_engine.py
+│   │   └── wallet_tracker.py
+│   ├── discovery/            # Alpha wallet discovery
+│   │   └── alpha_discovery_v2.py
+│   └── utils/                # Utilities and helpers
+│       ├── config_loader.py  # Shared configuration loading
+│       ├── logger_setup.py
+│       └── monitoring.py
+├── scripts/                  # Deployment and automation
+│   ├── start_all.sh         # System service startup
+│   ├── alpha_discovery_scheduler.py  # Auto-discovery every 6h
+│   ├── health_check.py      # System health monitoring
+│   └── install_service.sh   # Service installation
+└── config/
+    └── config.yml.example   # Configuration template
 ```
 
 ## Contributing

@@ -78,16 +78,16 @@ async def main():
     )
     
     logging.info("Alpha Discovery Scheduler Started")
-    logging.info("Will run discovery every 6 hours")
+    logging.info("Will run discovery every 2 hours (reduced from 6 for fresher wallets)")
     
     # Run immediately on startup
     await run_discovery()
     
-    # Then run every 6 hours
+    # Then run every 2 hours (reduced from 6 for more frequent updates)
     while True:
         try:
-            # Wait 6 hours
-            await asyncio.sleep(6 * 3600)
+            # Wait 2 hours
+            await asyncio.sleep(2 * 3600)
             
             # Run discovery
             await run_discovery()

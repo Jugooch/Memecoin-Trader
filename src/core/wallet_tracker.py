@@ -27,6 +27,11 @@ class WalletTracker:
             'B': 1.0,   # 5% of capital (base)
             'C': 0.6    # 3% of capital
         }
+        
+        # Track inactive wallets
+        self.wallet_last_activity = {}  # {wallet: timestamp}
+        self.inactive_threshold_hours = 6  # Mark as inactive after 6 hours of no activity
+        self.inactive_wallets = set()  # Wallets that haven't traded recently
 
     async def check_alpha_activity(self, mint_address: str, time_window_sec: int, threshold_buys: int, moralis_client=None) -> bool:
         """
@@ -82,7 +87,7 @@ class WalletTracker:
             self.logger.debug(f"No alpha wallet activity found for {mint_address[:8]}...")
         return False
     
-    async def check_alpha_activity_detailed(self, mint_address: str, time_window_sec: int, moralis_client=None) -> Dict:
+    async def check_alpha_activity_detailed(self, mint_address: str, time_window_sec: int, moralis_client=None, threshold_alpha_buys: int = 3) -> Dict:
         """
         Enhanced alpha activity check that returns detailed wallet information
         Returns: {
@@ -117,9 +122,13 @@ class WalletTracker:
                     
                     if swap.get('to_token') == mint_address and wallet in self.watched_wallets:
                         alpha_buyers.add(wallet)
+                        # Update wallet activity timestamp
+                        self.update_wallet_activity(wallet)
                         self.logger.info(f"ALPHA WALLET DETECTED: {wallet[:8]}... bought {mint_address[:8]}...")
                 
-                if len(alpha_buyers) >= 1:  # Return early if we have at least one
+                # Only break when we reach the required threshold
+                if len(alpha_buyers) >= threshold_alpha_buys:
+                    self.logger.info(f"Threshold reached: {len(alpha_buyers)}/{threshold_alpha_buys} alpha wallets")
                     break
                 
                 await asyncio.sleep(5)
@@ -359,3 +368,37 @@ class WalletTracker:
             return {}
         
         return wallet_data.get('analysis', {})
+    
+    def update_wallet_activity(self, wallet_address: str):
+        """Update the last activity timestamp for a wallet"""
+        self.wallet_last_activity[wallet_address] = time.time()
+        # Remove from inactive set if it was marked inactive
+        self.inactive_wallets.discard(wallet_address)
+        
+    def check_inactive_wallets(self):
+        """Check for wallets that haven't been active and mark them as inactive"""
+        current_time = time.time()
+        inactive_threshold_seconds = self.inactive_threshold_hours * 3600
+        
+        newly_inactive = []
+        for wallet in self.watched_wallets:
+            last_activity = self.wallet_last_activity.get(wallet, 0)
+            
+            # If no activity recorded or activity too old
+            if current_time - last_activity > inactive_threshold_seconds:
+                if wallet not in self.inactive_wallets:
+                    self.inactive_wallets.add(wallet)
+                    newly_inactive.append(wallet)
+                    self.logger.info(f"Wallet {wallet[:8]}... marked as inactive (no activity for {self.inactive_threshold_hours}h)")
+        
+        return newly_inactive
+    
+    def get_active_wallets(self) -> Set[str]:
+        """Get set of currently active wallets (excludes inactive ones)"""
+        self.check_inactive_wallets()  # Update inactive status first
+        return self.watched_wallets - self.inactive_wallets
+    
+    def get_inactive_wallets(self) -> Set[str]:
+        """Get set of currently inactive wallets"""
+        self.check_inactive_wallets()  # Update inactive status first
+        return self.inactive_wallets.copy()

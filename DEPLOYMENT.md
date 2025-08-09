@@ -114,7 +114,7 @@ screen -S memecoin
 # To reattach: screen -r memecoin
 ```
 
-## Project Structure (Reorganized)
+## Project Structure (Current - Cleaned & Optimized)
 
 ```
 memecoin-trader/
@@ -147,6 +147,26 @@ memecoin-trader/
 ├── start_bot.py            # Bot entry point
 └── dashboard.py            # Performance dashboard
 ```
+
+### Recent Improvements (Repository Cleanup)
+
+**🗑️ Removed Legacy/Duplicate Files:**
+- `config/config.example.yml` - Outdated config template (use `config.yml.example`)
+- `src/discovery/alpha_finder.py` - Basic discovery system (superseded by v2)
+
+**🆕 Added Shared Infrastructure:**
+- `src/utils/config_loader.py` - Centralized configuration loading with:
+  - Smart path resolution (finds config in multiple locations)
+  - Configuration validation with clear error messages
+  - Moralis key normalization (handles single key or array format)
+  - Helper functions for database/log paths
+
+**✅ Updated All Components:**
+- All scripts now use the shared config loader for consistency
+- Eliminated 6+ instances of duplicate config loading code
+- Standardized import patterns across all modules
+- Enhanced error handling and validation
+- Updated documentation to reflect current architecture
 
 ## How It Works (24/7 Operation)
 

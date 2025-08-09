@@ -391,7 +391,7 @@ class ProvenAlphaFinder:
         
         while True:
             try:
-                # Run discovery every 6 hours
+                # Run discovery every 2 hours (reduced from 6 for fresher wallets)
                 alpha_wallets = await self.discover_alpha_wallets()
                 
                 if alpha_wallets:
@@ -401,8 +401,8 @@ class ProvenAlphaFinder:
                     # Update main bot config if needed
                     await self._update_bot_config(alpha_wallets)
                 
-                # Wait 6 hours before next discovery
-                await asyncio.sleep(6 * 3600)
+                # Wait 2 hours before next discovery (reduced from 6)
+                await asyncio.sleep(2 * 3600)
                 
             except Exception as e:
                 self.logger.error(f"Error in continuous discovery: {e}")
