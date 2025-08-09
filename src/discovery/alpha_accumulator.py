@@ -58,6 +58,10 @@ class AlphaAccumulator:
         
     def _init_db(self):
         """Create simple tables for accumulation"""
+        # Ensure data directory exists
+        import os
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         
