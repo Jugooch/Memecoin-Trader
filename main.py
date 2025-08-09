@@ -54,6 +54,7 @@ class TradingConfig:
     logging_level: str
     logging_file: str
     database_file: str
+    notifications: Dict = None  # Add notifications section
 
 
 class MemecoinTradingBot:
@@ -132,7 +133,8 @@ class MemecoinTradingBot:
             pump_fun_api=config_data['pump_fun']['api_endpoint'],
             logging_level=config_data['logging']['level'],
             logging_file=config_data['logging']['file'],
-            database_file=config_data['database']['file']
+            database_file=config_data['database']['file'],
+            notifications=config_data.get('notifications', {})  # Add notifications section
         )
 
     async def start(self):
