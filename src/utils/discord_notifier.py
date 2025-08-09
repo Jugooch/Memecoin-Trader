@@ -28,7 +28,10 @@ class DiscordNotifier:
     async def _post(self, payload: Dict[str, Any]) -> bool:
         """Post to Discord webhook with retry logic"""
         if not self.enabled:
+            self.logger.debug("DISCORD_DEBUG: Notifications disabled, skipping message")
             return False
+        
+        self.logger.debug(f"DISCORD_DEBUG: Attempting to send Discord message: {payload.get('content', 'embed')[:50]}...")
             
         for attempt in range(3):
             try:

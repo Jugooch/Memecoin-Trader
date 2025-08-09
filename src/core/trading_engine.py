@@ -41,10 +41,15 @@ class TradingEngine:
         webhook_url = ""
         if hasattr(config, 'notifications'):
             webhook_url = config.notifications.get('discord_webhook_url', '')
+            self.logger.info(f"DISCORD_DEBUG: Found notifications section, webhook_url length: {len(webhook_url) if webhook_url else 0}")
         elif hasattr(config, 'discord_webhook_url'):
             webhook_url = config.discord_webhook_url
+            self.logger.info(f"DISCORD_DEBUG: Found root discord_webhook_url, length: {len(webhook_url) if webhook_url else 0}")
+        else:
+            self.logger.warning("DISCORD_DEBUG: No Discord webhook URL found in config")
         
         self.notifier = DiscordNotifier(webhook_url) if webhook_url else None
+        self.logger.info(f"DISCORD_DEBUG: Notifier initialized: {self.notifier is not None}, enabled: {self.notifier.enabled if self.notifier else False}")
         
         # Initialize P&L store
         self.pnl_store = PnLStore(
