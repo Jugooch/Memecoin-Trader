@@ -11,6 +11,8 @@ from datetime import datetime
 
 from src.clients.pumpfun_client import PumpFunClient
 from src.clients.moralis_client import MoralisClient
+from src.utils.discord_notifier import DiscordNotifier
+from src.utils.pnl_store import PnLStore
 
 
 @dataclass
@@ -35,41 +37,72 @@ class TradingEngine:
         self.pumpfun = PumpFunClient(config.quicknode_endpoint, config.quicknode_api_key)
         self.moralis = MoralisClient(config.moralis_key)
         
+        # Initialize Discord notifier
+        webhook_url = ""
+        if hasattr(config, 'notifications'):
+            webhook_url = config.notifications.get('discord_webhook_url', '')
+        elif hasattr(config, 'discord_webhook_url'):
+            webhook_url = config.discord_webhook_url
+        
+        self.notifier = DiscordNotifier(webhook_url) if webhook_url else None
+        
+        # Initialize P&L store
+        self.pnl_store = PnLStore(
+            path="data/pnl_state.json",
+            initial_capital=config.initial_capital
+        )
+        
         # Position tracking
         self.active_positions = {}
-        self.paper_capital = config.initial_capital
+        self.paper_capital = self.pnl_store.current_equity  # Use P&L store's equity
         self.total_trades = 0
         self.winning_trades = 0
 
-    async def buy_token(self, mint_address: str, usd_amount: float, paper_mode: bool = True) -> Dict:
+    async def buy_token(self, mint_address: str, usd_amount: float, paper_mode: bool = True, symbol: str = "UNKNOWN", confidence_score: float = None) -> Dict:
         """Execute a buy order for a token"""
         try:
             self.logger.info(f"Executing BUY for {mint_address}, amount: ${usd_amount}")
             
             if paper_mode:
-                return await self._execute_paper_buy(mint_address, usd_amount)
+                return await self._execute_paper_buy(mint_address, usd_amount, symbol, confidence_score)
             else:
                 return await self._execute_real_buy(mint_address, usd_amount)
                 
         except Exception as e:
             self.logger.error(f"Error executing buy: {e}")
+            
+            # Send error notification
+            if self.notifier:
+                await self.notifier.send_error_notification(
+                    f"Failed to execute buy order: {str(e)}",
+                    {"token": mint_address[:8], "amount": f"${usd_amount}"}
+                )
+            
             return {"success": False, "error": str(e)}
 
-    async def sell_token(self, mint_address: str, percentage: float, paper_mode: bool = True) -> Dict:
+    async def sell_token(self, mint_address: str, percentage: float, paper_mode: bool = True, symbol: str = "UNKNOWN") -> Dict:
         """Execute a sell order for a token"""
         try:
             self.logger.info(f"Executing SELL for {mint_address}, percentage: {percentage}")
             
             if paper_mode:
-                return await self._execute_paper_sell(mint_address, percentage)
+                return await self._execute_paper_sell(mint_address, percentage, symbol)
             else:
                 return await self._execute_real_sell(mint_address, percentage)
                 
         except Exception as e:
             self.logger.error(f"Error executing sell: {e}")
+            
+            # Send error notification
+            if self.notifier:
+                await self.notifier.send_error_notification(
+                    f"Failed to execute sell order: {str(e)}",
+                    {"token": mint_address[:8], "percentage": f"{percentage*100}%"}
+                )
+            
             return {"success": False, "error": str(e)}
 
-    async def _execute_paper_buy(self, mint_address: str, usd_amount: float) -> Dict:
+    async def _execute_paper_buy(self, mint_address: str, usd_amount: float, symbol: str = "UNKNOWN", confidence_score: float = None) -> Dict:
         """Execute a paper trading buy"""
         # Get current price
         price = await self.moralis.get_current_price(mint_address)
@@ -104,6 +137,31 @@ class TradingEngine:
         
         self.active_positions[mint_address] = position
         
+        # Record in P&L store
+        self.pnl_store.add_trade(
+            action="BUY",
+            symbol=symbol,
+            mint_address=mint_address,
+            amount=tokens_received,
+            price=price,
+            usd_value=usd_amount,
+            paper_mode=True
+        )
+        
+        # Send Discord notification
+        if self.notifier:
+            await self.notifier.send_trade_notification(
+                side="BUY",
+                symbol=symbol,
+                mint_address=mint_address,
+                quantity=tokens_received,
+                price=price,
+                usd_amount=usd_amount,
+                equity=self.pnl_store.current_equity,
+                confidence_score=confidence_score,
+                paper_mode=True
+            )
+        
         self.logger.info(f"Paper buy executed: {tokens_received} tokens at ${price}")
         
         return {
@@ -112,6 +170,7 @@ class TradingEngine:
             "tokens_received": tokens_received,
             "sol_amount": sol_amount,
             "usd_amount": usd_amount,
+            "symbol": symbol,
             "paper_mode": True
         }
 
@@ -122,7 +181,7 @@ class TradingEngine:
         self.logger.warning("Real trading not implemented, falling back to paper mode")
         return await self._execute_paper_buy(mint_address, usd_amount)
 
-    async def _execute_paper_sell(self, mint_address: str, percentage: float) -> Dict:
+    async def _execute_paper_sell(self, mint_address: str, percentage: float, symbol: str = "UNKNOWN") -> Dict:
         """Execute a paper trading sell"""
         if mint_address not in self.active_positions:
             return {"success": False, "error": "No position found"}
@@ -147,6 +206,32 @@ class TradingEngine:
         profit = usd_received - cost_basis
         profit_pct = (profit / cost_basis) * 100 if cost_basis > 0 else 0
         
+        # Record in P&L store
+        self.pnl_store.add_trade(
+            action="SELL",
+            symbol=symbol,
+            mint_address=mint_address,
+            amount=tokens_to_sell,
+            price=current_price,
+            usd_value=usd_received,
+            realized_pnl=profit,
+            paper_mode=True
+        )
+        
+        # Send Discord notification
+        if self.notifier:
+            await self.notifier.send_trade_notification(
+                side="SELL",
+                symbol=symbol,
+                mint_address=mint_address,
+                quantity=tokens_to_sell,
+                price=current_price,
+                usd_amount=usd_received,
+                equity=self.pnl_store.current_equity,
+                realized_pnl=profit,
+                paper_mode=True
+            )
+        
         self.logger.info(f"Paper sell executed: {tokens_to_sell} tokens at ${current_price}, profit: ${profit:.2f} ({profit_pct:.2f}%)")
         
         # Remove position if fully sold
@@ -167,6 +252,7 @@ class TradingEngine:
             "sol_amount": usd_received / 20,  # Mock SOL price
             "profit": profit,
             "profit_pct": profit_pct,
+            "symbol": symbol,
             "paper_mode": True
         }
 
@@ -296,7 +382,26 @@ class TradingEngine:
             except Exception as e:
                 self.logger.error(f"Error closing position {mint_address}: {e}")
 
+    async def send_error_notification(self, message: str, context: Dict = None):
+        """Send error notification to Discord"""
+        if self.notifier:
+            await self.notifier.send_error_notification(message, context)
+    
+    async def send_summary(self):
+        """Send portfolio summary to Discord"""
+        if self.notifier:
+            summary = self.pnl_store.get_summary()
+            await self.notifier.send_summary(
+                equity=summary["equity"],
+                daily_pnl=summary["daily_pnl"],
+                total_trades=summary["total_trades"],
+                win_rate=summary["win_rate"],
+                active_positions=len(self.active_positions)
+            )
+    
     async def cleanup(self):
         """Cleanup resources"""
+        if self.notifier:
+            await self.notifier.close()
         await self.pumpfun.close()
         await self.moralis.close()

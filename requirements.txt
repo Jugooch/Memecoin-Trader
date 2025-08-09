@@ -1,5 +1,6 @@
 requests>=2.31.0
 aiohttp>=3.8.5
+httpx>=0.24.0
 websockets>=11.0.3
 pyyaml>=6.0.1
 asyncio-mqtt>=0.16.1

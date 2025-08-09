@@ -143,6 +143,15 @@ class MemecoinTradingBot:
         
         self.running = True
         
+        # Send startup notification to Discord
+        if self.trading_engine.notifier:
+            await self.trading_engine.notifier.send_text(
+                f"🚀 **Memecoin Trading Bot Started**\n"
+                f"Mode: {'📝 Paper Trading' if self.config.paper_mode else '💸 Live Trading'}\n"
+                f"Starting Capital: ${self.config.initial_capital}\n"
+                f"Watching {len(self.config.watched_wallets)} alpha wallets"
+            )
+        
         # Initialize database
         await self.database.initialize()
         
@@ -200,6 +209,12 @@ class MemecoinTradingBot:
             # If Moralis is rate limited, skip this token entirely (safer approach)
             if self.moralis.rate_limited:
                 self.logger.debug(f"Moralis rate limited - skipping {mint_address[:8]}... (safety first)")
+                
+                # Send Discord notification if all keys are exhausted
+                await self.trading_engine.send_error_notification(
+                    "All Moralis API keys exhausted!",
+                    {"module": "moralis_client", "action": "skipping_token", "token": mint_address[:8]}
+                )
                 return
                 
             metadata = await self.moralis.get_token_metadata(mint_address)
@@ -482,11 +497,16 @@ class MemecoinTradingBot:
         self.logger.info(f"Executing trade on {mint_address}, amount: ${trade_amount}")
         
         try:
+            # Get token symbol from metadata
+            symbol = metadata.get('symbol', 'UNKNOWN')
+            
             # Execute buy order
             result = await self.trading_engine.buy_token(
                 mint_address, 
                 trade_amount,
-                self.config.paper_mode
+                self.config.paper_mode,
+                symbol=symbol,
+                confidence_score=confidence_score
             )
             
             if result['success']:
@@ -598,7 +618,7 @@ class MemecoinTradingBot:
     async def _execute_partial_exit(self, mint_address: str, sell_percentage: float, 
                                   current_price: float, exit_reason: str, symbol: str):
         """Execute a partial position exit and record the trade"""
-        sell_result = await self.trading_engine.sell_token(mint_address, sell_percentage, self.config.paper_mode)
+        sell_result = await self.trading_engine.sell_token(mint_address, sell_percentage, self.config.paper_mode, symbol=symbol)
         
         if sell_result.get('success'):
             # Create sell trade record
@@ -785,6 +805,11 @@ class MemecoinTradingBot:
                         summary += trade_summary
                     
                     self.logger.info(summary)
+                    
+                    # Send Discord summary if there was significant activity
+                    if tokens_this_period > 10 or period_trades:
+                        await self.trading_engine.send_summary()
+                        
                 else:
                     self.logger.info(f"Bot running - monitoring pump.fun launches. Alpha wallets: {len(active_wallets)}/{total_wallets} active")
                 
@@ -821,6 +846,14 @@ class MemecoinTradingBot:
         
         if active_wallet_count < critical_threshold:
             self.logger.warning(f"CRITICAL: Only {active_wallet_count} active alpha wallets remaining! Triggering immediate discovery...")
+            
+            # Send Discord alert for critical wallet shortage
+            if self.trading_engine.notifier:
+                await self.trading_engine.notifier.send_error_notification(
+                    f"CRITICAL: Only {active_wallet_count} active alpha wallets remaining!",
+                    {"trigger": "critical_wallet_shortage", "action": "starting_discovery"}
+                )
+            
             await self._trigger_alpha_discovery("critical")
         elif active_wallet_count < min_active_threshold:
             # Check if we've triggered discovery recently
@@ -840,6 +873,14 @@ class MemecoinTradingBot:
         try:
             self.logger.info(f"Starting alpha wallet discovery (reason: {trigger_reason})...")
             
+            # Send Discord notification that discovery is starting
+            if self.trading_engine.notifier:
+                await self.trading_engine.notifier.send_text(
+                    f"🔍 **Alpha Wallet Discovery Started**\n"
+                    f"Reason: {trigger_reason}\n"
+                    f"Searching for profitable wallets to follow..."
+                )
+            
             # Import and run discovery
             from src.discovery.alpha_discovery_v2 import ProvenAlphaFinder
             
@@ -851,7 +892,9 @@ class MemecoinTradingBot:
             )
             
             # Run discovery
+            discovery_start = time.time()
             new_wallets = await finder.discover_alpha_wallets()
+            discovery_duration = time.time() - discovery_start
             
             if new_wallets:
                 # Add new wallets to the tracker
@@ -863,6 +906,21 @@ class MemecoinTradingBot:
                 added_count = new_count - old_count
                 
                 self.logger.info(f"Alpha discovery complete: added {added_count} new wallets (total: {new_count})")
+                
+                # Send successful discovery notification to Discord
+                if self.trading_engine.notifier:
+                    await self.trading_engine.notifier.send_embed(
+                        title="✅ Alpha Wallet Discovery Complete",
+                        fields={
+                            "New Wallets Found": f"{len(new_wallets)} fresh alpha wallets",
+                            "Total Added": f"{added_count} after deduplication", 
+                            "Total Watching": f"{new_count} alpha wallets",
+                            "Discovery Time": f"{discovery_duration:.1f} seconds",
+                            "Trigger Reason": trigger_reason
+                        },
+                        color=0x10B981,  # Green for success
+                        description=f"Bot is now following {added_count} new profitable wallets for better trade signals!"
+                    )
                 
                 # Save to database
                 await finder._save_discovered_wallets(new_wallets)
@@ -876,8 +934,29 @@ class MemecoinTradingBot:
             else:
                 self.logger.warning("Alpha discovery found no new wallets")
                 
+                # Send notification about no new wallets found
+                if self.trading_engine.notifier:
+                    await self.trading_engine.notifier.send_embed(
+                        title="⚠️ Alpha Wallet Discovery Complete",
+                        fields={
+                            "New Wallets Found": "0 new wallets",
+                            "Discovery Time": f"{discovery_duration:.1f} seconds",
+                            "Trigger Reason": trigger_reason,
+                            "Status": "No new profitable wallets detected"
+                        },
+                        color=0xF59E0B,  # Orange for warning
+                        description="Discovery completed but no new alpha wallets met the profitability criteria."
+                    )
+                
         except Exception as e:
             self.logger.error(f"Error during alpha wallet discovery: {e}")
+            
+            # Send error notification to Discord
+            if self.trading_engine.notifier:
+                await self.trading_engine.notifier.send_error_notification(
+                    f"Alpha wallet discovery failed: {str(e)}",
+                    {"trigger_reason": trigger_reason, "module": "alpha_discovery"}
+                )
     
     async def _update_config_with_new_wallets(self, finder, new_wallets: List[str]):
         """Update config file with score-aware wallet selection"""
@@ -938,6 +1017,16 @@ class MemecoinTradingBot:
         """Stop the trading bot"""
         self.logger.info("Stopping trading bot")
         self.running = False
+        
+        # Send shutdown notification to Discord
+        if self.trading_engine.notifier:
+            summary = self.trading_engine.pnl_store.get_summary()
+            await self.trading_engine.notifier.send_text(
+                f"🛑 **Memecoin Trading Bot Stopped**\n"
+                f"Final Equity: ${summary['equity']:.2f}\n"
+                f"Total Trades: {summary['total_trades']}\n"
+                f"Win Rate: {summary['win_rate']:.1f}%"
+            )
 
 
 async def main():

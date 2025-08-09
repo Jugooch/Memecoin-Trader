@@ -67,3 +67,9 @@ logging:
 # Database configuration
 database:
   file: "trades.db"
+
+# Discord notifications (optional but recommended)
+# To get webhook URL: Server Settings -> Integrations -> Webhooks -> New Webhook
+notifications:
+  discord_webhook_url: ""  # Leave empty to disable Discord notifications
+  enabled: true           # Toggle notifications on/off
