@@ -57,6 +57,15 @@ def load_config(config_filename: str = "config.yml") -> Dict[str, Any]:
         if isinstance(config_data['moralis_keys'], str):
             config_data['moralis_keys'] = [config_data['moralis_keys']]
     
+    # Normalize bitquery tokens to always be a list for consistency
+    if 'bitquery_token' in config_data and 'bitquery_tokens' not in config_data:
+        # Convert single token to list format
+        config_data['bitquery_tokens'] = [config_data['bitquery_token']]
+    elif 'bitquery_tokens' in config_data:
+        # Ensure it's a list even if single token provided
+        if isinstance(config_data['bitquery_tokens'], str):
+            config_data['bitquery_tokens'] = [config_data['bitquery_tokens']]
+    
     return config_data
 
 
@@ -83,7 +92,6 @@ def validate_required_keys(config: Dict[str, Any]) -> None:
         ValueError: If required keys are missing
     """
     required_keys = [
-        'bitquery_token',
         'rpc_endpoint',
         'watched_wallets',
         'threshold_alpha_buys',
@@ -98,6 +106,10 @@ def validate_required_keys(config: Dict[str, Any]) -> None:
     for key in required_keys:
         if key not in config:
             missing_keys.append(key)
+    
+    # Check for either bitquery_token or bitquery_tokens
+    if 'bitquery_token' not in config and 'bitquery_tokens' not in config:
+        missing_keys.append('bitquery_token or bitquery_tokens')
     
     # Check for either moralis_key or moralis_keys
     if 'moralis_key' not in config and 'moralis_keys' not in config:

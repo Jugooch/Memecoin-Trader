@@ -6,15 +6,21 @@ import asyncio
 import aiohttp
 import json
 import logging
-from typing import Dict, List, AsyncGenerator
+import time
+from typing import Dict, List, AsyncGenerator, Union
 from gql import gql, Client
 from gql.transport.aiohttp import AIOHTTPTransport
 from gql.transport.websockets import WebsocketsTransport
 
 
 class BitqueryClient:
-    def __init__(self, api_token: str):
-        self.api_token = api_token
+    def __init__(self, api_tokens: Union[str, List[str]]):
+        # Support both single token (string) and multiple tokens (list)
+        if isinstance(api_tokens, str):
+            self.api_tokens = [api_tokens]
+        else:
+            self.api_tokens = api_tokens
+            
         self.logger = logging.getLogger(__name__)
         
         # GraphQL endpoint (using EAP for Solana data)
@@ -24,23 +30,80 @@ class BitqueryClient:
         # Pump.fun program address
         self.pumpfun_program = "6EF8rrecthHAuSStzpf6aXr9HWs8jgPVrj5S6fqF6P"
         
+        # Token rotation management
+        self.current_token_index = 0
+        self.token_stats = {}
+        for i, token in enumerate(self.api_tokens):
+            self.token_stats[i] = {
+                'calls_today': 0,
+                'rate_limited': False,
+                'reset_time': 0,
+                'token': token,
+                'payment_required': False  # Track 402 errors
+            }
+        
+        # Global rate limiting
+        self.rate_limited = False
+        self.rate_limit_reset_time = 0
+        
         self.client = None
         self.ws_client = None
+        self.current_client_token_index = None
+
+    def _get_next_available_token(self) -> tuple:
+        """Get the next available API token that's not rate limited or payment required"""
+        for _ in range(len(self.api_tokens)):
+            token_info = self.token_stats[self.current_token_index]
+            
+            # Check if this token has payment issues (402)
+            if token_info['payment_required']:
+                self.logger.debug(f"Token {self.current_token_index} has payment issues, trying next...")
+                self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
+                continue
+            
+            # Check if this token is rate limited
+            if token_info['rate_limited'] and time.time() < token_info['reset_time']:
+                self.logger.debug(f"Token {self.current_token_index} still rate limited, trying next...")
+                self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
+                continue
+            
+            # This token is available
+            return self.current_token_index, token_info['token']
+        
+        # All tokens are either rate limited or have payment issues
+        self.rate_limited = True
+        self.rate_limit_reset_time = min(
+            token['reset_time'] for token in self.token_stats.values() 
+            if not token['payment_required']
+        ) if any(not token['payment_required'] for token in self.token_stats.values()) else 0
+        return None, None
 
     async def initialize(self):
-        """Initialize GraphQL clients"""
+        """Initialize GraphQL clients with current available token"""
+        token_index, api_token = self._get_next_available_token()
+        
+        if not api_token:
+            self.logger.error("All Bitquery API tokens exhausted or have payment issues!")
+            raise Exception("No available Bitquery API tokens")
+        
+        # Only reinitialize if token changed
+        if self.current_client_token_index == token_index and self.client:
+            return
+            
+        self.logger.info(f"Initializing Bitquery client with token #{token_index}")
+        
         # HTTP transport for queries (using Bearer token as per Bitquery docs)
         http_transport = AIOHTTPTransport(
             url=self.endpoint,
             headers={
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_token}"
+                "Authorization": f"Bearer {api_token}"
             }
         )
         self.client = Client(transport=http_transport)
         
         # WebSocket transport for subscriptions (using EAP endpoint for Solana)
-        ws_url = f"wss://streaming.bitquery.io/eap?token={self.api_token}"
+        ws_url = f"wss://streaming.bitquery.io/eap?token={api_token}"
         ws_transport = WebsocketsTransport(
             url=ws_url,
             headers={
@@ -49,6 +112,7 @@ class BitqueryClient:
             }
         )
         self.ws_client = Client(transport=ws_transport)
+        self.current_client_token_index = token_index
 
     async def subscribe_token_launches(self) -> AsyncGenerator[Dict, None]:
         """Subscribe to new Pump.fun token creation events"""
@@ -266,11 +330,70 @@ class BitqueryClient:
             # Log summary instead of full data to avoid flooding console
             self.logger.info(f"BitQuery client returned {len(trades)} trades")
             
+            # Update stats for successful call
+            if self.current_client_token_index is not None:
+                self.token_stats[self.current_client_token_index]['calls_today'] += 1
+            
             return trades
             
         except Exception as e:
-            self.logger.error(f"Error fetching recent launches: {e}")
-            return []
+            error_str = str(e)
+            self.logger.error(f"Error fetching recent launches: {error_str}")
+            
+            # Check for specific error types
+            if '402' in error_str or 'Payment Required' in error_str:
+                # Mark current token as payment required
+                if self.current_client_token_index is not None:
+                    self.token_stats[self.current_client_token_index]['payment_required'] = True
+                    self.logger.warning(f"Token #{self.current_client_token_index} marked as payment required")
+                
+                # Try to rotate to next token
+                self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
+                
+                # Reinitialize with new token if available
+                try:
+                    await self.initialize()
+                    # Retry the query with new token
+                    self.logger.info("Retrying query with new token...")
+                    return await self.get_recent_token_launches(limit, start_time, end_time)
+                except Exception as reinit_error:
+                    self.logger.error(f"Failed to reinitialize with new token: {reinit_error}")
+                    return []
+    
+    def get_token_status(self) -> Dict:
+        """Get status of all API tokens for debugging"""
+        status = {
+            'total_tokens': len(self.api_tokens),
+            'current_index': self.current_token_index,
+            'tokens': []
+        }
+        
+        for i, token_info in self.token_stats.items():
+            token_status = {
+                'index': i,
+                'calls_today': token_info['calls_today'],
+                'rate_limited': token_info['rate_limited'],
+                'payment_required': token_info['payment_required'],
+                'status': 'OK'
+            }
+            
+            if token_info['payment_required']:
+                token_status['status'] = 'PAYMENT_REQUIRED'
+            elif token_info['rate_limited']:
+                if time.time() < token_info['reset_time']:
+                    token_status['status'] = 'RATE_LIMITED'
+                    token_status['reset_in'] = int(token_info['reset_time'] - time.time())
+                else:
+                    token_status['status'] = 'RECOVERED'
+            
+            status['tokens'].append(token_status)
+        
+        # Overall status
+        available_tokens = sum(1 for t in status['tokens'] if t['status'] in ['OK', 'RECOVERED'])
+        status['available_tokens'] = available_tokens
+        status['all_exhausted'] = available_tokens == 0
+        
+        return status
 
     async def get_token_transactions(self, mint_address: str, limit: int = 100) -> List[Dict]:
         """Get transactions for a specific token"""
@@ -323,8 +446,27 @@ class BitqueryClient:
                 variable_values={"mint": mint_address, "limit": limit}
             )
             
+            # Update stats for successful call
+            if self.current_client_token_index is not None:
+                self.token_stats[self.current_client_token_index]['calls_today'] += 1
+            
             return result['Solana']['Transfers']
             
         except Exception as e:
-            self.logger.error(f"Error fetching token transactions: {e}")
-            return []
+            error_str = str(e)
+            self.logger.error(f"Error fetching token transactions: {error_str}")
+            
+            # Handle 402 and rate limiting same as above
+            if '402' in error_str or 'Payment Required' in error_str:
+                if self.current_client_token_index is not None:
+                    self.token_stats[self.current_client_token_index]['payment_required'] = True
+                    self.logger.warning(f"Token #{self.current_client_token_index} marked as payment required")
+                
+                self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
+                
+                try:
+                    await self.initialize()
+                    return await self.get_token_transactions(mint_address, limit)
+                except Exception as reinit_error:
+                    self.logger.error(f"Failed to reinitialize with new token: {reinit_error}")
+                    return []

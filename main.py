@@ -108,9 +108,12 @@ class MemecoinTradingBot:
         # Extract moralis keys (already normalized by config_loader)
         moralis_keys = config_data.get('moralis_keys', [config_data.get('moralis_key', '')])
         
+        # Extract bitquery tokens (already normalized by config_loader)
+        bitquery_tokens = config_data.get('bitquery_tokens', [config_data.get('bitquery_token', '')])
+        
         return TradingConfig(
             rpc_endpoint=config_data['rpc_endpoint'],
-            bitquery_token=config_data['bitquery_token'],
+            bitquery_token=bitquery_tokens,  # Now passes list of tokens
             moralis_key=moralis_keys,  # Now passes list of keys
             quicknode_endpoint=config_data['quicknode_endpoint'],
             quicknode_api_key=config_data['quicknode_api_key'],

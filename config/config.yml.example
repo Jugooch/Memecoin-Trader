@@ -4,7 +4,14 @@
 # Free RPC endpoint - no paid subscription needed
 rpc_endpoint: "https://api.mainnet-beta.solana.com"
 
-# BitQuery API Token (get from https://bitquery.io)
+# BitQuery API Tokens - You can add multiple tokens for rotation
+# Get from https://bitquery.io (sign up for free accounts)
+bitquery_tokens:
+  - your_first_bitquery_token_here
+  - your_second_bitquery_token_here  # Optional: add more for rotation
+  - your_third_bitquery_token_here   # Optional: add more for rotation
+
+# Legacy single token support (will be converted to list)
 bitquery_token: "your_bitquery_token_here"
 
 # Moralis API Keys - You can add multiple keys for rotation

@@ -272,7 +272,7 @@ async def main():
     
     config = load_config('config.yml')
     
-    bitquery = BitqueryClient(config['bitquery_token'])
+    bitquery = BitqueryClient(config.get('bitquery_tokens', config.get('bitquery_token')))
     moralis = MoralisClient(config.get('moralis_keys', config.get('moralis_key')))
     
     try:

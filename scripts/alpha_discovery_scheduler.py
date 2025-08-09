@@ -33,7 +33,7 @@ async def run_discovery():
         config = load_config('config.yml')
         
         # Initialize clients
-        bitquery = BitqueryClient(config['bitquery_token'])
+        bitquery = BitqueryClient(config.get('bitquery_tokens', config.get('bitquery_token')))
         moralis = MoralisClient(config.get('moralis_keys', config.get('moralis_key')))
         database = Database(get_database_path(config))
         
