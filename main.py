@@ -34,8 +34,8 @@ from src.utils.config_loader import load_config, validate_required_keys
 @dataclass
 class TradingConfig:
     rpc_endpoint: str
-    bitquery_token: str
-    moralis_key: str
+    bitquery_token: List[str]
+    moralis_key: List[str]
     quicknode_endpoint: str
     quicknode_api_key: str
     watched_wallets: List[str]
