@@ -78,9 +78,21 @@ api_optimization:
   alpha_early_abort_min_buyers: 10   # Early abort threshold
   alpha_early_abort_buy_sell_ratio: 1.0  # Early abort ratio
   
-  # Discovery V2 optimization
-  discovery_max_moralis_tokens: 20    # Only validate top K tokens with Moralis
-  discovery_bitquery_success_threshold: 40  # Minimum score for Moralis validation
+  # Discovery V2 optimization (updated for more alpha wallets)
+  discovery_max_moralis_tokens: 50    # Validate top 50 tokens (increased from 20)
+  discovery_bitquery_success_threshold: 25  # Lower threshold (reduced from 40)
+  discovery_early_window_minutes: 10  # Early buyer window (increased from 5)
+  
+  # Multi-tier alpha wallet discovery
+  discovery_success_thresholds:
+    high: 2.0     # 2x performance = high success 
+    medium: 1.5   # 1.5x performance = medium success
+    low: 1.2      # 1.2x performance = low success
+  
+  discovery_min_appearances:
+    tier_1: 2     # Premium: 2+ high success tokens
+    tier_2: 3     # Good: 3+ medium success tokens  
+    tier_3: 4     # Emerging: 4+ low success tokens
 
 # Pump.fun configuration
 pump_fun:

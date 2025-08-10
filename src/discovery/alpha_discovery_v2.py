@@ -52,11 +52,19 @@ class ProvenAlphaFinder:
         self.database = database
         self.logger = logging.getLogger(__name__)
         
-        # Strategy parameters - optimized for more results
+        # Strategy parameters - Multi-tier approach for more wallet discovery
         self.analysis_window_hours = 24  # Analyze tokens after 24 hours
-        self.success_threshold = 2.0     # 2x price increase = successful (aligned with code)
-        self.early_window_seconds = 300  # First 5 minutes = early
-        self.min_wallet_appearances = 2  # Must appear on 2+ successful tokens (repeated success)
+        self.success_thresholds = {
+            'high': 2.0,      # 2x price increase = high success
+            'medium': 1.5,    # 1.5x price increase = medium success  
+            'low': 1.2        # 1.2x price increase = low success
+        }
+        self.early_window_seconds = 600   # First 10 minutes = early (expanded)
+        self.min_wallet_appearances = {
+            'tier_1': 2,      # High-quality wallets: 2+ high success tokens
+            'tier_2': 3,      # Medium-quality wallets: 3+ medium success tokens
+            'tier_3': 4       # Emerging wallets: 4+ low success tokens
+        }
         
     async def discover_alpha_wallets(self) -> List[str]:
         """Optimized discovery process - Bitquery-first approach"""
@@ -71,8 +79,8 @@ class ProvenAlphaFinder:
         
         self.logger.info(f"Bitquery analysis identified {len(promising_tokens)} promising tokens")
         
-        # Step 3: Only validate top K tokens with Moralis (massive API savings)
-        top_k = min(20, len(promising_tokens))  # Only check top 20 tokens
+        # Step 3: Validate more tokens but still be efficient (expanded from 20)
+        top_k = min(50, len(promising_tokens))  # Check top 50 tokens (more alpha sources)
         validated_tokens = []
         
         if top_k > 0:
@@ -291,38 +299,47 @@ class ProvenAlphaFinder:
                     peak_price = max(later_prices)
                     performance_multiplier = peak_price / early_price
             
-            # Bitquery-based success criteria (no Moralis needed)
+            # Multi-tier success scoring (more inclusive)
+            success_tier = None
             bitquery_success_score = 0
             
-            # Activity criteria
-            if swap_count >= 50:  # Good activity
-                bitquery_success_score += 30
-            elif swap_count >= 20:  # Moderate activity
+            # Performance-based tiers
+            if performance_multiplier >= self.success_thresholds['high']:  # 2.0x+
+                success_tier = 'high'
+                bitquery_success_score += 50
+            elif performance_multiplier >= self.success_thresholds['medium']:  # 1.5x+
+                success_tier = 'medium'  
+                bitquery_success_score += 35
+            elif performance_multiplier >= self.success_thresholds['low']:  # 1.2x+
+                success_tier = 'low'
+                bitquery_success_score += 20
+            
+            # Activity criteria (more generous)
+            if swap_count >= 30:  # Good activity (lowered from 50)
+                bitquery_success_score += 20
+            elif swap_count >= 15:  # Moderate activity (lowered from 20)
+                bitquery_success_score += 10
+            elif swap_count >= 8:   # Some activity
+                bitquery_success_score += 5
+                
+            # Trader diversity (more generous)
+            if unique_traders >= 15:  # Good diversity (lowered from 20)
                 bitquery_success_score += 15
-                
-            # Trader diversity
-            if unique_traders >= 20:  # Good diversity
-                bitquery_success_score += 25
-            elif unique_traders >= 10:  # Some diversity
-                bitquery_success_score += 10
-                
-            # Performance criteria
-            if performance_multiplier >= 3.0:  # Great performance
-                bitquery_success_score += 40
-            elif performance_multiplier >= 2.0:  # Good performance
-                bitquery_success_score += 25
-            elif performance_multiplier >= 1.5:  # Moderate performance
-                bitquery_success_score += 10
+            elif unique_traders >= 8:   # Some diversity (lowered from 10)
+                bitquery_success_score += 8
+            elif unique_traders >= 5:   # Minimal diversity
+                bitquery_success_score += 3
                 
             # Store calculated metrics
             token_data['performance_multiplier'] = performance_multiplier
             token_data['bitquery_success_score'] = bitquery_success_score
+            token_data['success_tier'] = success_tier
             
-            # Threshold for promising tokens (adjust based on results)
-            if bitquery_success_score >= 40:  # Requires good activity + diversity + some performance
+            # More inclusive threshold (lowered from 40 to 25)
+            if bitquery_success_score >= 25 and success_tier is not None:
                 promising_tokens.append(token_data)
                 self.logger.debug(f"Token {mint[:8]}... promising: score={bitquery_success_score}, "
-                                f"perf={performance_multiplier:.2f}x, swaps={swap_count}, traders={unique_traders}")
+                                f"tier={success_tier}, perf={performance_multiplier:.2f}x, swaps={swap_count}, traders={unique_traders}")
         
         # Sort by success score (best first)
         promising_tokens.sort(key=lambda x: x['bitquery_success_score'], reverse=True)
@@ -342,12 +359,16 @@ class ProvenAlphaFinder:
             # Use Bitquery metrics we already calculated
             performance_multiplier = token_data.get('performance_multiplier', 1.0)
             bitquery_score = token_data.get('bitquery_success_score', 0)
+            success_tier = token_data.get('success_tier', None)
             
-            # Simple validation - if Bitquery analysis was positive and price exists, accept it
-            # This replaces the expensive _was_token_successful function
+            # More inclusive validation - accept any tiered token with decent score
             token_data['current_price'] = current_price
             
-            is_successful = performance_multiplier >= 1.5 and bitquery_score >= 40
+            is_successful = (
+                success_tier is not None and 
+                bitquery_score >= 25 and
+                performance_multiplier >= self.success_thresholds['low']  # At least 1.2x
+            )
             
             if is_successful:
                 self.logger.debug(f"Token {mint[:8]}... validated: perf={performance_multiplier:.2f}x, score={bitquery_score}")
@@ -482,8 +503,8 @@ class ProvenAlphaFinder:
             return []
         
         try:
-            # Use actual launch time with proper window (first 2 minutes)
-            early_window = self.early_window_seconds  # Configurable early window
+            # Use actual launch time with expanded window (first 10 minutes) 
+            early_window = self.early_window_seconds  # Now 600 seconds (10 minutes)
             
             # Get swaps and filter for launch time window (Moralis max limit is 100)
             all_swaps = await self.moralis.get_token_swaps(mint, limit=100)
@@ -616,12 +637,35 @@ class ProvenAlphaFinder:
             # Log all candidates for debugging
             self.logger.debug(f"Wallet {wallet[:8]}... appears on {len(token_list)} tokens")
             
-            # Skip wallets with insufficient track record
-            if len(token_list) < self.min_wallet_appearances:
-                continue
+            # Multi-tier approach: different requirements based on success tier
+            wallet_success_tiers = []
+            for token_entry in token_list:
+                tier = token_entry["token"].get('success_tier', 'low')
+                wallet_success_tiers.append(tier)
             
-            # Calculate performance metrics with proper multiplier
-            total_tokens = len(token_list)
+            # Count successes by tier
+            high_count = wallet_success_tiers.count('high')
+            medium_count = wallet_success_tiers.count('medium') 
+            low_count = wallet_success_tiers.count('low')
+            
+            # Determine wallet qualification tier
+            wallet_tier = None
+            if high_count >= self.min_wallet_appearances['tier_1']:
+                wallet_tier = 'tier_1'  # Premium alpha wallet
+            elif medium_count >= self.min_wallet_appearances['tier_2']:
+                wallet_tier = 'tier_2'  # Good alpha wallet  
+            elif low_count >= self.min_wallet_appearances['tier_3']:
+                wallet_tier = 'tier_3'  # Emerging alpha wallet
+            
+            if wallet_tier is None:
+                self.logger.debug(f"Wallet {wallet[:8]}... insufficient: H:{high_count} M:{medium_count} L:{low_count}")
+                continue
+                
+            self.logger.debug(f"Wallet {wallet[:8]}... qualified as {wallet_tier}: H:{high_count} M:{medium_count} L:{low_count}")
+            
+            # Calculate tier-weighted scoring
+            tier_multipliers = {'tier_1': 3.0, 'tier_2': 2.0, 'tier_3': 1.5}
+            base_score = tier_multipliers[wallet_tier]
             
             # Use actual performance_multiplier from token data
             performance_multipliers = []
@@ -657,20 +701,22 @@ class ProvenAlphaFinder:
                 success_rate = 0.0
                 avg_recency = 0.0
             
-            # Calculate final score (no fallback penalty needed since all tokens are historical)
-            base_score = (
-                total_tokens * 15 +           # Points for volume (increased)
-                avg_performance * 25 +        # Points for average performance
-                success_rate * 40             # Points for consistency (increased)
-            )
+            # Calculate tier-weighted final score
+            tier_base_score = base_score * 100  # Base score from tier multiplier
             
-            # Apply recency weighting
-            final_score = base_score * avg_recency
+            # Performance and success bonuses  
+            performance_bonus = avg_performance * 25
+            success_bonus = success_rate * 40
+            volume_bonus = len(token_list) * 10
+            
+            final_score = (tier_base_score + performance_bonus + success_bonus + volume_bonus) * avg_recency
             
             scored_wallets.append({
                 'wallet': wallet,
                 'score': final_score,
-                'total_tokens': total_tokens,
+                'tier': wallet_tier,
+                'total_tokens': len(token_list),
+                'tier_counts': f"H:{high_count}/M:{medium_count}/L:{low_count}",
                 'avg_performance': avg_performance,
                 'success_rate': success_rate,
                 'avg_recency': avg_recency,
@@ -680,20 +726,58 @@ class ProvenAlphaFinder:
         # Sort by score (highest first)
         scored_wallets.sort(key=lambda x: x['score'], reverse=True)
         
-        # Log top performers
-        self.logger.info(f"Found {len(scored_wallets)} qualified alpha candidates")
+        # Log top performers with tier information
+        self.logger.info(f"Found {len(scored_wallets)} qualified alpha candidates across all tiers")
         
-        for i, wallet_data in enumerate(scored_wallets[:10]):
+        # Show distribution by tier
+        tier_counts = {}
+        for w in scored_wallets:
+            tier = w.get('tier', 'unknown')
+            tier_counts[tier] = tier_counts.get(tier, 0) + 1
+        
+        self.logger.info(f"Tier distribution: {tier_counts}")
+        
+        for i, wallet_data in enumerate(scored_wallets[:15]):  # Show top 15
             w = wallet_data
             self.logger.info(f"#{i+1}: {w['wallet'][:8]}... "
+                           f"Tier: {w.get('tier', 'N/A')} | "
                            f"Score: {w['score']:.1f} | "
-                           f"Tokens: {w['total_tokens']} | "
+                           f"Counts: {w.get('tier_counts', 'N/A')} | "
                            f"Perf: {w['avg_performance']:.1f}x | "
-                           f"Success: {w['success_rate']:.1%} | "
-                           f"Recency: {w['avg_recency']:.2f}")
+                           f"Success: {w['success_rate']:.1%}")
         
-        # Return top 30 wallets (increased from 20)
-        return [w['wallet'] for w in scored_wallets[:30]]
+        # Return more wallets but with tier diversity (up to 50 total)
+        max_wallets = min(50, len(scored_wallets))
+        selected_wallets = []
+        
+        # Prioritize higher tiers but include diversity
+        tier_limits = {'tier_1': 20, 'tier_2': 20, 'tier_3': 15}  # Max per tier
+        tier_selected = {'tier_1': 0, 'tier_2': 0, 'tier_3': 0}
+        
+        for wallet_data in scored_wallets:
+            if len(selected_wallets) >= max_wallets:
+                break
+                
+            tier = wallet_data.get('tier', 'tier_3')
+            if tier_selected[tier] < tier_limits[tier]:
+                selected_wallets.append(wallet_data['wallet'])
+                tier_selected[tier] += 1
+        
+        # Fill remaining slots with best remaining wallets regardless of tier
+        for wallet_data in scored_wallets:
+            if len(selected_wallets) >= max_wallets:
+                break
+            if wallet_data['wallet'] not in selected_wallets:
+                selected_wallets.append(wallet_data['wallet'])
+        
+        final_tier_counts = {}
+        for w in scored_wallets[:len(selected_wallets)]:
+            tier = w.get('tier', 'unknown')
+            final_tier_counts[tier] = final_tier_counts.get(tier, 0) + 1
+        
+        self.logger.info(f"Selected {len(selected_wallets)} wallets with distribution: {final_tier_counts}")
+        
+        return selected_wallets
     
     async def continuous_discovery(self):
         """Run continuous alpha discovery (for cloud deployment)"""
