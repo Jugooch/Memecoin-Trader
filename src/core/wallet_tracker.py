@@ -69,7 +69,7 @@ class WalletTracker:
                     wallet = swap.get('wallet', '')
                     
                     # Check if this is a buy (to_token is our mint)
-                    if swap.get('to_token') == mint_address and wallet in self.watched_wallets:
+                    if swap.get('side') == 'buy' and wallet in self.watched_wallets:
                         # Simple deduplication for basic check
                         dedupe_key = f"{mint_address}:{wallet}"
                         current_time = time.time()
@@ -153,7 +153,7 @@ class WalletTracker:
                     
                     wallet = swap.get('wallet', '')
                     
-                    if swap.get('to_token') == mint_address and wallet in self.watched_wallets:
+                    if swap.get('side') == 'buy' and wallet in self.watched_wallets:
                         # Deduplication check
                         dedupe_key = f"{mint_address}:{wallet}"
                         current_time = time.time()

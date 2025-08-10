@@ -124,8 +124,22 @@ class TradingEngine:
         sol_price = 20.0  # Mock SOL price
         sol_amount = usd_amount / sol_price
         
-        # Calculate tokens received
-        tokens_received = usd_amount / price
+        # Apply slippage and fees for realistic simulation
+        fee_bps = getattr(self.config, "fee_bps", 30) if hasattr(self.config, "paper_trading") else 30
+        buy_slip_bps = getattr(self.config, "buy_slippage_bps", 75) if hasattr(self.config, "paper_trading") else 75
+        
+        # Slippage rejection gate - reject if estimated slippage is too high
+        max_slippage_bps = getattr(self.config, "max_slippage_bps", 150) if hasattr(self.config, "paper_trading") else 150
+        if buy_slip_bps > max_slippage_bps:
+            self.logger.warning(f"Trade rejected: estimated slippage {buy_slip_bps}bps > max {max_slippage_bps}bps")
+            return {"success": False, "error": f"Slippage too high: {buy_slip_bps/100:.1f}%"}
+        
+        # Calculate fill price with slippage
+        fill_price = price * (1 + buy_slip_bps/10000)
+        
+        # Calculate tokens received after fees
+        net_usd_amount = usd_amount * (1 - fee_bps/10000)
+        tokens_received = net_usd_amount / fill_price
         
         # Update paper capital
         if self.paper_capital < usd_amount:
@@ -133,17 +147,20 @@ class TradingEngine:
         
         self.paper_capital -= usd_amount
         
-        # Create position
+        # Create position with proper cost tracking (use fill_price as entry)
         position = Position(
             mint=mint_address,
-            entry_price=price,
+            entry_price=fill_price,
             amount=tokens_received,
             sol_invested=sol_amount,
             entry_time=datetime.now(),
-            tp_price=price * self.config.tp_multiplier,
-            sl_price=price * self.config.stop_loss_pct,
-            peak_price=price,
-            paper_mode=True
+            tp_price=fill_price * self.config.tp_multiplier,
+            sl_price=fill_price * self.config.stop_loss_pct,
+            peak_price=fill_price,
+            paper_mode=True,
+            tokens_initial=tokens_received,
+            cost_usd_remaining=usd_amount,
+            avg_cost_per_token=usd_amount / tokens_received
         )
         
         self.active_positions[mint_address] = position
@@ -204,18 +221,36 @@ class TradingEngine:
         if current_price <= 0:
             return {"success": False, "error": "Could not get current price"}
         
-        # Calculate sell amount
+        # Calculate sell amount (percentage of current amount)
         tokens_to_sell = position.amount * percentage
-        usd_received = tokens_to_sell * current_price
+        if tokens_to_sell <= 0:
+            return {"success": False, "error": "Nothing to sell"}
         
-        # Update position
+        # Apply slippage and fees for realistic simulation
+        fee_bps = getattr(self.config, "fee_bps", 30) if hasattr(self.config, "paper_trading") else 30
+        sell_slip_bps = getattr(self.config, "sell_slippage_bps", 100) if hasattr(self.config, "paper_trading") else 100
+        
+        # Calculate fill price with slippage
+        fill_price = current_price * (1 - sell_slip_bps/10000)
+        
+        # Calculate USD received after fees and correct cost basis
+        cost_basis_usd = tokens_to_sell * position.avg_cost_per_token
+        gross_usd = tokens_to_sell * fill_price
+        usd_received = gross_usd * (1 - fee_bps/10000)
+        
+        # Update position with proper accounting
         position.amount -= tokens_to_sell
+        position.cost_usd_remaining -= cost_basis_usd
+        if position.amount > 0:
+            position.avg_cost_per_token = position.cost_usd_remaining / position.amount
+        else:
+            position.avg_cost_per_token = 0.0
+        
         self.paper_capital += usd_received
         
-        # Calculate profit/loss
-        cost_basis = (position.sol_invested * percentage) * 20  # Mock SOL price
-        profit = usd_received - cost_basis
-        profit_pct = (profit / cost_basis) * 100 if cost_basis > 0 else 0
+        # Calculate profit/loss with correct cost basis
+        profit = usd_received - cost_basis_usd
+        profit_pct = (profit / cost_basis_usd) * 100 if cost_basis_usd > 0 else 0
         
         # Record in P&L store
         self.pnl_store.add_trade(
@@ -246,7 +281,7 @@ class TradingEngine:
         self.logger.info(f"Paper sell executed: {tokens_to_sell} tokens at ${current_price}, profit: ${profit:.2f} ({profit_pct:.2f}%)")
         
         # Remove position if fully sold
-        if position.amount <= 0.001:  # Small threshold for floating point precision
+        if position.amount <= 1e-9:  # Small threshold for floating point precision
             del self.active_positions[mint_address]
             
             # Update stats

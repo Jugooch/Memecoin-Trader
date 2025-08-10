@@ -35,12 +35,13 @@ watched_wallets:
   # - wallet_address_2
 
 # Trading parameters
-threshold_alpha_buys: 3        # Number of alpha wallets needed to trigger trade
-min_liquidity_usd: 1000       # Minimum liquidity required
-time_window_sec: 120          # Time window to wait for alpha activity (seconds)
+threshold_alpha_buys: 4        # Number of alpha wallets needed to trigger trade (raised for quality)
+min_liquidity_usd: 25000      # Minimum liquidity required (raised to avoid slippage)
+time_window_sec: 300          # Time window to wait for alpha activity (5 minutes for better signals)
 max_trade_pct: 0.05           # Max % of capital per trade (5%)
-tp_multiplier: 2.0            # Take profit multiplier (2x)
-stop_loss_pct: 0.7            # Stop loss percentage (30% loss)
+tp_multiplier: 1.25           # Take profit multiplier (1.25x - more realistic)
+stop_loss_pct: 0.92           # Stop loss percentage (8% loss - tighter stop)
+max_hold_seconds: 300         # Maximum time to hold position (5 minutes)
 
 # Trading execution mode
 trading_mode: "simulation"    # Options: "simulation", "alerts", "auto"
@@ -51,8 +52,16 @@ trading_mode: "simulation"    # Options: "simulation", "alerts", "auto"
 # Trading limits
 trading:
   initial_capital: 100.0      # Starting capital ($)
-  max_trades_per_day: 10      # Daily trade limit
-  min_time_between_trades: 30 # Minimum seconds between trades
+  max_trades_per_day: 20      # Daily trade limit (reasonable for active trading)
+  min_time_between_trades: 120 # Minimum seconds between trades (2 minutes to avoid overtrading)
+  max_concurrent_positions: 3  # Maximum positions open at once
+  
+# Paper trading simulation parameters
+paper_trading:
+  fee_bps: 30                 # Trading fee in basis points (0.30%)
+  buy_slippage_bps: 75        # Expected buy slippage (0.75%)
+  sell_slippage_bps: 100      # Expected sell slippage (1.00%)
+  max_slippage_bps: 150      # Maximum acceptable slippage (1.50%)
 
 # Pump.fun configuration
 pump_fun:

@@ -42,8 +42,8 @@ class MoralisClient:
         self.cache_ttl = {
             'metadata': 7200,     # Cache metadata for 2 hours (very stable data)
             'liquidity': 900,     # Cache liquidity for 15 minutes (changes less frequently)  
-            'price': 30,          # Cache price for 30 seconds (very volatile)
-            'swaps': 60,          # Cache swaps for 1 minute (optimized polling reduces need)
+            'price': 1,           # Cache price for 1 second (critical for accurate exits)
+            'swaps': 10,          # Cache swaps for 10 seconds (faster alpha detection)
             'holders': 1800       # Cache holders for 30 minutes (changes slowly)
         }
         
@@ -287,12 +287,14 @@ class MoralisClient:
             self.logger.error(f"Error getting token liquidity for {mint_address}: {e}")
             return {'total_liquidity_usd': 0, 'pools': [], 'pool_count': 0}
 
-    async def get_current_price(self, mint_address: str) -> float:
+    async def get_current_price(self, mint_address: str, fresh: bool = False) -> float:
         """Get current token price in USD"""
         url = f"{self.base_url}/token/mainnet/{mint_address}/price"
         
         try:
-            data = await self._make_request(url, cache_type='price')
+            # Skip cache if fresh=True (for position monitoring)
+            cache_type = None if fresh else 'price'
+            data = await self._make_request(url, cache_type=cache_type)
             return float(data.get('usdPrice', 0))
             
         except Exception as e:
@@ -331,17 +333,22 @@ class MoralisClient:
                 
                 # Determine which token is our target token and which is the other
                 if bought.get('address') == mint_address:
-                    # User sold our token for something else
-                    from_token = mint_address
-                    to_token = sold.get('address', '')
-                    from_amount = float(bought.get('amount', 0))
-                    to_amount = float(sold.get('amount', 0))
-                else:
-                    # User bought our token with something else
+                    # Trader bought our token with something else → BUY
+                    side = 'buy'
                     from_token = sold.get('address', '')
                     to_token = mint_address
                     from_amount = float(sold.get('amount', 0))
                     to_amount = float(bought.get('amount', 0))
+                elif sold.get('address') == mint_address:
+                    # Trader sold our token for something else → SELL
+                    side = 'sell'
+                    from_token = mint_address
+                    to_token = bought.get('address', '')
+                    from_amount = float(sold.get('amount', 0))
+                    to_amount = float(bought.get('amount', 0))
+                else:
+                    # Not directly our pair; skip
+                    continue
                 
                 swaps.append({
                     'signature': swap.get('transactionHash', ''),
@@ -351,7 +358,8 @@ class MoralisClient:
                     'to_token': to_token,
                     'from_amount': from_amount,
                     'to_amount': to_amount,
-                    'usd_value': float(swap.get('totalValueUsd', 0))
+                    'usd_value': float(swap.get('totalValueUsd', 0)),
+                    'side': side
                 })
             
             return swaps

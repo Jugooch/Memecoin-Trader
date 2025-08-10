@@ -274,10 +274,21 @@ class MemecoinTradingBot:
         else:
             self.logger.debug(f"Alpha check completed in {alpha_check_duration:.1f}s: no alpha wallets found for {mint_address[:8]}...")
         
-        # Dynamic threshold based on wallet quality
+        # Stricter alpha signal requirements
         min_confidence = 50
         
-        if confidence_score >= min_confidence and len(alpha_wallets) >= self.config.threshold_alpha_buys:
+        # Ensure we have distinct wallets (not just one wallet buying multiple times)
+        distinct_wallets = len(set(alpha_wallets))
+        min_distinct_wallets = max(self.config.threshold_alpha_buys, 3)  # At least 3 distinct wallets
+        
+        # Additional quality checks
+        signal_quality_passed = (
+            confidence_score >= min_confidence and 
+            distinct_wallets >= min_distinct_wallets and
+            len(alpha_wallets) >= self.config.threshold_alpha_buys
+        )
+        
+        if signal_quality_passed:
             # Check token safety before trading (reuse swap data from alpha check)
             alpha_swaps_data = alpha_analysis.get('last_swaps_data', [])
             safety_check = await self.check_token_safety(mint_address, metadata, liquidity, alpha_swaps_data)
@@ -319,22 +330,53 @@ class MemecoinTradingBot:
             await self.execute_trade(mint_address, metadata, liquidity, 
                                    confidence_score, investment_multiplier, wallet_tiers)
 
+    def _extract_liquidity_usd(self, liquidity: Dict) -> float:
+        """Extract liquidity USD value from various possible field names"""
+        return (liquidity.get('total_liquidity_usd') or
+                liquidity.get('liquidity_usd') or
+                liquidity.get('usd_value') or 0.0)
+    
     def _can_trade(self) -> bool:
-        """Check if we can execute a new trade"""
-        if self.trades_today >= self.config.max_trades_per_day:
+        """Check if we can execute a new trade with improved throttling"""
+        # Check daily trade limit (cap at 20 max)
+        if self.trades_today >= min(self.config.max_trades_per_day, 20):
+            self.logger.debug(f"Daily trade limit reached: {self.trades_today}")
             return False
-            
+        
+        # Check minimum time between trades (at least 2 minutes)
         if self.last_trade_time:
             time_since_last = time.time() - self.last_trade_time
-            if time_since_last < self.config.min_time_between_trades:
+            min_interval = max(self.config.min_time_between_trades, 120)
+            if time_since_last < min_interval:
+                self.logger.debug(f"Too soon since last trade: {time_since_last:.0f}s < {min_interval}s")
                 return False
-                
+        
+        # Check max concurrent positions
+        max_concurrent = getattr(self.config, "max_concurrent_positions", 3)
+        current_positions = len(self.trading_engine.active_positions)
+        if current_positions >= max_concurrent:
+            self.logger.debug(f"Max concurrent positions reached: {current_positions}/{max_concurrent}")
+            return False
+        
+        # Cool-down after stop loss or time stop (3 minutes)
+        if self.recent_trades:
+            last_sells = [t for t in reversed(self.recent_trades) if t.get('action') == 'SELL']
+            if last_sells:
+                last_sell = last_sells[0]
+                exit_reason = last_sell.get('exit_reason', '')
+                if exit_reason in ('STOP_LOSS', 'TIME_STOP'):
+                    cooldown_time = 180  # 3 minutes
+                    time_since_loss = time.time() - last_sell['timestamp']
+                    if time_since_loss < cooldown_time:
+                        self.logger.debug(f"Cooling down after {exit_reason}: {time_since_loss:.0f}s < {cooldown_time}s")
+                        return False
+        
         return True
 
     def _passes_filters(self, metadata: Dict, liquidity: Dict, deployer: str) -> bool:
         """Apply token filters"""
-        # Check liquidity requirement (use total_liquidity_usd from new structure)
-        liquidity_usd = liquidity.get('total_liquidity_usd', liquidity.get('usd_value', 0))
+        # Check liquidity requirement (use unified extraction method)
+        liquidity_usd = self._extract_liquidity_usd(liquidity)
         if liquidity_usd < self.config.min_liquidity_usd:
             return False
             
@@ -414,7 +456,7 @@ class MemecoinTradingBot:
         
         try:
             # Check liquidity amount (basic check)
-            liquidity_usd = liquidity.get('liquidity_usd', 0)
+            liquidity_usd = self._extract_liquidity_usd(liquidity)
             if liquidity_usd < 1000:  # Less than $1k liquidity
                 rug_score += 30
                 warnings.append("Low liquidity (<$1k)")
@@ -422,30 +464,31 @@ class MemecoinTradingBot:
                 rug_score += 15
                 warnings.append("Low liquidity (<$5k)")
             
-            # Check holder concentration using Moralis
+            # Check holder count (Moralis doesn't provide individual balances)
             try:
                 holders_info = await self.moralis.get_token_holders(mint_address)
-                total_supply = holders_info.get('total_supply', 1)
+                holder_count = holders_info.get('holder_count', 0)
                 
-                # Check top holders
-                top_10_percentage = 0
-                holders = holders_info.get('holders', [])[:10]
-                
-                for holder in holders:
-                    holder_balance = holder.get('balance', 0)
-                    percentage = (holder_balance / total_supply) * 100 if total_supply > 0 else 0
-                    top_10_percentage += percentage
-                
-                if top_10_percentage > 80:  # Top 10 holders own >80%
-                    rug_score += 40
-                    warnings.append("High concentration (top 10 hold >80%)")
-                elif top_10_percentage > 60:  # Top 10 holders own >60%
+                # Basic holder count check
+                if holder_count < 50:  # Very few holders
                     rug_score += 25
-                    warnings.append("High concentration (top 10 hold >60%)")
+                    warnings.append(f"Very few holders ({holder_count})")
+                elif holder_count < 100:  # Few holders
+                    rug_score += 15
+                    warnings.append(f"Few holders ({holder_count})")
+                
+                # Note: We can't check top-10 concentration without individual balances
+                # This is a limitation of the Moralis holders endpoint
+                
+                # TODO: Add LP lock and mint authority checks when available
+                # Currently not available from Moralis API - would need:
+                # - LP lock status (is liquidity locked?)
+                # - Mint authority status (has mint been revoked?)
+                # These are critical safety checks for pump.fun tokens
                 
             except Exception as e:
                 self.logger.debug(f"Could not check holders for {mint_address}: {e}")
-                rug_score += 10  # Penalty for not being able to check
+                # Don't add penalty since holder data isn't critical
             
             # Check recent transaction patterns for honeypot behavior
             try:
@@ -567,21 +610,34 @@ class MemecoinTradingBot:
         peak_price = entry_price
         symbol = metadata.get('symbol', 'UNKNOWN') if metadata else 'UNKNOWN'
         
-        # Tiered exit levels
-        tp1_price = entry_price * 2.0  # 2x - take 30% profit
-        tp2_price = entry_price * 3.0  # 3x - take another 30% profit
+        # Use config values with sensible defaults
+        tp_mul = getattr(self.config, "tp_multiplier", 1.25)  # Default 1.25x if not in config
+        
+        # Tiered exit levels using config
+        tp1_price = entry_price * tp_mul           # e.g., 1.25x - take 30% profit
+        tp2_price = entry_price * (tp_mul + 0.25)  # e.g., 1.5x - take another 30% profit
         sl_price = entry_price * self.config.stop_loss_pct
+        
+        # Time-based exit parameters
+        max_hold_sec = getattr(self.config, "max_hold_seconds", 300)  # 5 minutes default
+        entry_ts = time.time()
+        
+        # Break-even stop parameters
+        be_armed = False
+        be_arm_threshold = entry_price * 1.10  # Arm BE stop after +10%
+        be_price = entry_price  # Will be set when armed
         
         # Track what percentage we've already sold
         remaining_position = 1.0  # Start with 100%
         tp1_executed = False
         tp2_executed = False
         
-        self.logger.info(f"Monitoring position {mint_address}: TP1: {tp1_price:.8f}, TP2: {tp2_price:.8f}, SL: {sl_price:.8f}")
+        self.logger.info(f"Monitoring position {mint_address}: TP1: {tp1_price:.8f}, TP2: {tp2_price:.8f}, SL: {sl_price:.8f}, Max hold: {max_hold_sec}s")
         
         while remaining_position > 0.05:  # Continue until less than 5% left
             try:
-                current_price = await self.moralis.get_current_price(mint_address)
+                # Use fresh price for position monitoring (bypass cache)
+                current_price = await self.moralis.get_current_price(mint_address, fresh=True)
                 
                 # Track peak price for trailing stop
                 if current_price > peak_price:
@@ -604,6 +660,26 @@ class MemecoinTradingBot:
                     remaining_position -= 0.3  # 30% of original position
                     tp2_executed = True
                     self.logger.info(f"TP2 executed for {mint_address}: sold another 30% at 3x, {remaining_position*100:.0f}% remaining")
+                
+                # Check and arm break-even stop after +10%
+                if not be_armed and current_price >= be_arm_threshold:
+                    be_armed = True
+                    be_price = entry_price
+                    self.logger.info(f"Break-even stop armed for {mint_address} at {be_price:.8f}")
+                
+                # Break-even stop check
+                if be_armed and current_price <= be_price:
+                    await self._execute_partial_exit(mint_address, 1.0, current_price, 
+                                                   'BREAKEVEN_EXIT', symbol)
+                    self.logger.info(f"Break-even exit for {mint_address}: sold remaining {remaining_position*100:.0f}%")
+                    break
+                
+                # Time-based stop check
+                if time.time() - entry_ts > max_hold_sec:
+                    await self._execute_partial_exit(mint_address, 1.0, current_price, 
+                                                   'TIME_STOP', symbol)
+                    self.logger.info(f"Time stop for {mint_address} after {max_hold_sec}s: sold remaining {remaining_position*100:.0f}%")
+                    break
                 
                 # Stop loss or trailing stop condition
                 should_stop_loss = (
