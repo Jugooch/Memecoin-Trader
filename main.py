@@ -875,13 +875,7 @@ class MemecoinTradingBot:
         try:
             self.logger.info(f"Starting alpha wallet discovery (reason: {trigger_reason})...")
             
-            # Send Discord notification that discovery is starting
-            if self.trading_engine.notifier:
-                await self.trading_engine.notifier.send_text(
-                    f"🔍 **Alpha Wallet Discovery Started**\n"
-                    f"Reason: {trigger_reason}\n"
-                    f"Searching for profitable wallets to follow..."
-                )
+            # Log discovery start (no Discord notification to avoid spam)
             
             # Import and run discovery
             from src.discovery.alpha_discovery_v2 import ProvenAlphaFinder
@@ -909,20 +903,8 @@ class MemecoinTradingBot:
                 
                 self.logger.info(f"Alpha discovery complete: added {added_count} new wallets (total: {new_count})")
                 
-                # Send successful discovery notification to Discord
-                if self.trading_engine.notifier:
-                    await self.trading_engine.notifier.send_embed(
-                        title="✅ Alpha Wallet Discovery Complete",
-                        fields={
-                            "New Wallets Found": f"{len(new_wallets)} fresh alpha wallets",
-                            "Total Added": f"{added_count} after deduplication", 
-                            "Total Watching": f"{new_count} alpha wallets",
-                            "Discovery Time": f"{discovery_duration:.1f} seconds",
-                            "Trigger Reason": trigger_reason
-                        },
-                        color=0x10B981,  # Green for success
-                        description=f"Bot is now following {added_count} new profitable wallets for better trade signals!"
-                    )
+                # Log success (no Discord notification to avoid spam)
+                self.logger.info(f"Alpha discovery notification disabled to reduce Discord spam")
                 
                 # Save to database
                 await finder._save_discovered_wallets(new_wallets)
@@ -936,19 +918,8 @@ class MemecoinTradingBot:
             else:
                 self.logger.warning("Alpha discovery found no new wallets")
                 
-                # Send notification about no new wallets found
-                if self.trading_engine.notifier:
-                    await self.trading_engine.notifier.send_embed(
-                        title="⚠️ Alpha Wallet Discovery Complete",
-                        fields={
-                            "New Wallets Found": "0 new wallets",
-                            "Discovery Time": f"{discovery_duration:.1f} seconds",
-                            "Trigger Reason": trigger_reason,
-                            "Status": "No new profitable wallets detected"
-                        },
-                        color=0xF59E0B,  # Orange for warning
-                        description="Discovery completed but no new alpha wallets met the profitability criteria."
-                    )
+                # Log that no new wallets were added (no Discord notification to avoid spam)
+                self.logger.info(f"Alpha discovery found no wallets - Discord notification disabled")
                 
         except Exception as e:
             self.logger.error(f"Error during alpha wallet discovery: {e}")

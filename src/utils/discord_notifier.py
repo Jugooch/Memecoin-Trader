@@ -20,10 +20,12 @@ class DiscordNotifier:
         self.username = username
         self.logger = logging.getLogger(__name__)
         self._client = httpx.AsyncClient(timeout=10)
-        self.enabled = bool(webhook_url)
+        self.enabled = bool(webhook_url and webhook_url.strip())
         
         if not self.enabled:
-            self.logger.info("Discord notifications disabled (no webhook URL)")
+            self.logger.warning(f"Discord notifications disabled (webhook URL empty or invalid): '{webhook_url}'")
+        else:
+            self.logger.info(f"Discord notifier initialized with webhook: {webhook_url[:50]}...")
     
     async def _post(self, payload: Dict[str, Any]) -> bool:
         """Post to Discord webhook with retry logic"""

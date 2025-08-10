@@ -38,18 +38,24 @@ class TradingEngine:
         self.moralis = MoralisClient(config.moralis_key)
         
         # Initialize Discord notifier
-        webhook_url = ""
-        if hasattr(config, 'notifications'):
-            webhook_url = config.notifications.get('discord_webhook_url', '')
-            self.logger.info(f"DISCORD_DEBUG: Found notifications section, webhook_url length: {len(webhook_url) if webhook_url else 0}")
+        webhook_url = None
+        if hasattr(config, 'notifications') and config.notifications:
+            webhook_url = config.notifications.get('discord_webhook_url', None)
+            self.logger.info(f"DISCORD_DEBUG: Found notifications section, webhook_url: {webhook_url[:50] if webhook_url else 'None'}")
         elif hasattr(config, 'discord_webhook_url'):
             webhook_url = config.discord_webhook_url
-            self.logger.info(f"DISCORD_DEBUG: Found root discord_webhook_url, length: {len(webhook_url) if webhook_url else 0}")
+            self.logger.info(f"DISCORD_DEBUG: Found root discord_webhook_url: {webhook_url[:50] if webhook_url else 'None'}")
         else:
             self.logger.warning("DISCORD_DEBUG: No Discord webhook URL found in config")
+            self.logger.info(f"DISCORD_DEBUG: Config notifications attr exists: {hasattr(config, 'notifications')}, value: {getattr(config, 'notifications', 'NONE')}")
         
-        self.notifier = DiscordNotifier(webhook_url) if webhook_url else None
-        self.logger.info(f"DISCORD_DEBUG: Notifier initialized: {self.notifier is not None}, enabled: {self.notifier.enabled if self.notifier else False}")
+        # Check if webhook URL is actually set and not empty
+        if webhook_url and webhook_url.strip():
+            self.notifier = DiscordNotifier(webhook_url.strip())
+            self.logger.info(f"DISCORD_DEBUG: Notifier initialized successfully, enabled: {self.notifier.enabled}")
+        else:
+            self.notifier = None
+            self.logger.warning(f"DISCORD_DEBUG: Notifier not initialized - webhook_url is empty or None: '{webhook_url}'")
         
         # Initialize P&L store
         self.pnl_store = PnLStore(
