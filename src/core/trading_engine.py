@@ -29,13 +29,13 @@ class Position:
 
 
 class TradingEngine:
-    def __init__(self, config):
+    def __init__(self, config, moralis_client: MoralisClient):
         self.config = config
         self.logger = logging.getLogger(__name__)
         
         # Initialize clients
         self.pumpfun = PumpFunClient(config.quicknode_endpoint, config.quicknode_api_key)
-        self.moralis = MoralisClient(config.moralis_key)
+        self.moralis = moralis_client  # Use shared client instead of creating new one
         
         # Initialize Discord notifier
         webhook_url = None

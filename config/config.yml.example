@@ -63,6 +63,25 @@ paper_trading:
   sell_slippage_bps: 100      # Expected sell slippage (1.00%)
   max_slippage_bps: 150      # Maximum acceptable slippage (1.50%)
 
+# API optimization settings
+api_optimization:
+  # Moralis cache TTLs (seconds)
+  price_ttl: 8               # Price cache (use fresh=True for monitoring)  
+  liquidity_ttl: 600         # Liquidity cache (10 minutes)
+  swaps_ttl: 30              # Swaps cache (30s default, 10s for alpha)
+  swaps_alpha_ttl: 10        # Faster updates during alpha checks
+  
+  # Alpha check optimization  
+  alpha_polls_max: 3         # Maximum polls per alpha check
+  alpha_poll_intervals: [5, 20, 40]  # Poll timing in seconds
+  alpha_swap_limit: 50       # Swap limit per poll (reduced from 100)
+  alpha_early_abort_min_buyers: 10   # Early abort threshold
+  alpha_early_abort_buy_sell_ratio: 1.0  # Early abort ratio
+  
+  # Discovery V2 optimization
+  discovery_max_moralis_tokens: 20    # Only validate top K tokens with Moralis
+  discovery_bitquery_success_threshold: 40  # Minimum score for Moralis validation
+
 # Pump.fun configuration
 pump_fun:
   program_address: "6EF8rrecthHAuSStzpf6aXr9HWs8jgPVr5S6fqF6P"

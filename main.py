@@ -71,7 +71,7 @@ class MemecoinTradingBot:
             self.pumpfun = PumpFunClient(self.config.quicknode_endpoint, self.config.quicknode_api_key)
         
         self.wallet_tracker = WalletTracker(self.config.watched_wallets)
-        self.trading_engine = TradingEngine(self.config)
+        self.trading_engine = TradingEngine(self.config, moralis_client=self.moralis)
         self.database = Database(self.config.database_file)
         
         self.running = False
@@ -464,31 +464,33 @@ class MemecoinTradingBot:
                 rug_score += 15
                 warnings.append("Low liquidity (<$5k)")
             
-            # Check holder count (Moralis doesn't provide individual balances)
-            try:
-                holders_info = await self.moralis.get_token_holders(mint_address)
-                holder_count = holders_info.get('holder_count', 0)
+            # Removed expensive holders API call from hot path
+            # Instead, we use unique buyers from swap data we already fetched (free)
+            if cached_swaps:
+                # Count unique buyers from cached swap data
+                unique_traders = set()
+                for swap in cached_swaps:
+                    if swap.get('wallet'):
+                        unique_traders.add(swap.get('wallet'))
                 
-                # Basic holder count check
-                if holder_count < 50:  # Very few holders
-                    rug_score += 25
-                    warnings.append(f"Very few holders ({holder_count})")
-                elif holder_count < 100:  # Few holders
-                    rug_score += 15
-                    warnings.append(f"Few holders ({holder_count})")
+                trader_count = len(unique_traders)
+                if trader_count < 20:  # Very few unique traders
+                    rug_score += 20
+                    warnings.append(f"Few unique traders ({trader_count})")
+                elif trader_count < 50:  # Limited trader diversity
+                    rug_score += 10
+                    warnings.append(f"Limited trader diversity ({trader_count})")
                 
-                # Note: We can't check top-10 concentration without individual balances
-                # This is a limitation of the Moralis holders endpoint
-                
-                # TODO: Add LP lock and mint authority checks when available
-                # Currently not available from Moralis API - would need:
-                # - LP lock status (is liquidity locked?)
-                # - Mint authority status (has mint been revoked?)
-                # These are critical safety checks for pump.fun tokens
-                
-            except Exception as e:
-                self.logger.debug(f"Could not check holders for {mint_address}: {e}")
-                # Don't add penalty since holder data isn't critical
+                self.logger.debug(f"Used cached swap data to assess trader diversity: {trader_count} unique traders")
+            else:
+                # No penalty if we don't have swap data - avoid expensive API call
+                self.logger.debug("No cached swap data available for trader diversity check")
+            
+            # TODO: Add LP lock and mint authority checks when available
+            # Currently not available from Moralis API - would need:
+            # - LP lock status (is liquidity locked?)
+            # - Mint authority status (has mint been revoked?)
+            # These are critical safety checks for pump.fun tokens
             
             # Check recent transaction patterns for honeypot behavior
             try:

@@ -37,13 +37,18 @@ class MoralisClient:
         self.last_request_time = 0
         self.min_request_interval = 0.2  # 5 requests per second (more conservative)
         
-        # Smart caching to reduce API calls
+        # In-flight request coalescing and concurrency control
+        self._inflight = {}  # key -> asyncio.Task
+        self._sem = asyncio.Semaphore(3)  # cap concurrent requests
+        
+        # Smart caching to reduce API calls - mode-aware TTLs
         self.cache = {}
         self.cache_ttl = {
             'metadata': 7200,     # Cache metadata for 2 hours (very stable data)
-            'liquidity': 900,     # Cache liquidity for 15 minutes (changes less frequently)  
-            'price': 1,           # Cache price for 1 second (critical for accurate exits)
-            'swaps': 10,          # Cache swaps for 10 seconds (faster alpha detection)
+            'liquidity': 600,     # Cache liquidity for 10 minutes (reduce from 15)
+            'price': 8,           # Cache price for 8 seconds (use fresh=True for monitoring)
+            'swaps': 30,          # Cache swaps for 30 seconds (reduce calls during discovery)
+            'swaps_alpha': 10,    # Short TTL for alpha checks (more frequent updates)
             'holders': 1800       # Cache holders for 30 minutes (changes slowly)
         }
         
@@ -142,27 +147,51 @@ class MoralisClient:
         self.last_cache_cleanup = current_time
     
     async def _make_request(self, url: str, params: Dict = None, cache_type: str = None) -> Dict:
-        """Make HTTP request with intelligent caching and error handling"""
+        """Make HTTP request with intelligent caching, coalescing, and error handling"""
         
         # Periodic cache cleanup
         self._cleanup_expired_cache()
         
+        # Create request key for caching and coalescing
+        cache_key = self._get_cache_key(url, params)
+        
         # Check cache first
         if cache_type:
-            cache_key = self._get_cache_key(url, params)
             cache_entry = self.cache.get(cache_key)
             
             if self._is_cache_valid(cache_entry, cache_type):
                 self.logger.debug(f"Cache hit for {cache_type}")
                 return cache_entry['data']
         
-        session = await self._get_session()
-        if not session:
-            self.logger.warning("No available API keys")
-            return {}
-            
-        await self._rate_limit()
+        # In-flight coalescing - check if same request is already running
+        if cache_key in self._inflight:
+            self.logger.debug(f"Coalescing request: {url}")
+            return await self._inflight[cache_key]
         
+        # Create and track the actual HTTP request task
+        async def _fetch():
+            async with self._sem:  # Global concurrency cap
+                session = await self._get_session()
+                if not session:
+                    self.logger.warning("No available API keys")
+                    return {}
+                    
+                await self._rate_limit()
+                return await self._execute_request(session, url, params, cache_type, cache_key)
+        
+        # Store the task for coalescing
+        task = asyncio.create_task(_fetch())
+        self._inflight[cache_key] = task
+        
+        try:
+            data = await task
+            return data
+        finally:
+            # Clean up after request completes
+            self._inflight.pop(cache_key, None)
+    
+    async def _execute_request(self, session, url, params, cache_type, cache_key):
+        """Execute the actual HTTP request with retry logic"""
         current_key_index = getattr(session, '_current_key_index', 0)
         
         max_retries = 2  # Reduced retries to save API calls
@@ -177,7 +206,6 @@ class MoralisClient:
                         
                         # Cache successful response
                         if cache_type:
-                            cache_key = self._get_cache_key(url, params)
                             self.cache[cache_key] = {
                                 'data': data,
                                 'timestamp': time.time()
@@ -317,13 +345,16 @@ class MoralisClient:
             self.logger.error(f"Error getting OHLCV for {mint_address}: {e}")
             return []
 
-    async def get_token_swaps(self, mint_address: str, limit: int = 100) -> List[Dict]:
-        """Get recent swap transactions for token"""
+    async def get_token_swaps(self, mint_address: str, limit: int = 100, ttl_override: str = None) -> List[Dict]:
+        """Get recent swap transactions for token with optional TTL override"""
         url = f"{self.base_url}/token/mainnet/{mint_address}/swaps"
         params = {'limit': limit}
         
+        # Use override TTL for alpha checks (10s) vs discovery (30s)
+        cache_type = ttl_override if ttl_override else 'swaps'
+        
         try:
-            data = await self._make_request(url, params, cache_type='swaps')
+            data = await self._make_request(url, params, cache_type=cache_type)
             
             swaps = []
             for swap in data.get('result', []):

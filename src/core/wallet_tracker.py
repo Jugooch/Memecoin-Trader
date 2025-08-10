@@ -130,20 +130,28 @@ class WalletTracker:
             
         moralis = moralis_client
         
-        # Smart polling intervals: front-loaded with diminishing returns
-        # Total: 5 + 15 + 30 + 30 + 20 + 20 = 120 seconds, only 6 API calls (vs 24)
-        poll_intervals = [5, 15, 30, 30, 20, 20]  
+        # Optimized polling: max 3 polls with early abort conditions
+        # Total: 5 + 20 + 40 = 65 seconds, only 3 API calls maximum
+        poll_intervals = [5, 20, 40]
         poll_count = 0
         last_alpha_count = 0
+        unique_buyers = 0
+        buy_to_sell_ratio = 0
         
-        for interval in poll_intervals:
+        for i, interval in enumerate(poll_intervals):
             # Check if we've exceeded our time window
             if time.time() - start_time >= time_window_sec:
                 break
                 
             try:
-                swaps = await moralis.get_token_swaps(mint_address, limit=100)
+                # Use smaller limit (50 vs 100) and alpha-optimized TTL
+                swaps = await moralis.get_token_swaps(mint_address, limit=50, ttl_override='swaps_alpha')
                 poll_count += 1
+                
+                # Track market activity for early abort decisions
+                total_buys = 0
+                total_sells = 0
+                unique_buyers_set = set()
                 
                 for swap in swaps:
                     swap_time = self._parse_timestamp(swap.get('timestamp'))
@@ -152,8 +160,17 @@ class WalletTracker:
                         continue
                     
                     wallet = swap.get('wallet', '')
+                    side = swap.get('side', '')
                     
-                    if swap.get('side') == 'buy' and wallet in self.watched_wallets:
+                    # Track overall market activity
+                    if side == 'buy':
+                        total_buys += 1
+                        unique_buyers_set.add(wallet)
+                    elif side == 'sell':
+                        total_sells += 1
+                    
+                    # Track alpha wallets
+                    if side == 'buy' and wallet in self.watched_wallets:
                         # Deduplication check
                         dedupe_key = f"{mint_address}:{wallet}"
                         current_time = time.time()
@@ -175,18 +192,26 @@ class WalletTracker:
                         self.update_wallet_activity(wallet)
                         self.logger.info(f"ALPHA WALLET DETECTED: {wallet[:8]}... bought {mint_address[:8]}...")
                 
+                # Calculate market metrics for early abort
+                unique_buyers = len(unique_buyers_set)
+                buy_to_sell_ratio = total_buys / max(total_sells, 1)  # Avoid division by zero
+                
+                # Early abort conditions after first poll
+                if i == 0:  # First poll
+                    if unique_buyers < 10 and buy_to_sell_ratio < 1.0:
+                        self.logger.debug(f"Early abort: poor activity ({unique_buyers} buyers, ratio {buy_to_sell_ratio:.2f})")
+                        break
+                
                 # Early exit if we reach threshold
                 if len(alpha_buyers) >= threshold_alpha_buys:
                     dedup_saved = self.dedupe_stats['deduped_checks']
                     self.logger.info(f"Threshold reached: {len(alpha_buyers)}/{threshold_alpha_buys} alpha wallets after {poll_count} polls (saved {dedup_saved} API calls)")
                     break
                 
-                # Early exit optimization: if no progress after 2 polls, reduce frequency  
-                if poll_count >= 2 and len(alpha_buyers) == last_alpha_count == 0:
-                    # Skip the next interval to save API calls if no alpha activity detected
-                    self.logger.debug(f"No alpha activity detected in {poll_count} polls for {mint_address[:8]}... - optimizing polling")
-                    if len(poll_intervals) > poll_count + 1:
-                        poll_intervals = poll_intervals[:poll_count] + poll_intervals[poll_count + 2:]  # Skip next interval
+                # Early exit optimization: if no alpha activity after 2 polls, stop
+                if i >= 1 and len(alpha_buyers) == 0:  # No alpha wallets found after 2nd poll
+                    self.logger.debug(f"No alpha activity detected after {poll_count} polls for {mint_address[:8]}...")
+                    break
                 
                 last_alpha_count = len(alpha_buyers)
                 

@@ -59,35 +59,37 @@ class ProvenAlphaFinder:
         self.min_wallet_appearances = 2  # Must appear on 2+ successful tokens (repeated success)
         
     async def discover_alpha_wallets(self) -> List[str]:
-        """Main discovery process using time-delayed analysis"""
-        self.logger.info("Starting advanced alpha wallet discovery...")
+        """Optimized discovery process - Bitquery-first approach"""
+        self.logger.info("Starting optimized alpha wallet discovery (Bitquery-first)...")
         
-        # Step 1: Get tokens from 24-48 hours ago (enough time to see performance)
+        # Step 1: Get tokens from 24-48 hours ago with Bitquery analysis
         historical_tokens = await self._get_historical_tokens()
         
-        # Step 2: For each token, determine if it was successful
-        successful_tokens = []
-        self.logger.info(f"Analyzing {len(historical_tokens)} tokens for success...")
+        # Step 2: Analyze ALL tokens using Bitquery data first (NO Moralis calls)
+        self.logger.info(f"Pre-filtering {len(historical_tokens)} tokens using Bitquery data...")
+        promising_tokens = await self._prefilter_tokens_bitquery_only(historical_tokens)
         
-        for i, token_data in enumerate(historical_tokens):
-            if await self._was_token_successful(token_data):
-                successful_tokens.append(token_data)
-            
-            # Log progress for first 10 tokens
-            if i < 10:
-                perf = token_data.get('performance_multiplier', 0)
-                holders = token_data.get('holder_count', 0) 
-                swaps = token_data.get('swap_count', 0)
-                success = len(successful_tokens)
-                self.logger.info(f"Token {i+1}/{len(historical_tokens)}: {token_data['mint'][:8]}... "
-                               f"Perf={perf:.2f}x, Holders={holders}, Swaps={swaps} -> {success} successful so far")
+        self.logger.info(f"Bitquery analysis identified {len(promising_tokens)} promising tokens")
         
-        self.logger.info(f"Found {len(successful_tokens)} successful tokens from analysis period")
+        # Step 3: Only validate top K tokens with Moralis (massive API savings)
+        top_k = min(20, len(promising_tokens))  # Only check top 20 tokens
+        validated_tokens = []
         
-        # Step 3: Find early buyers of successful tokens
+        if top_k > 0:
+            self.logger.info(f"Validating top {top_k} tokens with Moralis...")
+            for i, token_data in enumerate(promising_tokens[:top_k]):
+                if await self._validate_token_with_moralis(token_data):
+                    validated_tokens.append(token_data)
+                
+                self.logger.info(f"Moralis validation {i+1}/{top_k}: {token_data['mint'][:8]}... "
+                               f"-> {len(validated_tokens)} validated so far")
+        
+        self.logger.info(f"Found {len(validated_tokens)} successful tokens after validation")
+        
+        # Step 4: Find early buyers of successful tokens
         alpha_candidates = defaultdict(list)
         
-        for token_data in successful_tokens:
+        for token_data in validated_tokens:
             early_buyers = await self._find_early_buyers(token_data)
             
             for wallet in early_buyers:
@@ -261,6 +263,101 @@ class ProvenAlphaFinder:
             self.logger.error(f"Error getting historical tokens: {e}")
             return []
     
+    async def _prefilter_tokens_bitquery_only(self, tokens: List[Dict]) -> List[Dict]:
+        """Pre-filter tokens using only Bitquery data (no Moralis calls)"""
+        promising_tokens = []
+        
+        for token_data in tokens:
+            mint = token_data['mint']
+            launch_time = token_data.get('launch_time')
+            
+            if not launch_time:
+                continue
+            
+            # Use Bitquery data we already have from _get_historical_tokens
+            # This includes trade count, price progression, unique traders etc.
+            
+            # Get metrics from Bitquery data
+            swap_count = token_data.get('swap_count', 0)
+            unique_traders = token_data.get('unique_traders', 0)
+            price_progression = token_data.get('price_progression', [])
+            
+            # Calculate performance multiplier from Bitquery price data
+            performance_multiplier = 1.0
+            if len(price_progression) >= 2:
+                early_price = price_progression[0] if price_progression[0] > 0 else price_progression[1]
+                later_prices = [p for p in price_progression[2:] if p > 0]
+                if later_prices and early_price > 0:
+                    peak_price = max(later_prices)
+                    performance_multiplier = peak_price / early_price
+            
+            # Bitquery-based success criteria (no Moralis needed)
+            bitquery_success_score = 0
+            
+            # Activity criteria
+            if swap_count >= 50:  # Good activity
+                bitquery_success_score += 30
+            elif swap_count >= 20:  # Moderate activity
+                bitquery_success_score += 15
+                
+            # Trader diversity
+            if unique_traders >= 20:  # Good diversity
+                bitquery_success_score += 25
+            elif unique_traders >= 10:  # Some diversity
+                bitquery_success_score += 10
+                
+            # Performance criteria
+            if performance_multiplier >= 3.0:  # Great performance
+                bitquery_success_score += 40
+            elif performance_multiplier >= 2.0:  # Good performance
+                bitquery_success_score += 25
+            elif performance_multiplier >= 1.5:  # Moderate performance
+                bitquery_success_score += 10
+                
+            # Store calculated metrics
+            token_data['performance_multiplier'] = performance_multiplier
+            token_data['bitquery_success_score'] = bitquery_success_score
+            
+            # Threshold for promising tokens (adjust based on results)
+            if bitquery_success_score >= 40:  # Requires good activity + diversity + some performance
+                promising_tokens.append(token_data)
+                self.logger.debug(f"Token {mint[:8]}... promising: score={bitquery_success_score}, "
+                                f"perf={performance_multiplier:.2f}x, swaps={swap_count}, traders={unique_traders}")
+        
+        # Sort by success score (best first)
+        promising_tokens.sort(key=lambda x: x['bitquery_success_score'], reverse=True)
+        
+        return promising_tokens
+
+    async def _validate_token_with_moralis(self, token_data: Dict) -> bool:
+        """Validate a promising token with minimal Moralis calls"""
+        mint = token_data['mint']
+        
+        try:
+            # Only 1 Moralis call - get current price to confirm token is still active
+            current_price = await self.moralis.get_current_price(mint)
+            if current_price <= 0:
+                return False
+                
+            # Use Bitquery metrics we already calculated
+            performance_multiplier = token_data.get('performance_multiplier', 1.0)
+            bitquery_score = token_data.get('bitquery_success_score', 0)
+            
+            # Simple validation - if Bitquery analysis was positive and price exists, accept it
+            # This replaces the expensive _was_token_successful function
+            token_data['current_price'] = current_price
+            
+            is_successful = performance_multiplier >= 1.5 and bitquery_score >= 40
+            
+            if is_successful:
+                self.logger.debug(f"Token {mint[:8]}... validated: perf={performance_multiplier:.2f}x, score={bitquery_score}")
+            
+            return is_successful
+            
+        except Exception as e:
+            self.logger.debug(f"Error validating token {mint[:8]}...: {e}")
+            return False
+
     async def _was_token_successful(self, token_data: Dict) -> bool:
         """Determine if a token was successful using comprehensive criteria with performance multiplier"""
         mint = token_data['mint']
