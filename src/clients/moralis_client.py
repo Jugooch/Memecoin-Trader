@@ -40,11 +40,11 @@ class MoralisClient:
         # Smart caching to reduce API calls
         self.cache = {}
         self.cache_ttl = {
-            'metadata': 1800,     # Cache metadata for 30 minutes (longer for stable data)
-            'liquidity': 180,     # Cache liquidity for 3 minutes (changes frequently)  
+            'metadata': 7200,     # Cache metadata for 2 hours (very stable data)
+            'liquidity': 900,     # Cache liquidity for 15 minutes (changes less frequently)  
             'price': 30,          # Cache price for 30 seconds (very volatile)
-            'swaps': 15,          # Cache swaps for 15 seconds (real-time needed)
-            'holders': 300        # Cache holders for 5 minutes (changes moderately)
+            'swaps': 60,          # Cache swaps for 1 minute (optimized polling reduces need)
+            'holders': 1800       # Cache holders for 30 minutes (changes slowly)
         }
         
         # Cache cleanup tracking

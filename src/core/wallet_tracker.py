@@ -130,9 +130,20 @@ class WalletTracker:
             
         moralis = moralis_client
         
-        while time.time() - start_time < time_window_sec:
+        # Smart polling intervals: front-loaded with diminishing returns
+        # Total: 5 + 15 + 30 + 30 + 20 + 20 = 120 seconds, only 6 API calls (vs 24)
+        poll_intervals = [5, 15, 30, 30, 20, 20]  
+        poll_count = 0
+        last_alpha_count = 0
+        
+        for interval in poll_intervals:
+            # Check if we've exceeded our time window
+            if time.time() - start_time >= time_window_sec:
+                break
+                
             try:
                 swaps = await moralis.get_token_swaps(mint_address, limit=100)
+                poll_count += 1
                 
                 for swap in swaps:
                     swap_time = self._parse_timestamp(swap.get('timestamp'))
@@ -164,13 +175,24 @@ class WalletTracker:
                         self.update_wallet_activity(wallet)
                         self.logger.info(f"ALPHA WALLET DETECTED: {wallet[:8]}... bought {mint_address[:8]}...")
                 
-                # Only break when we reach the required threshold
+                # Early exit if we reach threshold
                 if len(alpha_buyers) >= threshold_alpha_buys:
                     dedup_saved = self.dedupe_stats['deduped_checks']
-                    self.logger.info(f"Threshold reached: {len(alpha_buyers)}/{threshold_alpha_buys} alpha wallets (saved {dedup_saved} API calls)")
+                    self.logger.info(f"Threshold reached: {len(alpha_buyers)}/{threshold_alpha_buys} alpha wallets after {poll_count} polls (saved {dedup_saved} API calls)")
                     break
                 
-                await asyncio.sleep(5)
+                # Early exit optimization: if no progress after 2 polls, reduce frequency  
+                if poll_count >= 2 and len(alpha_buyers) == last_alpha_count == 0:
+                    # Skip the next interval to save API calls if no alpha activity detected
+                    self.logger.debug(f"No alpha activity detected in {poll_count} polls for {mint_address[:8]}... - optimizing polling")
+                    if len(poll_intervals) > poll_count + 1:
+                        poll_intervals = poll_intervals[:poll_count] + poll_intervals[poll_count + 2:]  # Skip next interval
+                
+                last_alpha_count = len(alpha_buyers)
+                
+                # Wait for next interval (unless this was the last one)
+                if poll_count < len(poll_intervals):
+                    await asyncio.sleep(interval)
                 
             except Exception as e:
                 self.logger.error(f"Error checking alpha activity: {e}")
@@ -215,7 +237,8 @@ class WalletTracker:
             'alpha_wallets': alpha_buyers,
             'wallet_tiers': wallet_tiers,
             'confidence_score': confidence_score,
-            'investment_multiplier': best_tier_multiplier
+            'investment_multiplier': best_tier_multiplier,
+            'last_swaps_data': swaps if 'swaps' in locals() else []  # Include swap data for reuse
         }
 
     def _parse_timestamp(self, timestamp) -> float:

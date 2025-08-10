@@ -278,8 +278,9 @@ class MemecoinTradingBot:
         min_confidence = 50
         
         if confidence_score >= min_confidence and len(alpha_wallets) >= self.config.threshold_alpha_buys:
-            # Check token safety before trading
-            safety_check = await self.check_token_safety(mint_address, metadata, liquidity)
+            # Check token safety before trading (reuse swap data from alpha check)
+            alpha_swaps_data = alpha_analysis.get('last_swaps_data', [])
+            safety_check = await self.check_token_safety(mint_address, metadata, liquidity, alpha_swaps_data)
             
             if not safety_check['safe']:
                 rug_score = safety_check['rug_score']
@@ -397,7 +398,7 @@ class MemecoinTradingBot:
             if latency.get('timestamp', 0) > cutoff_time
         ]
     
-    async def check_token_safety(self, mint_address: str, metadata: Dict, liquidity: Dict) -> Dict:
+    async def check_token_safety(self, mint_address: str, metadata: Dict, liquidity: Dict, cached_swaps: List = None) -> Dict:
         """
         Check token safety and calculate rug risk score
         Returns: {'safe': bool, 'rug_score': 0-100, 'warnings': []}
@@ -448,7 +449,13 @@ class MemecoinTradingBot:
             
             # Check recent transaction patterns for honeypot behavior
             try:
-                swaps = await self.moralis.get_token_swaps(mint_address, limit=50)
+                # Use cached swaps from alpha check if available, otherwise fetch new data
+                if cached_swaps:
+                    swaps = cached_swaps
+                    self.logger.debug(f"Using cached swap data for safety check on {mint_address[:8]}... (API call saved)")
+                else:
+                    swaps = await self.moralis.get_token_swaps(mint_address, limit=50)
+                
                 buy_count = sum(1 for s in swaps if s.get('to_token') == mint_address)
                 sell_count = sum(1 for s in swaps if s.get('from_token') == mint_address)
                 
