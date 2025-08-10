@@ -10,7 +10,7 @@ from typing import Dict, Any
 
 def load_config(config_filename: str = "config.yml") -> Dict[str, Any]:
     """
-    Load configuration from YAML file with consistent path resolution
+    Load configuration from YAML file in config directory
     
     Args:
         config_filename: Name of config file (defaults to config.yml)
@@ -19,27 +19,16 @@ def load_config(config_filename: str = "config.yml") -> Dict[str, Any]:
         Dictionary containing configuration data
         
     Raises:
-        FileNotFoundError: If config file doesn't exist in any expected location
+        FileNotFoundError: If config file doesn't exist in config directory
         yaml.YAMLError: If config file has invalid YAML syntax
     """
-    # Try multiple possible locations for config file
-    possible_paths = [
-        config_filename,  # Current directory
-        f"config/{config_filename}",  # config subdirectory
-        Path(__file__).parent.parent.parent / config_filename,  # Project root
-        Path(__file__).parent.parent.parent / "config" / config_filename  # Project root/config
-    ]
+    # Always use config directory from project root
+    project_root = Path(__file__).parent.parent.parent
+    config_path = project_root / "config" / config_filename
     
-    config_path = None
-    for path in possible_paths:
-        if os.path.exists(path):
-            config_path = path
-            break
-    
-    if not config_path:
+    if not config_path.exists():
         raise FileNotFoundError(
-            f"Config file '{config_filename}' not found in any of these locations: "
-            f"{[str(p) for p in possible_paths]}"
+            f"Config file '{config_filename}' not found at {config_path}"
         )
     
     try:
