@@ -238,7 +238,7 @@ class ProvenAlphaFinder:
                 self.logger.info(f"Actual coverage: {coverage_minutes:.1f} minutes from {min_time}Z to {max_time}Z")
                 
                 # Bail if coverage is too small (prevents false negatives)
-                if coverage_minutes < 15:  # Less than 15 minutes of coverage
+                if coverage_minutes < 12:  # Less than 12 minutes of coverage
                     self.logger.warning(f"Coverage too small ({coverage_minutes:.1f} min), skipping discovery")
                     return []
             else:
