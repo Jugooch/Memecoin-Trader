@@ -917,7 +917,7 @@ class ProvenAlphaFinder:
                            f"Success: {w['success_rate']:.1%}")
         
         # Return more wallets but with tier diversity (up to 50 total)
-        max_wallets = min(50, len(scored_wallets))
+        max_wallets = min(100, len(scored_wallets))
         selected_wallets = []
         
         # Prioritize higher tiers but include diversity
