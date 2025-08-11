@@ -145,7 +145,7 @@ class WalletTracker:
                 
             try:
                 # Use smaller limit (50 vs 100) and alpha-optimized TTL
-                swaps = await moralis.get_token_swaps(mint_address, limit=50, ttl_override='swaps_alpha')
+                swaps = await moralis.get_token_swaps(mint_address, limit=100, ttl_override='swaps_alpha')
                 poll_count += 1
                 
                 # Track market activity for early abort decisions

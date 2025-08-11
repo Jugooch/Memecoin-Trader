@@ -1001,8 +1001,8 @@ class ProvenAlphaFinder:
             # Add new wallets (keep existing + add new)
             updated_wallets = list(current_wallets.union(set(new_wallets)))
             
-            # Limit to top 50 wallets (manageable size)
-            config['watched_wallets'] = updated_wallets[:50]
+            # Limit to top 100 wallets (manageable size)
+            config['watched_wallets'] = updated_wallets[:100]
             
             # Find the actual config file path to write to
             import os

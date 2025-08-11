@@ -254,7 +254,7 @@ class AlphaAccumulator:
             GROUP BY wallet
             HAVING token_count >= 2
             ORDER BY token_count DESC
-            LIMIT 50
+            LIMIT 100
         ''')
         
         results = c.fetchall()
@@ -287,7 +287,7 @@ async def main():
             wallet_addresses = [w[0] for w in alpha_wallets]
             
             current_wallets = set(config.get('watched_wallets', []))
-            updated_wallets = list(current_wallets.union(set(wallet_addresses)))[:50]
+            updated_wallets = list(current_wallets.union(set(wallet_addresses)))[:100]
             config['watched_wallets'] = updated_wallets
             
             with open('config.yml', 'w') as f:

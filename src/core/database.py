@@ -340,7 +340,7 @@ class Database:
             ))
             await db.commit()
 
-    async def get_top_alpha_wallets(self, limit: int = 50) -> List[Dict]:
+    async def get_top_alpha_wallets(self, limit: int = 100) -> List[Dict]:
         """Get top performing alpha wallets"""
         async with aiosqlite.connect(self.db_file) as db:
             async with db.execute("""
