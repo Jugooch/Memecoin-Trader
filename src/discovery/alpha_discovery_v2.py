@@ -108,11 +108,6 @@ class ProvenAlphaFinder:
         
         if top_k > 0:
             validation_start = time.time()
-            # Validate that we have a good moralis key
-            ready = await self.moralis.ensure_ready()
-            if not ready:
-                self.logger.warning("❌ DISCOVERY ABORTED: Could not secure a valid Moralis key before validation")
-                return []
             self.logger.info(f"🔍 Validating top {top_k} tokens with Moralis...")
             
             for i, token_data in enumerate(promising_tokens[:top_k]):
@@ -513,15 +508,7 @@ class ProvenAlphaFinder:
         """Validate a promising token with minimal Moralis calls"""
         mint = token_data['mint']
         try:
-            try:
-                current_price = await self.moralis.get_current_price(mint)
-            except RuntimeError as e:
-                if "moralis_rate_limited" in str(e):
-                    # One quick prime+retry under a fresh key
-                    await self.moralis.ensure_ready()
-                    current_price = await self.moralis.get_current_price(mint)
-                else:
-                    raise
+            current_price = await self.moralis.get_current_price(mint)
 
             if current_price <= 0:
                 return False
