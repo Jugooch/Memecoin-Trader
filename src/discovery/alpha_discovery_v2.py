@@ -199,13 +199,13 @@ class ProvenAlphaFinder:
         return alpha_wallets
     
     async def _get_historical_tokens(self) -> List[Dict]:
-        """Get tokens launched 24-48h ago with comprehensive metrics computation"""
-        # Use 24-48h window for proven success analysis as suggested
+        """Get recent tokens with comprehensive metrics computation"""
+        # Use recent window where BitQuery has most data (2h-5min ago)
         now = datetime.utcnow()
-        start_time = now - timedelta(hours=48)     # 48 hours ago UTC (proven tokens)
-        end_time = now - timedelta(hours=24)       # 24 hours ago UTC (sufficient follow-through time)
+        start_time = now - timedelta(hours=2)      # 2 hours ago UTC
+        end_time = now - timedelta(minutes=5)      # 5 minutes ago UTC
         
-        self.logger.info(f"Analyzing proven tokens window: {start_time.isoformat()}Z -> {end_time.isoformat()}Z")
+        self.logger.info(f"Analyzing recent tokens window: {start_time.isoformat()}Z -> {end_time.isoformat()}Z")
         
         try:
             # Format timestamps for server-side filtering
@@ -238,7 +238,7 @@ class ProvenAlphaFinder:
                 self.logger.info(f"Actual coverage: {coverage_minutes:.1f} minutes from {min_time}Z to {max_time}Z")
                 
                 # Bail if coverage is too small (prevents false negatives)
-                if coverage_minutes < 60:  # Less than 1 hour of coverage
+                if coverage_minutes < 15:  # Less than 15 minutes of coverage
                     self.logger.warning(f"Coverage too small ({coverage_minutes:.1f} min), skipping discovery")
                     return []
             else:
