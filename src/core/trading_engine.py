@@ -26,6 +26,9 @@ class Position:
     sl_price: float
     peak_price: float
     paper_mode: bool
+    tokens_initial: float
+    cost_usd_remaining: float
+    avg_cost_per_token: float
 
 
 class TradingEngine:
