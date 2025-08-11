@@ -258,7 +258,9 @@ class ProvenAlphaFinder:
                 sell_currency = trade_data.get('Sell', {}).get('Currency', {})
                 buy_amount_usd = trade_data.get('Buy', {}).get('AmountInUSD', 0)
                 sell_amount_usd = trade_data.get('Sell', {}).get('AmountInUSD', 0)
-                price_usd = trade_data.get('PriceInUSD', 0)
+                # Price comes from Buy or Sell object depending on which side is the token
+                buy_price_usd = trade_data.get('Buy', {}).get('PriceInUSD', 0)
+                sell_price_usd = trade_data.get('Sell', {}).get('PriceInUSD', 0)
                 signer = trade.get('Transaction', {}).get('Signer', '')
                 
                 # Determine which side has the new token (non-SOL)
@@ -269,6 +271,7 @@ class ProvenAlphaFinder:
                 token_currency = None
                 side = None  # 'buy' or 'sell'
                 amount_usd = 0
+                price_usd = 0
                 
                 # Choose the non-SOL side as the new token
                 if buy_mint and buy_mint not in [SOL_ADDRESS, SOL_WRAPPED]:
@@ -276,11 +279,13 @@ class ProvenAlphaFinder:
                     token_currency = buy_currency
                     side = 'buy'
                     amount_usd = buy_amount_usd or 0
+                    price_usd = buy_price_usd or 0
                 elif sell_mint and sell_mint not in [SOL_ADDRESS, SOL_WRAPPED]:
                     mint = sell_mint  
                     token_currency = sell_currency
                     side = 'sell'
                     amount_usd = sell_amount_usd or 0
+                    price_usd = sell_price_usd or 0
                 else:
                     continue  # Skip if no valid token found
                 
@@ -643,7 +648,6 @@ class ProvenAlphaFinder:
             
         except Exception as e:
             self.logger.error(f"Error analyzing token success {mint}: {e}")
-            return False
             return False
     
     async def _find_early_buyers(self, token_data: Dict) -> List[str]:
