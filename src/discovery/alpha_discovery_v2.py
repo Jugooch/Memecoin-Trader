@@ -1003,17 +1003,8 @@ class ProvenAlphaFinder:
             self.logger.info(f"Config update: {len(current_wallets)} existing + {len(new_wallets)} new = {len(updated_wallets)} total -> saving {len(final_wallets)} wallets")
             config['watched_wallets'] = final_wallets
             
-            # Find the actual config file path to write to
-            import os
-            possible_paths = ['config.yml', 'config/config.yml']
-            config_path = None
-            for path in possible_paths:
-                if os.path.exists(path):
-                    config_path = path
-                    break
-            
-            if not config_path:
-                config_path = 'config.yml'  # Default if none exist
+            # Always use the same path as the config loader
+            config_path = 'config/config.yml'
             
             # Save updated config
             with open(config_path, 'w') as f:

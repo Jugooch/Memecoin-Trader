@@ -290,7 +290,7 @@ async def main():
             updated_wallets = list(current_wallets.union(set(wallet_addresses)))[:100]
             config['watched_wallets'] = updated_wallets
             
-            with open('config.yml', 'w') as f:
+            with open('config/config.yml', 'w') as f:
                 yaml.safe_dump(config, f, default_flow_style=False)
             
             print(f"Config updated with {len(updated_wallets)} wallets")

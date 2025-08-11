@@ -1064,16 +1064,11 @@ class MemecoinTradingBot:
                 else:
                     config['watched_wallets'] = list(all_wallets)
                 
-                # Backup the old config
-                backup_path = f"{config_path}.backup.{int(time.time())}"
-                import shutil
-                shutil.copy2(config_path, backup_path)
-                
                 # Write new config
                 with open(config_path, 'w') as f:
                     yaml.dump(config, f, default_flow_style=False)
                 
-                self.logger.info(f"Updated config with {len(config['watched_wallets'])} wallets (backed up to {backup_path})")
+                self.logger.info(f"Updated config with {len(config['watched_wallets'])} wallets")
             
         except Exception as e:
             self.logger.warning(f"Could not update config file: {e}")
