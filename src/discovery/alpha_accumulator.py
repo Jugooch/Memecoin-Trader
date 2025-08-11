@@ -270,7 +270,7 @@ async def main():
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     
-    config = load_config('config.yml')
+    config = load_config('config/config.yml')
     
     bitquery = BitqueryClient(config.get('bitquery_tokens', config.get('bitquery_token')))
     moralis = MoralisClient(config.get('moralis_keys', config.get('moralis_key')))

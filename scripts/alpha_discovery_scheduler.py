@@ -30,7 +30,7 @@ async def run_discovery():
     
     try:
         # Load config using shared loader
-        config = load_config('config.yml')
+        config = load_config('config/config.yml')
         
         # Initialize clients
         bitquery = BitqueryClient(config.get('bitquery_tokens', config.get('bitquery_token')))

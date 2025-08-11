@@ -15,7 +15,7 @@ from src.utils.config_loader import load_config, get_database_path
 
 
 class Dashboard:
-    def __init__(self, config_path: str = "config.yml"):
+    def __init__(self, config_path: str = "config/config.yml"):
         # Load config to get proper database path
         config = load_config(config_path)
         self.db = Database(get_database_path(config))

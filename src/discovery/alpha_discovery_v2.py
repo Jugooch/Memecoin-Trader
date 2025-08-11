@@ -990,7 +990,7 @@ class ProvenAlphaFinder:
         try:
             # Read current config using shared loader
             import yaml
-            config = load_config('config.yml')
+            config = load_config('config/config.yml')
             
             # Get current wallets
             current_wallets = set(config.get('watched_wallets', []))
@@ -1037,7 +1037,7 @@ async def main():
     logger.info("Starting Alpha Discovery V2...")
     
     # Load config using shared loader
-    config = load_config('config.yml')
+    config = load_config('config/config.yml')
     
     # Initialize clients
     bitquery = BitqueryClient(config.get('bitquery_tokens', config.get('bitquery_token')))

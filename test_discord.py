@@ -24,8 +24,8 @@ async def test_discord_notifications():
             webhook_url = config["notifications"].get("discord_webhook_url", "")
         
         if not webhook_url:
-            print("❌ No Discord webhook URL found in config.yml")
-            print("Please add your webhook URL to config.yml under:")
+            print("❌ No Discord webhook URL found in config/config.yml")
+            print("Please add your webhook URL to config/config.yml under:")
             print("notifications:")
             print("  discord_webhook_url: \"https://discord.com/api/webhooks/...\"")
             return False

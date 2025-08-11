@@ -58,7 +58,7 @@ class TradingConfig:
 
 
 class MemecoinTradingBot:
-    def __init__(self, config_path: str = "config.yml"):
+    def __init__(self, config_path: str = "config/config.yml"):
         self.config = self._load_config(config_path)
         self.logger = setup_logging(self.config.logging_level, self.config.logging_file)
         
@@ -1025,7 +1025,7 @@ class MemecoinTradingBot:
     
     async def _update_config_with_new_wallets(self, finder, new_wallets: List[str]):
         """Update config file with score-aware wallet selection"""
-        config_path = "config.yml"
+        config_path = "config/config.yml"
         
         try:
             import os

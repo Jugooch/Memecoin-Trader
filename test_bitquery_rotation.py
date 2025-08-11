@@ -17,7 +17,7 @@ from src.utils.config_loader import load_config
 async def test_rotation():
     """Test Bitquery token rotation"""
     print("Loading configuration...")
-    config = load_config('config.yml')
+    config = load_config('config/config.yml')
     
     # Get bitquery tokens
     bitquery_tokens = config.get('bitquery_tokens', config.get('bitquery_token'))
