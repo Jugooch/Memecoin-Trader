@@ -425,7 +425,11 @@ class WalletTracker:
     def add_watched_wallet(self, wallet_address: str):
         """Add a wallet to the watch list"""
         self.watched_wallets.add(wallet_address)
-        self.logger.info(f"Added wallet {wallet_address} to watch list")
+        # CRITICAL FIX: Initialize activity timestamp to prevent immediate inactive marking
+        self.wallet_last_activity[wallet_address] = time.time()
+        # Remove from inactive set if it was previously inactive
+        self.inactive_wallets.discard(wallet_address)
+        self.logger.info(f"Added wallet {wallet_address[:8]}... to watch list (marked as active)")
 
     def remove_watched_wallet(self, wallet_address: str):
         """Remove a wallet from the watch list"""
@@ -475,7 +479,13 @@ class WalletTracker:
         for wallet in self.watched_wallets:
             last_activity = self.wallet_last_activity.get(wallet, 0)
             
-            # If no activity recorded or activity too old
+            # SAFETY: If wallet has no activity record, initialize it as active (prevents immediate inactive marking)
+            if last_activity == 0:
+                self.wallet_last_activity[wallet] = current_time
+                self.logger.debug(f"Initialized activity timestamp for wallet {wallet[:8]}... (newly discovered)")
+                continue
+            
+            # If activity too old, mark as inactive
             if current_time - last_activity > inactive_threshold_seconds:
                 if wallet not in self.inactive_wallets:
                     self.inactive_wallets.add(wallet)

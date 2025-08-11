@@ -980,11 +980,18 @@ class MemecoinTradingBot:
             if new_wallets:
                 # Add new wallets to the tracker
                 old_count = len(self.wallet_tracker.watched_wallets)
+                
+                # Bulk add wallets with proper activity initialization
                 for wallet in new_wallets:
-                    self.wallet_tracker.add_watched_wallet(wallet)
+                    if wallet not in self.wallet_tracker.watched_wallets:
+                        self.wallet_tracker.add_watched_wallet(wallet)
                 
                 new_count = len(self.wallet_tracker.watched_wallets)
                 added_count = new_count - old_count
+                
+                # Verify wallets are active after adding
+                active_wallets = self.wallet_tracker.get_active_wallets()
+                self.logger.info(f"Post-discovery wallet status: {len(active_wallets)}/{new_count} active")
                 
                 self.logger.info(f"Alpha discovery complete: added {added_count} new wallets (total: {new_count})")
                 
