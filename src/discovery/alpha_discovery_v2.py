@@ -243,7 +243,7 @@ class ProvenAlphaFinder:
                 self.logger.info(f"Actual coverage: {coverage_minutes:.1f} minutes from {min_time}Z to {max_time}Z")
                 
                 # Bail if coverage is too small (prevents false negatives)
-                if coverage_minutes < 12:  # Less than 12 minutes of coverage
+                if coverage_minutes < 10:  # Less than 10 minutes of coverage
                     self.logger.warning(f"Coverage too small ({coverage_minutes:.1f} min), skipping discovery")
                     return []
             else:
@@ -522,14 +522,14 @@ class ProvenAlphaFinder:
                     current_price = await self.moralis.get_current_price(mint)
                 else:
                     raise
-                
+
             if current_price <= 0:
                 return False
-    
+
             performance_multiplier = token_data.get('performance_multiplier', 1.0)
             bitquery_score = token_data.get('bitquery_success_score', 0)
             success_tier = token_data.get('success_tier', None)
-    
+
             token_data['current_price'] = current_price
             is_successful = (
                 success_tier is not None and 
@@ -541,7 +541,7 @@ class ProvenAlphaFinder:
                     f"Token {mint[:8]}... validated: perf={performance_multiplier:.2f}x, score={bitquery_score}"
                 )
             return is_successful
-    
+
         except Exception as e:
             self.logger.debug(f"Error validating token {mint[:8]}...: {e}")
             return False
