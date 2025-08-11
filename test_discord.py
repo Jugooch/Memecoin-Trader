@@ -16,7 +16,7 @@ async def test_discord_notifications():
     
     try:
         # Load config
-        config = load_config("config/config.yml")
+        config = load_config("config.yml")
         
         # Get webhook URL from config
         webhook_url = ""

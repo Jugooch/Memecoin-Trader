@@ -168,7 +168,7 @@ def main():
     
     # Check config file exists using shared loader
     try:
-        config = load_config("config/config.yml")
+        config = load_config("config.yml")
         config_file = "config/config.yml"  # Will be found by shared loader
     except FileNotFoundError:
         print(f"Config file not found")
