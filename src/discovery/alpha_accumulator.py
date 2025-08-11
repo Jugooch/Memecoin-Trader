@@ -97,7 +97,7 @@ class AlphaAccumulator:
         self.logger.info(f"Found {len(tokens)} tokens in latest window")
         
         # Step 3: Rank by activity (just use trade count as proxy)
-        ranked = sorted(tokens.items(), key=lambda x: len(x[1]['trades']), reverse=True)[:50]
+        ranked = sorted(tokens.items(), key=lambda x: len(x[1]['trades']), reverse=True)[:100]
         
         # Step 4: Get early buyers for top tokens
         early_buyer_count = 0

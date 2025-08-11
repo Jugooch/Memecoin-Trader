@@ -913,12 +913,12 @@ class ProvenAlphaFinder:
                            f"Perf: {w['avg_performance']:.1f}x | "
                            f"Success: {w['success_rate']:.1%}")
         
-        # Return more wallets but with tier diversity (up to 50 total)
+        # Return more wallets but with tier diversity (up to 100 total)
         max_wallets = min(100, len(scored_wallets))
         selected_wallets = []
         
         # Prioritize higher tiers but include diversity
-        tier_limits = {'tier_1': 20, 'tier_2': 20, 'tier_3': 15}  # Max per tier
+        tier_limits = {'tier_1': 35, 'tier_2': 35, 'tier_3': 30}  # Max per tier (totals 100)
         tier_selected = {'tier_1': 0, 'tier_2': 0, 'tier_3': 0}
         
         for wallet_data in scored_wallets:
@@ -998,8 +998,10 @@ class ProvenAlphaFinder:
             # Add new wallets (keep existing + add new)
             updated_wallets = list(current_wallets.union(set(new_wallets)))
             
-            # Limit to top 100 wallets (manageable size)
-            config['watched_wallets'] = updated_wallets[:100]
+            # Limit to top 100 wallets (manageable size)  
+            final_wallets = updated_wallets[:100]
+            self.logger.info(f"Config update: {len(current_wallets)} existing + {len(new_wallets)} new = {len(updated_wallets)} total -> saving {len(final_wallets)} wallets")
+            config['watched_wallets'] = final_wallets
             
             # Find the actual config file path to write to
             import os
