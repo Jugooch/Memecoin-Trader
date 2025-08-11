@@ -108,6 +108,11 @@ class ProvenAlphaFinder:
         
         if top_k > 0:
             validation_start = time.time()
+            # Validate that we have a good moralis key
+            ready = await self.moralis.ensure_ready()
+            if not ready:
+                self.logger.warning("❌ DISCOVERY ABORTED: Could not secure a valid Moralis key before validation")
+                return []
             self.logger.info(f"🔍 Validating top {top_k} tokens with Moralis...")
             
             for i, token_data in enumerate(promising_tokens[:top_k]):
@@ -503,39 +508,44 @@ class ProvenAlphaFinder:
                            f"Traders: {token['unique_traders']}")
         
         return promising_tokens
-
+    
     async def _validate_token_with_moralis(self, token_data: Dict) -> bool:
         """Validate a promising token with minimal Moralis calls"""
         mint = token_data['mint']
-        
         try:
-            # Only 1 Moralis call - get current price to confirm token is still active
-            current_price = await self.moralis.get_current_price(mint)
+            try:
+                current_price = await self.moralis.get_current_price(mint)
+            except RuntimeError as e:
+                if "moralis_rate_limited" in str(e):
+                    # One quick prime+retry under a fresh key
+                    await self.moralis.ensure_ready()
+                    current_price = await self.moralis.get_current_price(mint)
+                else:
+                    raise
+                
             if current_price <= 0:
                 return False
-                
-            # Use Bitquery metrics we already calculated
+    
             performance_multiplier = token_data.get('performance_multiplier', 1.0)
             bitquery_score = token_data.get('bitquery_success_score', 0)
             success_tier = token_data.get('success_tier', None)
-            
-            # More inclusive validation - accept any tiered token with decent score
+    
             token_data['current_price'] = current_price
-            
             is_successful = (
                 success_tier is not None and 
                 bitquery_score >= 25 and
                 performance_multiplier >= self.success_thresholds['low']  # At least 1.2x
             )
-            
             if is_successful:
-                self.logger.debug(f"Token {mint[:8]}... validated: perf={performance_multiplier:.2f}x, score={bitquery_score}")
-            
+                self.logger.debug(
+                    f"Token {mint[:8]}... validated: perf={performance_multiplier:.2f}x, score={bitquery_score}"
+                )
             return is_successful
-            
+    
         except Exception as e:
             self.logger.debug(f"Error validating token {mint[:8]}...: {e}")
             return False
+
 
     async def _was_token_successful(self, token_data: Dict) -> bool:
         """Determine if a token was successful using comprehensive criteria with performance multiplier"""

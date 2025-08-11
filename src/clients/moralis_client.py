@@ -21,6 +21,9 @@ class MoralisClient:
             
         self.base_url = "https://solana-gateway.moralis.io"
         self.logger = logging.getLogger(__name__)
+
+        #  A lock so only one coroutine switches keys / sessions at a time.
+        self._key_lock = asyncio.Lock()
         
         # Key rotation management
         self.current_key_index = 0
@@ -35,8 +38,9 @@ class MoralisClient:
         
         # Rate limiting
         self.last_request_time = 0
-        self.min_request_interval = 0.2  # 5 requests per second (more conservative)
-        
+        self.base_rps_per_key = 4  # conservative per-key budget
+        self.min_request_interval = 1.0 / max(1, self.base_rps_per_key * len(self.api_keys))     
+
         # In-flight request coalescing and concurrency control
         self._inflight = {}  # key -> asyncio.Task
         self._sem = asyncio.Semaphore(3)  # cap concurrent requests
@@ -62,6 +66,64 @@ class MoralisClient:
         
         self.session = None
 
+    async def ensure_ready(self, timeout: float = 5.0) -> bool:
+        """
+        Pre-select a working key by probing a lightweight endpoint.
+        Returns True if a usable key/session is ready.
+        """
+        probe_urls = [
+        f"{self.base_url}/token/mainnet/So11111111111111111111111111111111111111112/price",
+        ]
+
+        # Try at most len(keys) rotations to find a working one
+        for _ in range(len(self.api_keys)):
+            # Acquire/prepare session atomically
+            session = await self._get_session()  # _get_session holds the lock internally
+
+            if not session:
+                return False
+
+            ok = False
+            for url in probe_urls:
+                try:
+                    async with asyncio.timeout(timeout):
+                        async with session.get(url) as r:
+                            if r.status == 200:
+                                ok = True
+                                break
+                            elif r.status in (401, 429):
+                                # mark key bad and rotate (under lock)
+                                async with self._key_lock:
+                                    self.logger.warning(f"Probe got {r.status}; rotating key...")
+                                    idx = getattr(session, "_current_key_index", 0)
+                                    self.key_stats[idx]['rate_limited'] = True
+                                    self.key_stats[idx]['reset_time'] = time.time() + (60 if r.status == 429 else 86400)
+                                    self.current_key_index = (idx + 1) % len(self.api_keys)
+                                break
+                            else:
+                                async with self._key_lock:
+                                    self.logger.debug(f"Probe status {r.status}; rotating key...")
+                                    idx = getattr(session, "_current_key_index", 0)
+                                    self.key_stats[idx]['rate_limited'] = True
+                                    self.key_stats[idx]['reset_time'] = time.time() + 60
+                                    self.current_key_index = (idx + 1) % len(self.api_keys)
+                                break
+                except Exception as e:
+                    async with self._key_lock:
+                        self.logger.debug(f"Probe error: {e}; rotating key...")
+                        idx = getattr(session, "_current_key_index", 0)
+                        self.key_stats[idx]['rate_limited'] = True
+                        self.key_stats[idx]['reset_time'] = time.time() + 60
+                        self.current_key_index = (idx + 1) % len(self.api_keys)
+
+            if ok:
+                self.logger.info(f"Moralis ready with key #{getattr(session, '_current_key_index', 'unknown')}")
+                return True
+
+        self.logger.error("Failed to prime a valid Moralis key.")
+        return False
+
+
     def _get_next_available_key(self) -> tuple:
         """Get the next available API key that's not rate limited"""
         for _ in range(len(self.api_keys)):
@@ -82,28 +144,26 @@ class MoralisClient:
         return None, None
 
     async def _get_session(self):
-        """Get or create aiohttp session with current API key"""
-        key_index, api_key = self._get_next_available_key()
-        
-        if not api_key:
-            self.logger.warning("All API keys rate limited!")
-            return None
-            
-        # Create new session if key changed or session doesn't exist
-        if not self.session or getattr(self.session, '_current_key_index', None) != key_index:
-            if self.session:
-                await self.session.close()
-                
-            self.session = aiohttp.ClientSession(
-                headers={
+        async with self._key_lock:
+            key_index, api_key = self._get_next_available_key()
+            if not api_key:
+                self.logger.warning("All API keys rate limited!")
+                return None
+
+            # session swap should also be under the lock
+            if not self.session or getattr(self.session, '_current_key_index', None) != key_index:
+                if self.session:
+                    await self.session.close()
+                self.session = aiohttp.ClientSession(headers={
                     "Accept": "application/json",
                     "X-API-Key": api_key
-                }
-            )
-            self.session._current_key_index = key_index
-            self.logger.debug(f"Switched to API key #{key_index}")
-        
-        return self.session
+                })
+                self.session._current_key_index = key_index
+                self.logger.debug(f"Switched to API key #{key_index}")
+
+            return self.session
+
+
 
     async def _rate_limit(self):
         """Apply rate limiting"""
@@ -193,70 +253,64 @@ class MoralisClient:
     async def _execute_request(self, session, url, params, cache_type, cache_key):
         """Execute the actual HTTP request with retry logic"""
         current_key_index = getattr(session, '_current_key_index', 0)
-        
-        max_retries = 2  # Reduced retries to save API calls
+        max_retries = 2
         for attempt in range(max_retries):
             try:
+                # Refresh which key this session uses
+                current_key_index = getattr(session, '_current_key_index', 0)
+
                 async with session.get(url, params=params) as response:
-                    # Track usage for current key
+                    # Track usage for the *current* key
                     self.key_stats[current_key_index]['calls_today'] += 1
-                    
+
                     if response.status == 200:
                         data = await response.json()
-                        
-                        # Cache successful response
                         if cache_type:
-                            self.cache[cache_key] = {
-                                'data': data,
-                                'timestamp': time.time()
-                            }
-                        
+                            self.cache[cache_key] = {'data': data, 'timestamp': time.time()}
                         return data
+
+                    elif response.status == 429:
+                        backoff = 30 * (attempt + 1)
+                        self.logger.warning(f"Key #{current_key_index} rate limited; backoff {backoff}s then rotate")
+                        async with self._key_lock:
+                            self.key_stats[current_key_index]['rate_limited'] = True
+                            self.key_stats[current_key_index]['reset_time'] = time.time() + backoff
+                            self.current_key_index = (current_key_index + 1) % len(self.api_keys)
                         
-                    elif response.status == 429:  # Rate limited
-                        self.logger.warning(f"Key #{current_key_index} rate limited, rotating...")
-                        self.key_stats[current_key_index]['rate_limited'] = True
-                        self.key_stats[current_key_index]['reset_time'] = time.time() + (60 * (attempt + 1))
-                        
-                        # Try next key
-                        self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
                         session = await self._get_session()
                         if not session:
-                            return {}
+                            return {"__rate_limited__": True}
                         continue
-                        
-                    elif response.status == 401:  # API limit hit
+                    
+                    elif response.status == 401:
                         error_text = await response.text()
-                        if "consumed" in error_text or "upgrade" in error_text:
-                            self.logger.warning(f"Key #{current_key_index} daily limit reached, rotating...")
+                        cooldown = 86400 if ("consumed" in error_text or "upgrade" in error_text) else 600
+                        self.logger.warning(f"Key #{current_key_index} unauthorized/consumed; cooling {cooldown}s and rotating")
+                        async with self._key_lock:
                             self.key_stats[current_key_index]['rate_limited'] = True
-                            self.key_stats[current_key_index]['reset_time'] = time.time() + 86400  # 24 hours
-                            
-                            # Try next key
-                            self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
-                            session = await self._get_session()
-                            if not session:
-                                self.logger.error("All API keys exhausted!")
-                                return {}
-                            continue
-                        return {}
+                            self.key_stats[current_key_index]['reset_time'] = time.time() + cooldown
+                            self.current_key_index = (current_key_index + 1) % len(self.api_keys)
                         
+                        session = await self._get_session()
+                        if not session:
+                            return {"__rate_limited__": True}
+                        continue
+                    
                     else:
-                        # Log 404s at debug level since they're common for new tokens
                         if response.status == 404:
-                            self.logger.debug(f"API 404: Token metadata not found")
+                            self.logger.debug("API 404: Token metadata not found")
                         else:
                             self.logger.error(f"API error {response.status}: {await response.text()}")
                         return {}
-                        
+
             except Exception as e:
                 self.logger.error(f"Request failed (attempt {attempt + 1}): {e}")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(2 ** attempt)
                 else:
                     return {}
-        
-        return {}
+
+        return {"__rate_limited__": True}
 
     async def get_token_metadata(self, mint_address: str) -> Dict:
         """Get token metadata including name, symbol, supply"""
@@ -316,15 +370,16 @@ class MoralisClient:
             return {'total_liquidity_usd': 0, 'pools': [], 'pool_count': 0}
 
     async def get_current_price(self, mint_address: str, fresh: bool = False) -> float:
-        """Get current token price in USD"""
         url = f"{self.base_url}/token/mainnet/{mint_address}/price"
-        
         try:
-            # Skip cache if fresh=True (for position monitoring)
             cache_type = None if fresh else 'price'
             data = await self._make_request(url, cache_type=cache_type)
+
+            # ADD THIS:
+            if isinstance(data, dict) and data.get("__rate_limited__"):
+                raise RuntimeError("moralis_rate_limited")
+
             return float(data.get('usdPrice', 0))
-            
         except Exception as e:
             self.logger.error(f"Error getting price for {mint_address}: {e}")
             return 0.0
