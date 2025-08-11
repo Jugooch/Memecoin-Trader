@@ -1037,8 +1037,8 @@ class MemecoinTradingBot:
                 # Get all wallet scores from the database for intelligent selection
                 all_wallets = set(config.get('watched_wallets', [])) | set(new_wallets)
                 
-                # If we have too many wallets (>50), use score-based selection
-                if len(all_wallets) > 50:
+                # If we have too many wallets (>100), use score-based selection
+                if len(all_wallets) > 100:
                     # Get scored wallet data from database
                     try:
                         # This is a simplified approach - in a real implementation, 
@@ -1049,16 +1049,16 @@ class MemecoinTradingBot:
                             score = stats.get('avg_profit_pct', 0) * stats.get('win_rate', 0.5)
                             scored_wallets.append((wallet, score))
                         
-                        # Sort by score and take top 50
+                        # Sort by score and take top 100
                         scored_wallets.sort(key=lambda x: x[1], reverse=True)
-                        top_wallets = [w[0] for w in scored_wallets[:50]]
+                        top_wallets = [w[0] for w in scored_wallets[:100]]
                         
-                        self.logger.info(f"Selected top 50 wallets by performance score (from {len(all_wallets)} candidates)")
+                        self.logger.info(f"Selected top 100 wallets by performance score (from {len(all_wallets)} candidates)")
                         
                     except Exception as e:
                         # Fallback to simple approach if scoring fails
                         self.logger.warning(f"Score-based selection failed ({e}), using simple approach")
-                        top_wallets = list(all_wallets)[:50]
+                        top_wallets = list(all_wallets)[:100]
                         
                     config['watched_wallets'] = top_wallets
                 else:
