@@ -293,7 +293,7 @@ class BitqueryClient:
                     }}
                     Buy {{
                       Amount
-                      AmountUSD
+                      AmountInUSD
                       Account {{ Address }}
                       Currency {{
                         MintAddress
@@ -303,7 +303,7 @@ class BitqueryClient:
                     }}
                     Sell {{
                       Amount
-                      AmountUSD
+                      AmountInUSD
                       Account {{ Address }}
                       Currency {{
                         MintAddress
@@ -311,7 +311,7 @@ class BitqueryClient:
                         Name
                       }}
                     }}
-                    PriceUSD
+                    PriceInUSD
                   }}
                   Transaction {{ 
                     Signature 
@@ -408,7 +408,7 @@ class BitqueryClient:
                             }}
                             Buy {{
                               Amount
-                              AmountUSD
+                              AmountInUSD
                               Account {{ Address }}
                               Currency {{
                                 MintAddress
@@ -418,7 +418,7 @@ class BitqueryClient:
                             }}
                             Sell {{
                               Amount
-                              AmountUSD
+                              AmountInUSD
                               Account {{ Address }}
                               Currency {{
                                 MintAddress
@@ -426,7 +426,7 @@ class BitqueryClient:
                                 Name
                               }}
                             }}
-                            PriceUSD
+                            PriceInUSD
                           }}
                           Transaction {{ 
                             Signature 

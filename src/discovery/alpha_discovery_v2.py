@@ -256,9 +256,9 @@ class ProvenAlphaFinder:
                 trade_data = trade.get('Trade', {})
                 buy_currency = trade_data.get('Buy', {}).get('Currency', {})
                 sell_currency = trade_data.get('Sell', {}).get('Currency', {})
-                buy_amount_usd = trade_data.get('Buy', {}).get('AmountUSD', 0)
-                sell_amount_usd = trade_data.get('Sell', {}).get('AmountUSD', 0)
-                price_usd = trade_data.get('PriceUSD', 0)
+                buy_amount_usd = trade_data.get('Buy', {}).get('AmountInUSD', 0)
+                sell_amount_usd = trade_data.get('Sell', {}).get('AmountInUSD', 0)
+                price_usd = trade_data.get('PriceInUSD', 0)
                 signer = trade.get('Transaction', {}).get('Signer', '')
                 
                 # Determine which side has the new token (non-SOL)
