@@ -23,7 +23,7 @@ class BotManager:
         self.bot = None
         self.running = False
         
-    async def start_bot(self, config_file: str = "config/config.yml"):
+    async def start_bot(self, config_file: str = "config.yml"):
         """Start the trading bot with monitoring"""
         print("Starting Memecoin Trading Bot...")
         
@@ -169,7 +169,7 @@ def main():
     # Check config file exists using shared loader
     try:
         config = load_config("config.yml")
-        config_file = "config/config.yml"  # Will be found by shared loader
+        config_file = "config.yml"  # Will be found by shared loader
     except FileNotFoundError:
         print(f"Config file not found")
         print("Please copy config/config.yml.example to config/config.yml and configure your API keys")

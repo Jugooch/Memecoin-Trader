@@ -58,7 +58,7 @@ class TradingConfig:
 
 
 class MemecoinTradingBot:
-    def __init__(self, config_path: str = "config/config.yml"):
+    def __init__(self, config_path: str = "config.yml"):
         self.config = self._load_config(config_path)
         self.logger = setup_logging(self.config.logging_level, self.config.logging_file)
         
