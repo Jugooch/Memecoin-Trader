@@ -386,7 +386,8 @@ class BitqueryClient:
         
         self.logger.info(f"Starting paginated fetch from {start_iso} to {end_iso} (max {max_pages} pages)")
         
-        for page in range(max_pages):
+        page = 0
+        while page < max_pages:
             try:
                 # Build time filter for this page
                 time_filter = f'Block: {{ Time: {{ since: "{start_iso}", till: "{till}" }} }}'
@@ -481,6 +482,9 @@ class BitqueryClient:
                 # Update stats for successful call
                 if self.current_client_token_index is not None:
                     self.token_stats[self.current_client_token_index]['calls_today'] += 1
+                
+                # Successfully processed this page, move to next
+                page += 1
                     
             except Exception as e:
                 error_str = str(e)
@@ -496,8 +500,8 @@ class BitqueryClient:
                     
                     try:
                         await self.initialize()
-                        self.logger.info("Retrying page with new token...")
-                        continue  # Retry this page with new token
+                        self.logger.info("Retrying same page with new token...")
+                        # Don't increment page, will retry same page
                     except Exception as reinit_error:
                         self.logger.error(f"Failed to reinitialize: {reinit_error}")
                         break
