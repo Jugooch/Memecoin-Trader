@@ -67,114 +67,166 @@ class ProvenAlphaFinder:
         }
         
     async def discover_alpha_wallets(self) -> List[str]:
-        """Optimized discovery process - Bitquery-first approach"""
-        self.logger.info("Starting optimized alpha wallet discovery (Bitquery-first)...")
+        """Optimized discovery process - Bitquery-first approach with comprehensive diagnostics"""
+        self.logger.info("=" * 80)
+        self.logger.info("Starting FIXED alpha wallet discovery (Paginated + Metrics + Fallback)")
+        self.logger.info("=" * 80)
         
-        # Step 1: Get tokens from 24-48 hours ago with Bitquery analysis
+        # Step 1: Get tokens from 24-48h ago with comprehensive metrics
+        start_time = time.time()
         historical_tokens = await self._get_historical_tokens()
+        fetch_time = time.time() - start_time
         
-        # Step 2: Analyze ALL tokens using Bitquery data first (NO Moralis calls)
-        self.logger.info(f"Pre-filtering {len(historical_tokens)} tokens using Bitquery data...")
+        # Guardrail: Early bail if insufficient data  
+        if len(historical_tokens) == 0:
+            self.logger.warning("❌ DISCOVERY ABORTED: No historical tokens found")
+            return []
+            
+        if len(historical_tokens) < 20:
+            self.logger.warning(f"⚠️  Low token count ({len(historical_tokens)}), results may be limited")
+        
+        self.logger.info(f"✅ Token fetch completed in {fetch_time:.1f}s: {len(historical_tokens)} tokens")
+        
+        # Step 2: Pre-filter using Bitquery data with comprehensive diagnostics
+        prefilter_start = time.time()
         promising_tokens = await self._prefilter_tokens_bitquery_only(historical_tokens)
+        prefilter_time = time.time() - prefilter_start
         
-        self.logger.info(f"Bitquery analysis identified {len(promising_tokens)} promising tokens")
+        # Guardrail: Check prefilter effectiveness
+        if len(promising_tokens) == 0:
+            self.logger.warning("❌ DISCOVERY ABORTED: No promising tokens after prefilter")
+            self.logger.warning("   → Check if prefilter thresholds are too strict")
+            self.logger.warning("   → Check if price data is missing from all tokens")
+            return []
         
-        # Step 3: Validate more tokens but still be efficient (expanded from 20)
-        top_k = min(50, len(promising_tokens))  # Check top 50 tokens (more alpha sources)
+        prefilter_rate = len(promising_tokens) / len(historical_tokens) * 100
+        self.logger.info(f"✅ Prefilter completed in {prefilter_time:.1f}s: {len(promising_tokens)} promising ({prefilter_rate:.1f}%)")
+        
+        # Step 3: Validate with Moralis (limit to reasonable number)
+        top_k = min(30, len(promising_tokens))  # Reduced to 30 for better performance
         validated_tokens = []
         
         if top_k > 0:
-            self.logger.info(f"Validating top {top_k} tokens with Moralis...")
+            validation_start = time.time()
+            self.logger.info(f"🔍 Validating top {top_k} tokens with Moralis...")
+            
             for i, token_data in enumerate(promising_tokens[:top_k]):
-                if await self._validate_token_with_moralis(token_data):
-                    validated_tokens.append(token_data)
-                
-                self.logger.info(f"Moralis validation {i+1}/{top_k}: {token_data['mint'][:8]}... "
-                               f"-> {len(validated_tokens)} validated so far")
+                try:
+                    if await self._validate_token_with_moralis(token_data):
+                        validated_tokens.append(token_data)
+                        
+                    if (i + 1) % 10 == 0:  # Progress every 10 validations
+                        self.logger.info(f"   Progress: {i+1}/{top_k} validated, {len(validated_tokens)} successful")
+                        
+                except Exception as e:
+                    self.logger.warning(f"   Validation error for {token_data['mint'][:8]}...: {e}")
+                    
+            validation_time = time.time() - validation_start
+            validation_rate = len(validated_tokens) / top_k * 100 if top_k > 0 else 0
+            self.logger.info(f"✅ Validation completed in {validation_time:.1f}s: {len(validated_tokens)} validated ({validation_rate:.1f}%)")
         
-        self.logger.info(f"Found {len(validated_tokens)} successful tokens after validation")
+        # Guardrail: Check validation results
+        if len(validated_tokens) == 0:
+            self.logger.warning("❌ DISCOVERY ABORTED: No tokens passed Moralis validation")
+            self.logger.warning("   → Check if validation criteria are too strict")
+            self.logger.warning("   → Check if tokens are too old to have current price data")
+            return []
         
-        # Step 4: Find early buyers of successful tokens
+        # Step 4: Find early buyers using Bitquery-first approach
+        buyer_start = time.time()
         alpha_candidates = defaultdict(list)
+        total_early_buyers = 0
         
-        for token_data in validated_tokens:
+        for i, token_data in enumerate(validated_tokens):
             early_buyers = await self._find_early_buyers(token_data)
+            total_early_buyers += len(early_buyers)
             
             for wallet in early_buyers:
                 alpha_candidates[wallet].append({
                     'token': token_data,
-                    'buy_time': 'early',  # Within first 2 minutes
-                    'performance': token_data.get('performance_multiplier', 1)
+                    'buy_time': 'early',  # Within first 10 minutes
+                    'performance': token_data.get('performance_multiplier', 1.0)
                 })
+                
+            if (i + 1) % 10 == 0:  # Progress every 10 tokens
+                self.logger.info(f"   Early buyer progress: {i+1}/{len(validated_tokens)}, {len(alpha_candidates)} candidates so far")
         
-        # Debug: Show wallet overlap visibility
+        buyer_time = time.time() - buyer_start
+        avg_buyers_per_token = total_early_buyers / len(validated_tokens) if validated_tokens else 0
+        self.logger.info(f"✅ Early buyer search completed in {buyer_time:.1f}s: {total_early_buyers} total buyers ({avg_buyers_per_token:.1f} avg/token)")
+        
+        # Debug: Wallet overlap analysis
         mints_per_wallet = defaultdict(set)
-        for w, entries in alpha_candidates.items():
-            for e in entries:
-                mints_per_wallet[w].add(e["token"]["mint"])
-        repeat = [(w, len(ms)) for w, ms in mints_per_wallet.items() if len(ms) >= 2]
-        self.logger.info(f"Wallets with >=2 distinct mints: {len(repeat)}")
-        for w, k in sorted(repeat, key=lambda x: -x[1])[:10]:
-            self.logger.info(f"{w[:8]}.. on {k} mints")
+        for wallet, entries in alpha_candidates.items():
+            for entry in entries:
+                mints_per_wallet[wallet].add(entry["token"]["mint"])
         
-        # Step 4: Score and rank wallets
+        repeat_wallets = [(w, len(ms)) for w, ms in mints_per_wallet.items() if len(ms) >= 2]
+        self.logger.info(f"📊 Wallet overlap analysis: {len(repeat_wallets)} wallets appear on ≥2 tokens")
+        
+        if repeat_wallets:
+            for w, count in sorted(repeat_wallets, key=lambda x: -x[1])[:5]:
+                self.logger.info(f"   Top overlap: {w[:8]}... appears on {count} tokens")
+        else:
+            self.logger.warning("   ⚠️  No wallet overlaps found - may indicate insufficient token diversity")
+        
+        # Guardrail: Check if we have enough candidates
+        if len(alpha_candidates) == 0:
+            self.logger.warning("❌ DISCOVERY ABORTED: No alpha wallet candidates found")
+            self.logger.warning("   → Check if early buyer detection is working")
+            self.logger.warning("   → Check if early window (10 min) is appropriate")
+            return []
+        
+        # Step 5: Score and rank alpha candidates
+        scoring_start = time.time()
         alpha_wallets = await self._score_alpha_candidates(alpha_candidates)
+        scoring_time = time.time() - scoring_start
+        
+        total_time = time.time() - start_time
+        
+        # Final summary
+        self.logger.info("=" * 80)
+        self.logger.info("🎉 ALPHA DISCOVERY COMPLETED")
+        self.logger.info(f"📈 Results: {len(alpha_wallets)} alpha wallets discovered")
+        self.logger.info(f"⏱️  Total time: {total_time:.1f}s")
+        self.logger.info(f"   - Token fetch: {fetch_time:.1f}s")
+        self.logger.info(f"   - Prefilter: {prefilter_time:.1f}s") 
+        self.logger.info(f"   - Validation: {validation_time:.1f}s")
+        self.logger.info(f"   - Early buyers: {buyer_time:.1f}s")
+        self.logger.info(f"   - Scoring: {scoring_time:.1f}s")
+        self.logger.info("=" * 80)
         
         return alpha_wallets
     
     async def _get_historical_tokens(self) -> List[Dict]:
-        """Get tokens launched 24-48h ago (time-delayed analysis for proven success)"""
-        # Use very recent window where BitQuery has most data
+        """Get tokens launched 24-48h ago with comprehensive metrics computation"""
+        # Use 24-48h window for proven success analysis as suggested
         now = datetime.utcnow()
-        start_time = now - timedelta(hours=2)      # 2 hours ago UTC
-        end_time = now - timedelta(minutes=5)      # 5 minutes ago UTC
+        start_time = now - timedelta(hours=48)     # 48 hours ago UTC (proven tokens)
+        end_time = now - timedelta(hours=24)       # 24 hours ago UTC (sufficient follow-through time)
         
-        self.logger.info(f"Window UTC: {start_time.isoformat()}Z -> {end_time.isoformat()}Z")
+        self.logger.info(f"Analyzing proven tokens window: {start_time.isoformat()}Z -> {end_time.isoformat()}Z")
         
         try:
             # Format timestamps for server-side filtering
             start_iso = start_time.isoformat(timespec="seconds") + "Z"
             end_iso = end_time.isoformat(timespec="seconds") + "Z"
             
-            self.logger.info(f"Requesting trades from Bitquery with time filter: {start_iso} to {end_iso}")
-            
-            # First test: Try WITHOUT time filter to see if data is available
-            self.logger.info("DEBUGGING: Testing without time filter first...")
-            test_trades = await self.bitquery.get_recent_token_launches(limit=10)
-            self.logger.info(f"Without filter: Got {len(test_trades)} trades")
-            
-            if test_trades:
-                # Show sample timestamps to understand data availability
-                sample_times = []
-                for trade in test_trades[:5]:
-                    time_str = trade.get('Block', {}).get('Time', '')
-                    if time_str:
-                        ts = self._parse_iso_timestamp(time_str)
-                        sample_times.append({
-                            'raw': time_str,
-                            'parsed_utc': datetime.utcfromtimestamp(ts).isoformat() + 'Z'
-                        })
-                self.logger.info(f"Sample trade times without filter: {sample_times}")
-                
-                # Check if ANY of these fall in our target window
-                in_window = 0
-                for trade in test_trades:
-                    time_str = trade.get('Block', {}).get('Time', '')
-                    if time_str:
-                        ts = self._parse_iso_timestamp(time_str)
-                        if start_time.timestamp() <= ts <= end_time.timestamp():
-                            in_window += 1
-                self.logger.info(f"Trades in our window (24-48h ago): {in_window}/{len(test_trades)}")
-            
-            # Now try WITH time filter
-            self.logger.info("DEBUGGING: Now testing WITH time filter...")
-            recent_trades = await self.bitquery.get_recent_token_launches(
-                limit=3000,  # Get more trades for wider window
-                start_time=start_iso, 
-                end_time=end_iso
+            # Use new paginated method to get full window coverage
+            self.logger.info("Using paginated Bitquery to get full window coverage...")
+            recent_trades = await self.bitquery.get_trades_windowed_paginated(
+                start_iso=start_iso,
+                end_iso=end_iso,
+                page_limit=3000,
+                max_pages=20  # Up to 60k trades total
             )
             
-            self.logger.info(f"BitQuery returned {len(recent_trades)} trades with filter")
+            self.logger.info(f"Paginated BitQuery returned {len(recent_trades)} total trades")
+            
+            # Early bail if insufficient data
+            if len(recent_trades) < 100:
+                self.logger.warning(f"Insufficient trades ({len(recent_trades)}) for analysis, skipping discovery")
+                return []
             
             # Debug: Show actual trade time coverage
             times = [t.get("Block",{}).get("Time") for t in recent_trades if t.get("Block",{}).get("Time")]
@@ -182,19 +234,32 @@ class ProvenAlphaFinder:
                 tnums = [self._parse_iso_timestamp(x) for x in times]
                 min_time = datetime.utcfromtimestamp(min(tnums))
                 max_time = datetime.utcfromtimestamp(max(tnums))
-                self.logger.info(f"Trade time coverage (Bitquery payload): min={min_time}Z  max={max_time}Z")
+                coverage_minutes = (max(tnums) - min(tnums)) / 60
+                self.logger.info(f"Actual coverage: {coverage_minutes:.1f} minutes from {min_time}Z to {max_time}Z")
+                
+                # Bail if coverage is too small (prevents false negatives)
+                if coverage_minutes < 60:  # Less than 1 hour of coverage
+                    self.logger.warning(f"Coverage too small ({coverage_minutes:.1f} min), skipping discovery")
+                    return []
             else:
-                self.logger.warning("No Block.Time in Bitquery payload")
+                self.logger.warning("No valid timestamps in trades")
+                return []
             
-            # Group server-filtered trades by mint address to find true launch times
-            self.logger.info("Grouping filtered trades by token to find true launch times...")
+            # Group trades by mint and compute comprehensive metrics
+            self.logger.info("Grouping trades by token and computing metrics...")
             token_trades = {}
             SOL_ADDRESS = "11111111111111111111111111111111"
+            SOL_WRAPPED = "So11111111111111111111111111111112"
             
             for trade in recent_trades:
-                # Extract both buy and sell currency info
-                buy_currency = trade.get('Trade', {}).get('Buy', {}).get('Currency', {})
-                sell_currency = trade.get('Trade', {}).get('Sell', {}).get('Currency', {})
+                # Extract trade details
+                trade_data = trade.get('Trade', {})
+                buy_currency = trade_data.get('Buy', {}).get('Currency', {})
+                sell_currency = trade_data.get('Sell', {}).get('Currency', {})
+                buy_amount_usd = trade_data.get('Buy', {}).get('AmountUSD', 0)
+                sell_amount_usd = trade_data.get('Sell', {}).get('AmountUSD', 0)
+                price_usd = trade_data.get('PriceUSD', 0)
+                signer = trade.get('Transaction', {}).get('Signer', '')
                 
                 # Determine which side has the new token (non-SOL)
                 buy_mint = buy_currency.get('MintAddress', '')
@@ -202,14 +267,20 @@ class ProvenAlphaFinder:
                 
                 mint = None
                 token_currency = None
+                side = None  # 'buy' or 'sell'
+                amount_usd = 0
                 
                 # Choose the non-SOL side as the new token
-                if buy_mint and buy_mint != SOL_ADDRESS:
+                if buy_mint and buy_mint not in [SOL_ADDRESS, SOL_WRAPPED]:
                     mint = buy_mint
                     token_currency = buy_currency
-                elif sell_mint and sell_mint != SOL_ADDRESS:
+                    side = 'buy'
+                    amount_usd = buy_amount_usd or 0
+                elif sell_mint and sell_mint not in [SOL_ADDRESS, SOL_WRAPPED]:
                     mint = sell_mint  
                     token_currency = sell_currency
+                    side = 'sell'
+                    amount_usd = sell_amount_usd or 0
                 else:
                     continue  # Skip if no valid token found
                 
@@ -220,60 +291,103 @@ class ProvenAlphaFinder:
                     
                 trade_timestamp = self._parse_iso_timestamp(timestamp_str)
                 
-                # Group by mint - store all trades for this token
+                # Group by mint - store all trades with enhanced data for metrics
                 if mint not in token_trades:
                     token_trades[mint] = {
                         'trades': [],
                         'name': token_currency.get('Name', 'Unknown'),
                         'symbol': token_currency.get('Symbol', ''),
-                        'deployer': trade.get('Transaction', {}).get('Signer', ''),
+                        'deployer': signer,  # First seen deployer
                     }
                 
                 token_trades[mint]['trades'].append({
                     'timestamp': trade_timestamp,
+                    'signer': signer,
+                    'side': side,
+                    'amount_usd': float(amount_usd) if amount_usd else 0,
+                    'price_usd': float(price_usd) if price_usd else 0,
                     'trade_data': trade
                 })
             
-            self.logger.info(f"Found {len(token_trades)} unique tokens in recent trades")
+            self.logger.info(f"Found {len(token_trades)} unique tokens, computing metrics...")
             
-            # Find true launch time (earliest trade) for each token
-            # Since we used server-side filtering, all trades are already in the 24-48h window
+            # Compute comprehensive metrics for each token
             historical_tokens = []
+            tokens_processed = 0
+            tokens_with_metrics = 0
+            tokens_with_price = 0
             
             for mint, token_info in token_trades.items():
-                # Sort trades by timestamp to find earliest (true launch)
-                token_info['trades'].sort(key=lambda x: x['timestamp'])
-                true_launch_time = token_info['trades'][0]['timestamp']
+                # Sort trades by timestamp
+                ts_sorted = sorted(token_info['trades'], key=lambda x: x['timestamp'])
+                if not ts_sorted:
+                    continue
+                    
+                # Basic metrics
+                launch_time = ts_sorted[0]['timestamp']
+                swap_count = len(ts_sorted)
+                unique_traders = len({t['signer'] for t in ts_sorted if t.get('signer')})
+                
+                # Price progression (if available)
+                price_progression = [t['price_usd'] for t in ts_sorted if t.get('price_usd') and t['price_usd'] > 0]
                 
                 # Clean token name for logging
                 clean_name = token_info['name'].encode('ascii', 'ignore').decode('ascii')
                 
-                self.logger.debug(f"Token {mint[:8]}... ({clean_name}) launched at {datetime.utcfromtimestamp(true_launch_time)}Z")
+                self.logger.debug(f"Token {mint[:8]}... ({clean_name}): {swap_count} swaps, {unique_traders} traders, {len(price_progression)} prices")
                 
-                historical_tokens.append({
+                # Create enhanced token data with all computed metrics
+                token_data = {
                     'mint': mint,
-                    'launch_time': true_launch_time,  # TRUE launch time (earliest trade)
+                    'launch_time': launch_time,
                     'name': token_info['name'],
                     'symbol': token_info['symbol'],
                     'deployer': token_info['deployer'],
-                    'trade_count': len(token_info['trades'])  # How many trades we have for this token
-                })
+                    'trade_count': swap_count,
+                    # NEW: Add missing metrics that prefilter expects
+                    'swap_count': swap_count,
+                    'unique_traders': unique_traders,
+                    'price_progression': price_progression,
+                    # Store raw trades for early buyer detection
+                    'raw_trades': ts_sorted
+                }
                 
-                # Limit to 150 tokens for analysis (more coverage)
-                if len(historical_tokens) >= 150:
+                historical_tokens.append(token_data)
+                tokens_processed += 1
+                
+                if swap_count > 0 and unique_traders > 0:
+                    tokens_with_metrics += 1
+                if len(price_progression) > 0:
+                    tokens_with_price += 1
+                
+                # Limit to 200 tokens for analysis (reasonable processing time)
+                if len(historical_tokens) >= 200:
                     break
             
-            self.logger.info(f"Found {len(historical_tokens)} tokens with true launch times from server-filtered trades")
+            # Log diagnostic statistics
+            self.logger.info(f"Processed {tokens_processed} tokens:")
+            self.logger.info(f"  - {tokens_with_metrics} tokens with activity metrics")
+            self.logger.info(f"  - {tokens_with_price} tokens with price data ({tokens_with_price/tokens_processed*100:.1f}%)")
+            self.logger.info(f"  - Coverage quality: {len(recent_trades)} trades over {coverage_minutes:.1f} minutes")
             
             return historical_tokens
             
         except Exception as e:
             self.logger.error(f"Error getting historical tokens: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return []
     
     async def _prefilter_tokens_bitquery_only(self, tokens: List[Dict]) -> List[Dict]:
-        """Pre-filter tokens using only Bitquery data (no Moralis calls)"""
+        """Pre-filter tokens using only Bitquery data with activity-based fallback"""
         promising_tokens = []
+        
+        # Track filtering statistics for debugging
+        total_tokens = len(tokens)
+        tokens_with_price = 0
+        tokens_rejected_no_price_low_activity = 0
+        tokens_rejected_low_traders = 0
+        tokens_rejected_low_swaps = 0
         
         for token_data in tokens:
             mint = token_data['mint']
@@ -282,67 +396,106 @@ class ProvenAlphaFinder:
             if not launch_time:
                 continue
             
-            # Use Bitquery data we already have from _get_historical_tokens
-            # This includes trade count, price progression, unique traders etc.
-            
-            # Get metrics from Bitquery data
+            # Get metrics from computed Bitquery data
             swap_count = token_data.get('swap_count', 0)
             unique_traders = token_data.get('unique_traders', 0)
             price_progression = token_data.get('price_progression', [])
             
-            # Calculate performance multiplier from Bitquery price data
-            performance_multiplier = 1.0
+            # Calculate performance multiplier from price data if available
+            performance_multiplier = None
             if len(price_progression) >= 2:
-                early_price = price_progression[0] if price_progression[0] > 0 else price_progression[1]
+                # Find early non-zero prices (first 2 trades)
+                early_prices = [p for p in price_progression[:2] if p > 0]
+                # Find later prices (after first 2 trades)
                 later_prices = [p for p in price_progression[2:] if p > 0]
-                if later_prices and early_price > 0:
+                
+                if early_prices and later_prices:
+                    early_price = early_prices[0]
                     peak_price = max(later_prices)
                     performance_multiplier = peak_price / early_price
+                    tokens_with_price += 1
             
-            # Multi-tier success scoring (more inclusive)
+            # Multi-tier scoring with price-based tiers AND activity-based fallback
             success_tier = None
-            bitquery_success_score = 0
+            score = 0
             
-            # Performance-based tiers
-            if performance_multiplier >= self.success_thresholds['high']:  # 2.0x+
-                success_tier = 'high'
-                bitquery_success_score += 50
-            elif performance_multiplier >= self.success_thresholds['medium']:  # 1.5x+
-                success_tier = 'medium'  
-                bitquery_success_score += 35
-            elif performance_multiplier >= self.success_thresholds['low']:  # 1.2x+
-                success_tier = 'low'
-                bitquery_success_score += 20
+            # PRICE-BASED TIERS (if available)
+            if performance_multiplier is not None:
+                if performance_multiplier >= 2.0:
+                    success_tier = 'high'
+                    score += 50
+                elif performance_multiplier >= 1.5:
+                    success_tier = 'medium'
+                    score += 35
+                elif performance_multiplier >= 1.2:
+                    success_tier = 'low'
+                    score += 20
             
-            # Activity criteria (more generous)
-            if swap_count >= 30:  # Good activity (lowered from 50)
-                bitquery_success_score += 20
-            elif swap_count >= 15:  # Moderate activity (lowered from 20)
-                bitquery_success_score += 10
-            elif swap_count >= 8:   # Some activity
-                bitquery_success_score += 5
+            # ACTIVITY FALLBACK (no price): allow medium/low purely on traders+swaps
+            if success_tier is None:
+                if unique_traders >= 20 and swap_count >= 40:
+                    success_tier = 'medium'
+                    score += 30
+                elif unique_traders >= 10 and swap_count >= 20:
+                    success_tier = 'low'
+                    score += 20
+                else:
+                    # Track rejection reasons for debugging
+                    if unique_traders < 10:
+                        tokens_rejected_low_traders += 1
+                    if swap_count < 20:
+                        tokens_rejected_low_swaps += 1
+                    if performance_multiplier is None:
+                        tokens_rejected_no_price_low_activity += 1
+            
+            # Activity bonuses regardless of price
+            if swap_count >= 30:
+                score += 20
+            elif swap_count >= 15:
+                score += 10
+            elif swap_count >= 8:
+                score += 5
                 
-            # Trader diversity (more generous)
-            if unique_traders >= 15:  # Good diversity (lowered from 20)
-                bitquery_success_score += 15
-            elif unique_traders >= 8:   # Some diversity (lowered from 10)
-                bitquery_success_score += 8
-            elif unique_traders >= 5:   # Minimal diversity
-                bitquery_success_score += 3
-                
+            if unique_traders >= 15:
+                score += 15
+            elif unique_traders >= 8:
+                score += 8
+            elif unique_traders >= 5:
+                score += 3
+            
             # Store calculated metrics
             token_data['performance_multiplier'] = performance_multiplier
-            token_data['bitquery_success_score'] = bitquery_success_score
+            token_data['bitquery_success_score'] = score
             token_data['success_tier'] = success_tier
             
-            # More inclusive threshold (lowered from 40 to 25)
-            if bitquery_success_score >= 25 and success_tier is not None:
+            # Include tokens that have a tier (price-based or activity-based)
+            if success_tier is not None:
                 promising_tokens.append(token_data)
-                self.logger.debug(f"Token {mint[:8]}... promising: score={bitquery_success_score}, "
-                                f"tier={success_tier}, perf={performance_multiplier:.2f}x, swaps={swap_count}, traders={unique_traders}")
+                price_str = f"{performance_multiplier:.2f}x" if performance_multiplier else "no_price"
+                self.logger.debug(f"Token {mint[:8]}... promising: score={score}, "
+                                f"tier={success_tier}, perf={price_str}, swaps={swap_count}, traders={unique_traders}")
         
-        # Sort by success score (best first)
+        # Log comprehensive filtering statistics
+        self.logger.info(f"Prefilter results:")
+        self.logger.info(f"  - Total tokens analyzed: {total_tokens}")
+        self.logger.info(f"  - Tokens with price data: {tokens_with_price} ({tokens_with_price/total_tokens*100:.1f}%)")
+        self.logger.info(f"  - Promising tokens found: {len(promising_tokens)}")
+        self.logger.info(f"  - Rejected - no price + low activity: {tokens_rejected_no_price_low_activity}")
+        self.logger.info(f"  - Rejected - low traders: {tokens_rejected_low_traders}")
+        self.logger.info(f"  - Rejected - low swaps: {tokens_rejected_low_swaps}")
+        
+        # Show top 5 tokens for sanity check
         promising_tokens.sort(key=lambda x: x['bitquery_success_score'], reverse=True)
+        self.logger.info("Top 5 promising tokens:")
+        for i, token in enumerate(promising_tokens[:5]):
+            perf = token.get('performance_multiplier')
+            perf_str = f"{perf:.1f}x" if perf else "no_price"
+            self.logger.info(f"  #{i+1}: {token['mint'][:8]}... "
+                           f"Score: {token['bitquery_success_score']} | "
+                           f"Tier: {token['success_tier']} | "
+                           f"Perf: {perf_str} | "
+                           f"Swaps: {token['swap_count']} | "
+                           f"Traders: {token['unique_traders']}")
         
         return promising_tokens
 
@@ -494,7 +647,7 @@ class ProvenAlphaFinder:
             return False
     
     async def _find_early_buyers(self, token_data: Dict) -> List[str]:
-        """Find wallets that bought token in first 2 minutes after launch"""
+        """Find wallets that bought token in first 10 minutes after launch using Bitquery first"""
         mint = token_data['mint']
         launch_time = token_data.get('launch_time')
         
@@ -503,8 +656,36 @@ class ProvenAlphaFinder:
             return []
         
         try:
-            # Use actual launch time with expanded window (first 10 minutes) 
-            early_window = self.early_window_seconds  # Now 600 seconds (10 minutes)
+            early_window = self.early_window_seconds  # 600 seconds (10 minutes)
+            early_buyers = set()
+            
+            # FIRST: Try using Bitquery data we already have (cheaper and aligned)
+            raw_trades = token_data.get('raw_trades', [])
+            if raw_trades:
+                self.logger.debug(f"Using existing Bitquery data for {mint[:8]}... early buyers")
+                
+                # Filter trades within early window after launch
+                early_trades = [
+                    t for t in raw_trades
+                    if launch_time <= t['timestamp'] <= launch_time + early_window
+                    and t.get('side') == 'buy'
+                    and t.get('signer')
+                    and len(str(t.get('signer'))) >= 32
+                    and str(t.get('signer')) != mint
+                ]
+                
+                # Extract unique signers (buyers)
+                for trade in early_trades:
+                    early_buyers.add(str(trade['signer']))
+                
+                self.logger.debug(f"Found {len(early_buyers)} early buyers from Bitquery data for {mint[:8]}...")
+                
+                # If we found buyers from Bitquery, return them (more efficient)
+                if early_buyers:
+                    return list(early_buyers)
+            
+            # FALLBACK: Use Moralis only if Bitquery lacks data or coverage
+            self.logger.debug(f"Falling back to Moralis for {mint[:8]}... early buyers (insufficient Bitquery coverage)")
             
             # Get swaps and filter for launch time window (Moralis max limit is 100)
             all_swaps = await self.moralis.get_token_swaps(mint, limit=100)
@@ -515,7 +696,7 @@ class ProvenAlphaFinder:
                 if launch_time <= self._parse_iso_timestamp(swap.get('timestamp', '')) <= launch_time + early_window
             ]
             
-            self.logger.debug(f"Found {len(swaps)} early swaps for {mint[:8]}... in first {early_window}s")
+            self.logger.debug(f"Found {len(swaps)} early swaps from Moralis for {mint[:8]}... in first {early_window}s")
             
             if not swaps:
                 self.logger.debug(f"No early swaps found for {mint[:8]}...")
@@ -524,14 +705,8 @@ class ProvenAlphaFinder:
             # Sort swaps by timestamp 
             sorted_swaps = sorted(swaps, key=lambda x: self._parse_iso_timestamp(x.get('timestamp', '')))
             
-            early_buyers = set()
-            
             for swap in sorted_swaps:
                 swap_time = self._parse_iso_timestamp(swap.get('timestamp', ''))
-                
-                # Debug: Log first few swap times for troubleshooting
-                if len(early_buyers) < 3:
-                    self.logger.debug(f"Early swap: {swap_time}, Launch: {launch_time}, Window: {early_window}s")
                 
                 # All swaps in our query are within the early window by design  
                 if launch_time <= swap_time <= launch_time + early_window:
@@ -550,24 +725,15 @@ class ProvenAlphaFinder:
                     if not wallet and 'transaction' in swap:
                         wallet = swap['transaction'].get('from')
                     
-                    # Debug: Show what's actually in the wallet field and full swap data
-                    if len(early_buyers) < 2:
-                        self.logger.info(f"Raw wallet value: '{swap.get('wallet')}', type: {type(swap.get('wallet'))}")
-                        self.logger.info(f"Full swap data: {swap}")
-                        if swap.get('wallet'):
-                            self.logger.info(f"Wallet length: {len(str(swap.get('wallet')))}")
-                    
                     # Validate wallet address and ensure it's a buy (not the token mint address)
                     if wallet and len(str(wallet)) >= 32 and str(wallet) != mint:
                         early_buyers.add(str(wallet))
-                        self.logger.info(f"Found early buyer: {str(wallet)[:8]}...")
-                    elif len(early_buyers) < 3:  # Debug validation failure
-                        self.logger.info(f"Wallet validation failed - wallet: '{wallet}', len: {len(str(wallet)) if wallet else 0}, mint: {mint[:8]}...")
+                        self.logger.debug(f"Found early buyer from Moralis: {str(wallet)[:8]}...")
                 else:
                     # Once we pass the early window, we can break since swaps are sorted
                     break
             
-            self.logger.info(f"Found {len(early_buyers)} early buyers for {mint[:8]}...")
+            self.logger.info(f"Found {len(early_buyers)} early buyers total for {mint[:8]}...")
             return list(early_buyers)
             
         except Exception as e:

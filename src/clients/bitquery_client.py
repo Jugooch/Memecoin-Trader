@@ -293,6 +293,7 @@ class BitqueryClient:
                     }}
                     Buy {{
                       Amount
+                      AmountUSD
                       Account {{ Address }}
                       Currency {{
                         MintAddress
@@ -302,6 +303,7 @@ class BitqueryClient:
                     }}
                     Sell {{
                       Amount
+                      AmountUSD
                       Account {{ Address }}
                       Currency {{
                         MintAddress
@@ -309,6 +311,7 @@ class BitqueryClient:
                         Name
                       }}
                     }}
+                    PriceUSD
                   }}
                   Transaction {{ 
                     Signature 
@@ -359,6 +362,178 @@ class BitqueryClient:
                 except Exception as reinit_error:
                     self.logger.error(f"Failed to reinitialize with new token: {reinit_error}")
                     return []
+    
+    async def get_trades_windowed_paginated(self, start_iso: str, end_iso: str, page_limit: int = 3000, max_pages: int = 20) -> List[Dict]:
+        """Paginate Bitquery to actually cover the full time window
+        
+        Args:
+            start_iso: Start time in ISO format (e.g., "2024-01-01T00:00:00Z")
+            end_iso: End time in ISO format
+            page_limit: Number of trades per page
+            max_pages: Maximum number of pages to fetch
+            
+        Returns:
+            List of all trades in the window
+        """
+        if not self.client:
+            await self.initialize()
+            
+        all_trades = []
+        till = end_iso
+        
+        self.logger.info(f"Starting paginated fetch from {start_iso} to {end_iso} (max {max_pages} pages)")
+        
+        for page in range(max_pages):
+            try:
+                # Build time filter for this page
+                time_filter = f'Block: {{ Time: {{ since: "{start_iso}", till: "{till}" }} }}'
+                
+                query = gql(f"""
+                    query {{
+                      Solana {{
+                        DEXTrades(
+                          where: {{
+                            Trade: {{ Dex: {{ ProtocolName: {{ is: "pump" }} }} }}
+                            Transaction: {{ Result: {{ Success: true }} }}
+                            {time_filter}
+                          }}
+                          limit: {{ count: {page_limit} }}
+                          orderBy: {{ descending: Block_Time }}
+                        ) {{
+                          Block {{ Time }}
+                          Trade {{
+                            Dex {{
+                              ProtocolFamily
+                              ProtocolName
+                            }}
+                            Buy {{
+                              Amount
+                              AmountUSD
+                              Account {{ Address }}
+                              Currency {{
+                                MintAddress
+                                Symbol
+                                Name
+                              }}
+                            }}
+                            Sell {{
+                              Amount
+                              AmountUSD
+                              Account {{ Address }}
+                              Currency {{
+                                MintAddress
+                                Symbol
+                                Name
+                              }}
+                            }}
+                            PriceUSD
+                          }}
+                          Transaction {{ 
+                            Signature 
+                            Signer
+                          }}
+                        }}
+                      }}
+                    }}
+                """)
+                
+                self.logger.debug(f"Fetching page {page + 1}/{max_pages} with till={till}")
+                result = await self.client.execute_async(query)
+                batch = result['Solana']['DEXTrades']
+                
+                if not batch:
+                    self.logger.info(f"No more trades found at page {page + 1}, stopping pagination")
+                    break
+                    
+                all_trades.extend(batch)
+                
+                # Find minimum Block.Time in this batch to step the window back
+                min_ts = None
+                for trade in batch:
+                    time_str = trade.get('Block', {}).get('Time')
+                    if time_str:
+                        ts = self._parse_iso_timestamp(time_str)
+                        if min_ts is None or ts < min_ts:
+                            min_ts = ts
+                
+                if min_ts is None:
+                    self.logger.warning(f"No valid timestamps in batch {page + 1}, stopping pagination")
+                    break
+                
+                # Move 'till' to just before min_ts to avoid overlap
+                from datetime import datetime, timedelta
+                new_till_dt = datetime.utcfromtimestamp(min_ts) - timedelta(seconds=1)
+                till = new_till_dt.isoformat() + "Z"
+                
+                # Stop if we've gone past the start time
+                if self._parse_iso_timestamp(till) <= self._parse_iso_timestamp(start_iso):
+                    self.logger.info(f"Reached start time at page {page + 1}, stopping pagination")
+                    break
+                    
+                self.logger.info(f"Page {page + 1}: Got {len(batch)} trades, total={len(all_trades)}, next_till={till}")
+                
+                # Update stats for successful call
+                if self.current_client_token_index is not None:
+                    self.token_stats[self.current_client_token_index]['calls_today'] += 1
+                    
+            except Exception as e:
+                error_str = str(e)
+                self.logger.error(f"Error on page {page + 1}: {error_str}")
+                
+                # Handle token rotation for 402 errors
+                if '402' in error_str or 'Payment Required' in error_str:
+                    if self.current_client_token_index is not None:
+                        self.token_stats[self.current_client_token_index]['payment_required'] = True
+                        self.logger.warning(f"Token #{self.current_client_token_index} marked as payment required")
+                    
+                    self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
+                    
+                    try:
+                        await self.initialize()
+                        self.logger.info("Retrying page with new token...")
+                        continue  # Retry this page with new token
+                    except Exception as reinit_error:
+                        self.logger.error(f"Failed to reinitialize: {reinit_error}")
+                        break
+                else:
+                    # Non-recoverable error, stop pagination
+                    break
+        
+        # Calculate actual coverage
+        if all_trades:
+            times = [t.get("Block", {}).get("Time") for t in all_trades if t.get("Block", {}).get("Time")]
+            if times:
+                tnums = [self._parse_iso_timestamp(x) for x in times]
+                min_time = datetime.utcfromtimestamp(min(tnums))
+                max_time = datetime.utcfromtimestamp(max(tnums))
+                coverage_minutes = (max(tnums) - min(tnums)) / 60
+                self.logger.info(f"Paginated fetch complete: {len(all_trades)} trades covering {coverage_minutes:.1f} minutes ({min_time}Z to {max_time}Z)")
+            else:
+                self.logger.warning("No valid timestamps in paginated results")
+        else:
+            self.logger.warning("Paginated fetch returned no trades")
+        
+        return all_trades
+    
+    def _parse_iso_timestamp(self, timestamp_str) -> float:
+        """Parse ISO timestamp to unix timestamp"""
+        try:
+            from datetime import datetime
+            if isinstance(timestamp_str, (int, float)):
+                return float(timestamp_str)
+            
+            if isinstance(timestamp_str, str):
+                if 'T' in timestamp_str:
+                    # ISO format
+                    dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                    return dt.timestamp()
+                else:
+                    # Try to parse as number string
+                    return float(timestamp_str)
+        except:
+            pass
+        import time
+        return time.time()
     
     def get_token_status(self) -> Dict:
         """Get status of all API tokens for debugging"""
