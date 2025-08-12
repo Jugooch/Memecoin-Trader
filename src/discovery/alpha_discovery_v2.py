@@ -946,6 +946,16 @@ class ProvenAlphaFinder:
         
         return selected_wallets
     
+    def filter_existing_wallets(self, discovered_wallets: List[str], existing_wallets: List[str]) -> List[str]:
+        """Filter out wallets that are already being tracked"""
+        existing_set = set(existing_wallets)
+        new_wallets = [w for w in discovered_wallets if w not in existing_set]
+        
+        self.logger.info(f"Filtered {len(discovered_wallets)} discovered wallets: "
+                        f"{len(new_wallets)} new, {len(discovered_wallets) - len(new_wallets)} already tracked")
+        
+        return new_wallets
+    
     async def continuous_discovery(self):
         """Run continuous alpha discovery (for cloud deployment)"""
         self.logger.info("Starting continuous alpha discovery mode...")
@@ -971,19 +981,23 @@ class ProvenAlphaFinder:
     
     async def _save_discovered_wallets(self, wallets: List[str]):
         """Save discovered wallets to database"""
-        for wallet in wallets:
-            await self.database.update_alpha_wallet(wallet, {
-                'discovery_date': datetime.now().isoformat(),
-                'discovery_method': 'time_delayed_analysis',
-                'performance_score': 100,  # Default high score for new discoveries
-                'total_trades': 0,
-                'metadata': {
-                    'source': 'proven_alpha_finder',
-                    'validation_status': 'pending'
-                }
-            })
-        
-        self.logger.info(f"Saved {len(wallets)} alpha wallets to database")
+        try:
+            # Try to save to database if available
+            for wallet in wallets:
+                await self.database.update_alpha_wallet(wallet, {
+                    'discovery_date': datetime.now().isoformat(),
+                    'discovery_method': 'time_delayed_analysis',
+                    'performance_score': 100,  # Default high score for new discoveries
+                    'total_trades': 0,
+                    'metadata': {
+                        'source': 'proven_alpha_finder',
+                        'validation_status': 'pending'
+                    }
+                })
+            
+            self.logger.info(f"Saved {len(wallets)} alpha wallets to database")
+        except Exception as e:
+            self.logger.warning(f"Could not save to database: {e}, continuing without database save")
     
     async def _update_bot_config(self, new_wallets: List[str]):
         """Update bot config with new alpha wallets"""

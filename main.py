@@ -27,6 +27,7 @@ from src.clients.pumpfun_client import PumpFunClient
 from src.core.wallet_tracker import WalletTracker
 from src.core.trading_engine import TradingEngine
 from src.core.database import Database
+from src.core.wallet_rotation_manager import WalletRotationManager
 from src.utils.logger_setup import setup_logging
 from src.utils.config_loader import load_config, validate_required_keys
 
@@ -73,6 +74,11 @@ class MemecoinTradingBot:
         self.wallet_tracker = WalletTracker(self.config.watched_wallets)
         self.trading_engine = TradingEngine(self.config, moralis_client=self.moralis)
         self.database = Database(self.config.database_file)
+        
+        # Initialize wallet rotation manager
+        self.wallet_rotation_manager = WalletRotationManager(
+            self.wallet_tracker, self.bitquery, self.moralis, self.database, config_path
+        )
         
         self.running = False
         self.trades_today = 0
@@ -163,7 +169,8 @@ class MemecoinTradingBot:
             self.manage_active_positions(),
             self.daily_reset_task(),
             self.periodic_summary_task(),
-            self.heartbeat_task()
+            self.heartbeat_task(),
+            self.wallet_rotation_manager.start_rotation_loop()
         )
 
     async def monitor_new_tokens(self):
@@ -326,6 +333,9 @@ class MemecoinTradingBot:
             if total_latency > 3.0:  # More than 3 seconds
                 self.logger.warning(f"High execution latency: {total_latency:.1f}s "
                                   f"(alpha: {alpha_latency:.1f}s) for {mint_address[:8]}")
+            
+            # Record that we're following these wallets' trades
+            self.wallet_tracker.record_trade_follow(alpha_wallets, mint_address, confidence_score)
             
             await self.execute_trade(mint_address, metadata, liquidity, 
                                    confidence_score, investment_multiplier, wallet_tiers)
@@ -733,6 +743,11 @@ class MemecoinTradingBot:
             self.recent_trades.append(sell_record)
             self._cleanup_old_trades()
             
+            # Record trade outcome for wallet performance tracking (on full exits)
+            if sell_percentage >= 0.99:  # Full exit (100% or close to it)
+                profit_pct = sell_result.get('profit_pct', 0)
+                self.wallet_tracker.record_trade_outcome(mint_address, profit_pct)
+            
             # Try to record in database (but don't fail if it doesn't work)
             try:
                 db_record = sell_record.copy()
@@ -1077,6 +1092,9 @@ class MemecoinTradingBot:
         """Stop the trading bot"""
         self.logger.info("Stopping trading bot")
         self.running = False
+        
+        # Stop wallet rotation
+        self.wallet_rotation_manager.stop_rotation()
         
         # Send shutdown notification to Discord
         if self.trading_engine.notifier:

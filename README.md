@@ -1,19 +1,19 @@
 # 🚀 Memecoin Trading Bot
 
-Intelligent Solana memecoin trading bot that follows proven alpha wallets to identify profitable trades early. Monitors pump.fun launches and executes trades when multiple alpha wallets show buying activity.
+Intelligent Solana memecoin trading bot that follows proven "alpha wallets" (smart money) to identify profitable trades early. Monitors pump.fun token launches in real-time and executes trades when multiple high-performing wallets show buying activity.
 
 ## ✨ Key Features
 
-- **🎯 Alpha Wallet Discovery**: Automated system finds proven successful wallets
-- **🔄 API Key Rotation**: Multiple Moralis keys for 24/7 operation without limits
-- **📊 Smart Caching**: Reduces API calls by 70-90% with intelligent caching
-- **🛡️ Advanced Risk Management**: Position sizing, stop losses, take profits
-- **🔍 Multi-Layer Filtering**: Liquidity checks, spam detection, quality assessment
-- **📈 Multiple Trading Modes**: Simulation, alerts, or fully automated trading
-- **⚡ Real-time Monitoring**: Live alpha wallet activity detection
-- **📱 Performance Tracking**: Complete trade history and analytics
-- **🛠️ Production Ready**: Error handling, rate limiting, graceful degradation
-- **⚙️ Centralized Config**: Smart config loading with validation and path resolution
+- **🎯 Dual Alpha Discovery Systems**: Continuous accumulator + one-off analysis tools
+- **🔄 Multi-Key Rotation**: 8 Moralis keys + multiple Bitquery tokens for 24/7 operation
+- **📊 Intelligent Caching**: Request coalescing + tiered TTLs reduce API calls by 70-90%
+- **🛡️ Tiered Risk Management**: Wallet performance tiers (S/A/B/C) adjust position sizes
+- **🔍 Safety Scoring**: Rug pull detection, honeypot checks, liquidity validation
+- **📈 Paper Trading Mode**: Realistic fee simulation (DEX fees, slippage, network costs)
+- **⚡ Real-time Monitoring**: WebSocket subscriptions for instant token detection
+- **📱 P&L Tracking**: JSON-based persistence with atomic writes
+- **🛠️ Production Ready**: Deduplication, inactive wallet detection, error recovery
+- **🔔 Discord Integration**: Trade notifications, summaries, and error alerts
 
 ## Quick Start
 
@@ -95,10 +95,14 @@ trading_mode: "simulation"  # Options:
 ### Key Configuration Options:
 
 - `initial_capital: 100.0` - Starting capital amount
-- `max_trade_pct: 0.05` - Maximum 5% of capital per trade
+- `max_trade_pct: 0.05` - Maximum 5% of capital per trade (base amount)
 - `threshold_alpha_buys: 3` - Minimum alpha wallet buys to trigger trade
-- `tp_multiplier: 2.0` - Take profit at 2x entry price
-- `stop_loss_pct: 0.7` - Stop loss at 70% of entry price
+- `tp_multiplier: 1.5` - First take profit at 1.5x (sells 30%)
+- `stop_loss_pct: 0.85` - Stop loss at 85% of entry price (15% max loss)
+- `time_window_sec: 120` - 2-minute window for alpha wallet detection
+- `min_liquidity_usd: 1000` - Minimum token liquidity requirement
+- `max_trades_per_day: 10` - Daily trade limit (capped at 20 max)
+- `min_time_between_trades: 30` - Minimum seconds between trades
 
 ## API Setup Required
 
@@ -133,27 +137,59 @@ Instead of competing on latency (expensive), we compete on intelligence:
 - **Risk Management**: Position sizing and stop losses protect capital
 - **Patience**: 2-minute analysis windows vs. instant reactions
 
-## Strategy Overview
+## Trading Strategy Overview
 
-The bot implements a systematic approach to memecoin trading:
+The bot implements a conservative smart-money-following strategy:
 
-1. **Detection**: Monitor Pump.fun for new token launches via Bitquery
-2. **Filtering**: Apply liquidity, volume, and quality filters via Moralis
-3. **Validation**: Check for alpha wallet activity within time window (2+ minutes)
-4. **Execution**: Place buy orders via QuickNode Pump.fun API
-5. **Management**: Monitor positions with TP/SL and trailing stops
-6. **Analysis**: Track performance and optimize parameters
+1. **Token Detection**: WebSocket monitoring of Pump.fun via Bitquery GraphQL
+2. **Initial Filtering**: 
+   - Minimum $1,000 liquidity
+   - Spam/scam token filtering
+   - Activity validation (swaps, unique traders)
+3. **Alpha Validation**:
+   - Check if 3+ watched wallets bought within 120 seconds
+   - Calculate confidence score (0-100)
+   - Determine investment multiplier based on wallet tiers
+4. **Safety Checks**:
+   - Rug score calculation (<70 required)
+   - Honeypot detection (check for sells)
+   - Trader diversity analysis
+5. **Position Entry**:
+   - Base: 5% of capital
+   - Adjusted by wallet tier multiplier (0.6x-2.0x)
+   - Realistic fees: 0.3% DEX + ~$0.28 network + 0.5% slippage
+6. **Exit Management**:
+   - TP1 @ 1.5x: Sell 30%
+   - TP2 @ 1.75x: Sell 30%
+   - Trailing stop after 50% gain
+   - Time stop after 5 minutes
+   - Break-even stop armed at +10%
 
 ## 🎯 Alpha Wallet Discovery System
 
 The bot includes an advanced alpha wallet discovery system that automatically finds proven successful wallets:
 
-### How It Works:
-1. **Time-Delayed Analysis**: Analyzes tokens from 24-48 hours ago (proven timeframe)
-2. **Success Validation**: Identifies tokens that became successful (holders, activity, price)
-3. **Early Buyer Detection**: Finds wallets that bought successful tokens within first 30 seconds
-4. **Performance Scoring**: Validates wallet consistency across multiple successful tokens
-5. **Auto-Configuration**: Updates your config.yml with discovered alpha wallets
+### Two Discovery Systems:
+
+#### 1. Alpha Discovery V2 (One-off Analysis)
+- Analyzes recent 2-hour window of trades
+- Identifies successful tokens (1.2x-2x price increase)
+- Finds wallets buying within first 10 minutes
+- Requires 2+ appearances on successful tokens
+- Best for: Quick manual discovery
+
+#### 2. Alpha Accumulator (Continuous - RECOMMENDED)
+- Runs every 2 minutes continuously
+- Builds overlap data over time
+- Handles Bitquery's 3-4 minute data limitation
+- Stores in SQLite database
+- Best for: Production use
+
+### Wallet Tiering System:
+- **S-Tier**: 70%+ win rate, 100%+ avg profit → 2.0x investment
+- **A-Tier**: 60%+ win rate, 50%+ avg profit → 1.4x investment  
+- **B-Tier**: 50%+ win rate, 20%+ avg profit → 1.0x investment
+- **C-Tier**: Below B-tier thresholds → 0.6x investment
 
 ### Run Discovery:
 ```bash
@@ -176,12 +212,25 @@ watched_wallets:
 
 ## Risk Management
 
-- **Position Sizing**: Maximum 5% of capital per trade
-- **Take Profit**: Sell 50% at 2x entry price
-- **Stop Loss**: Exit at 70% of entry price
-- **Trailing Stop**: Exit if price drops 20% from peak
-- **Time Limit**: Maximum 4-hour hold time
-- **Daily Limits**: Maximum trades per day to prevent overtrading
+### Position Sizing
+- **Base Size**: 5% of capital per trade
+- **Tier Adjustment**: Multiplied by wallet tier (0.6x-2.0x)
+- **Max Concurrent**: 3 positions
+- **Daily Limit**: 10 trades (hard cap at 20)
+
+### Exit Strategy (Tiered)
+- **TP1 @ 1.5x**: Sell 30% of position
+- **TP2 @ 1.75x**: Sell 30% of position  
+- **Stop Loss**: Exit at 85% of entry (15% max loss)
+- **Trailing Stop**: After 50% gain, exit if drops to 85% of peak
+- **Time Stop**: Force exit after 5 minutes
+- **Break-Even**: Armed at +10%, exits at entry price
+
+### Safety Features
+- **Cool-down**: 3 minutes after stop loss
+- **Min Interval**: 2 minutes between trades
+- **Inactive Wallet Detection**: Marks wallets inactive after 6 hours
+- **Rug Score**: Must be <70 to trade
 
 ## Paper Trading Mode
 
@@ -218,14 +267,24 @@ python src/discovery/alpha_discovery_v2.py   # Find new alpha wallets
 
 ## Monitoring & Analytics
 
-The bot provides comprehensive monitoring:
+### Real-time Monitoring
+- **Heartbeat**: Every 30 seconds WebSocket status
+- **5-min Summary**: Tokens scanned, alpha checks, trades, P&L
+- **Trade Logs**: Entry/exit with confidence scores
+- **API Stats**: Deduplication savings, cache hits
+- **Wallet Status**: Active/inactive tracking
 
-- Real-time trade execution logs
-- Daily performance summaries
-- Win rate and profit tracking
-- API health monitoring
-- System resource usage
-- Performance alerts
+### Discord Notifications
+- Trade alerts with confidence scores
+- 5-minute activity summaries
+- Error notifications (API failures, rate limits)
+- Wallet recycling alerts
+
+### Performance Tracking
+- **P&L Store**: JSON file (`data/pnl_state.json`)
+- **Metrics**: Win rate, daily P&L, equity curve
+- **Trade History**: Last 100 trades cached
+- **Position Tracking**: Real-time unrealized P&L
 
 View performance reports:
 ```bash
@@ -254,14 +313,22 @@ asyncio.run(report())
 "
 ```
 
-## Database Schema
+## Data Storage
 
-The bot maintains SQLite database with tables:
-- `trades` - All trade executions
-- `positions` - Active positions
-- `performance` - Daily metrics
-- `alpha_wallets` - Wallet performance data
-- `token_analysis` - Token research data
+### Primary Storage (JSON)
+- **P&L State**: `data/pnl_state.json` - Capital, trades, positions
+- **Config**: `config/config.yml` - All settings and wallets
+
+### SQLite Databases
+- **Main DB**: `trades.db`
+  - `trades` - All trade executions
+  - `positions` - Active positions  
+  - `alpha_wallets` - Wallet performance
+  - `token_analysis` - Research data
+  
+- **Accumulator DB**: `data/alpha_accumulator.db`
+  - `tokens` - Tracked token launches
+  - `early_buys` - Wallet-token mappings
 
 ## Error Handling
 

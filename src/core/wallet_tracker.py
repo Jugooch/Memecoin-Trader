@@ -7,12 +7,20 @@ import logging
 import time
 from typing import List, Set, Dict
 from src.clients.moralis_client import MoralisClient
+from src.utils.wallet_performance import WalletPerformanceTracker
 
 
 class WalletTracker:
     def __init__(self, watched_wallets: List[str]):
         self.watched_wallets = set(watched_wallets)
         self.logger = logging.getLogger(__name__)
+        
+        # Initialize performance tracker
+        self.performance_tracker = WalletPerformanceTracker()
+        
+        # Initialize tracking for all watched wallets
+        for wallet in watched_wallets:
+            self.performance_tracker.initialize_wallet(wallet)
         
         # Cache for recent activity
         self.recent_activity = {}
@@ -22,11 +30,12 @@ class WalletTracker:
         self.wallet_performance = {}  # {wallet: {'trades': [], 'stats': {}}}
         self.wallet_tiers = {}  # {wallet: 'S', 'A', 'B', 'C'}
         self.tier_investment_multipliers = {
-            'S': 2.0,   # 10% of capital
-            'A': 1.4,   # 7% of capital  
-            'B': 1.0,   # 5% of capital (base)
-            'C': 0.6    # 3% of capital
+            'S': 1.00,   # 5.0% of capital ($25 on $500)
+            'A': 0.90,   # 4.5% of capital ($22.50 on $500)  
+            'B': 0.80,   # 4.0% of capital ($20 on $500)
+            'C': 0.70    # 3.5% of capital ($17.50 on $500)
         }
+        # Default for unknown/new wallets: 0.60 (3.0% = $15 on $500)
         
         # Track inactive wallets
         self.wallet_last_activity = {}  # {wallet: timestamp}
@@ -190,6 +199,10 @@ class WalletTracker:
                         
                         # Update wallet activity timestamp
                         self.update_wallet_activity(wallet)
+                        
+                        # Record wallet activity in performance tracker
+                        self.performance_tracker.record_wallet_activity(wallet)
+                        
                         self.logger.info(f"ALPHA WALLET DETECTED: {wallet[:8]}... bought {mint_address[:8]}...")
                 
                 # Calculate market metrics for early abort
@@ -248,8 +261,14 @@ class WalletTracker:
         # Total confidence
         confidence_score = wallet_count_score + avg_tier_score
         
-        # Investment multiplier based on best tier present
-        best_tier_multiplier = max(self.tier_investment_multipliers.get(t, 0.6) for t in wallet_tiers.values())
+        # Calculate individual wallet multipliers and get the highest one for the signal
+        wallet_multipliers = {}
+        for wallet in alpha_buyers:
+            multiplier = self.get_wallet_investment_multiplier(wallet)
+            wallet_multipliers[wallet] = multiplier
+        
+        # Use the highest multiplier for the overall signal strength
+        best_tier_multiplier = max(wallet_multipliers.values()) if wallet_multipliers else 0.60
         
         # Clean up old deduplication entries
         self._cleanup_dedup_cache()
@@ -261,6 +280,7 @@ class WalletTracker:
         return {
             'alpha_wallets': alpha_buyers,
             'wallet_tiers': wallet_tiers,
+            'wallet_multipliers': wallet_multipliers,  # Individual multipliers for each wallet
             'confidence_score': confidence_score,
             'investment_multiplier': best_tier_multiplier,
             'last_swaps_data': swaps if 'swaps' in locals() else []  # Include swap data for reuse
@@ -284,8 +304,18 @@ class WalletTracker:
         if wallet_address in self.wallet_tiers:
             return self.wallet_tiers[wallet_address]
         
-        # Default tier for new wallets
-        return 'B'  # Assume average performance initially
+        # Default tier for new wallets - use 'Unknown' to get default multiplier
+        return 'Unknown'
+    
+    def get_wallet_investment_multiplier(self, wallet_address: str) -> float:
+        """Get the investment multiplier for a wallet based on its tier"""
+        tier = self.get_wallet_tier(wallet_address)
+        
+        if tier in self.tier_investment_multipliers:
+            return self.tier_investment_multipliers[tier]
+        
+        # Default for unknown/new wallets: 0.60 (3.0% of capital)
+        return 0.60
     
     def update_wallet_tier(self, wallet_address: str, win_rate: float, avg_profit_pct: float):
         """Update wallet tier based on performance metrics"""
@@ -429,6 +459,8 @@ class WalletTracker:
         self.wallet_last_activity[wallet_address] = time.time()
         # Remove from inactive set if it was previously inactive
         self.inactive_wallets.discard(wallet_address)
+        # Initialize performance tracking
+        self.performance_tracker.initialize_wallet(wallet_address)
         self.logger.info(f"Added wallet {wallet_address[:8]}... to watch list (marked as active)")
 
     def remove_watched_wallet(self, wallet_address: str):
@@ -533,3 +565,20 @@ class WalletTracker:
     def reset_dedup_stats(self):
         """Reset deduplication statistics"""
         self.dedupe_stats = {'total_checks': 0, 'deduped_checks': 0}
+    
+    def record_trade_follow(self, alpha_wallets: Set[str], mint_address: str, confidence_score: float):
+        """Record that we followed these wallets' trades"""
+        for wallet in alpha_wallets:
+            self.performance_tracker.record_trade_follow(wallet, mint_address, confidence_score)
+    
+    def record_trade_outcome(self, mint_address: str, pnl_pct: float):
+        """Record the outcome of a trade for performance tracking"""
+        self.performance_tracker.record_trade_outcome(mint_address, pnl_pct)
+    
+    def get_wallets_for_rotation(self):
+        """Get wallet categorization for rotation decisions"""
+        return self.performance_tracker.get_wallets_for_rotation()
+    
+    def get_performance_summary(self):
+        """Get performance tracking summary"""
+        return self.performance_tracker.get_summary()

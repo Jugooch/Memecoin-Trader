@@ -1,0 +1,223 @@
+"""
+Wallet Rotation Manager
+Handles smart rotation of alpha wallets every 2 hours
+"""
+
+import asyncio
+import logging
+import time
+import yaml
+from typing import List, Dict, Set
+from src.core.wallet_tracker import WalletTracker
+from src.discovery.alpha_discovery_v2 import ProvenAlphaFinder
+from src.clients.bitquery_client import BitqueryClient
+from src.clients.moralis_client import MoralisClient
+from src.core.database import Database
+
+class WalletRotationManager:
+    def __init__(self, wallet_tracker: WalletTracker, bitquery: BitqueryClient, 
+                 moralis: MoralisClient, database: Database, config_path: str = "config/config.yml"):
+        self.wallet_tracker = wallet_tracker
+        self.bitquery = bitquery
+        self.moralis = moralis
+        self.database = database
+        self.config_path = config_path
+        self.logger = logging.getLogger(__name__)
+        
+        # Rotation settings
+        self.rotation_interval = 2 * 3600  # 2 hours in seconds
+        self.min_wallets = 50
+        self.max_wallets = 100
+        self.retention_threshold = 50.0
+        self.high_performer_threshold = 70.0
+        
+        # Track last rotation
+        self.last_rotation = 0
+        self.running = False
+    
+    async def start_rotation_loop(self):
+        """Start the 2-hour rotation loop"""
+        self.running = True
+        self.logger.info("Starting wallet rotation manager (2-hour intervals)")
+        
+        while self.running:
+            try:
+                # Check if it's time for rotation
+                current_time = time.time()
+                if current_time - self.last_rotation >= self.rotation_interval:
+                    await self.perform_rotation()
+                    self.last_rotation = current_time
+                
+                # Check every 10 minutes
+                await asyncio.sleep(600)
+                
+            except Exception as e:
+                self.logger.error(f"Error in rotation loop: {e}")
+                await asyncio.sleep(300)  # Wait 5 minutes on error
+    
+    def stop_rotation(self):
+        """Stop the rotation loop"""
+        self.running = False
+        self.logger.info("Stopping wallet rotation manager")
+    
+    async def perform_rotation(self):
+        """Perform a complete wallet rotation cycle"""
+        self.logger.info("=" * 60)
+        self.logger.info("Starting wallet rotation cycle")
+        self.logger.info("=" * 60)
+        
+        start_time = time.time()
+        
+        # Step 1: Evaluate current wallets
+        rotation_analysis = self.wallet_tracker.get_wallets_for_rotation()
+        
+        keep_wallets = set(rotation_analysis["keep"])
+        candidates = set(rotation_analysis["candidates"])
+        replace_wallets = set(rotation_analysis["replace"])
+        
+        self.logger.info(f"Wallet evaluation: {len(keep_wallets)} keep, "
+                        f"{len(candidates)} candidates, {len(replace_wallets)} replace")
+        
+        # Step 2: Determine how many new wallets we need
+        current_total = len(self.wallet_tracker.watched_wallets)
+        wallets_to_remove = len(replace_wallets)
+        
+        # Calculate target: aim for max_wallets but ensure we have enough good ones
+        target_new_wallets = min(
+            wallets_to_remove + max(0, self.max_wallets - len(keep_wallets) - len(candidates)),
+            50  # Don't add more than 50 at once
+        )
+        
+        self.logger.info(f"Planning to discover {target_new_wallets} new wallets")
+        
+        # Step 3: Discover new alpha wallets
+        new_wallets = []
+        if target_new_wallets > 0:
+            discovery_start = time.time()
+            try:
+                finder = ProvenAlphaFinder(self.bitquery, self.moralis, self.database)
+                discovered_wallets = await finder.discover_alpha_wallets()
+                
+                if discovered_wallets:
+                    # Filter out wallets we already have
+                    existing_wallets = self.wallet_tracker.watched_wallets
+                    new_wallets = [w for w in discovered_wallets if w not in existing_wallets][:target_new_wallets]
+                    
+                    discovery_time = time.time() - discovery_start
+                    self.logger.info(f"Discovery completed in {discovery_time:.1f}s: "
+                                   f"found {len(new_wallets)} new wallets")
+                else:
+                    self.logger.warning("Alpha discovery returned no new wallets")
+                    
+            except Exception as e:
+                self.logger.error(f"Error during alpha discovery: {e}")
+        
+        # Step 4: Build final wallet list
+        final_wallets = set()
+        
+        # Always keep high performers
+        final_wallets.update(keep_wallets)
+        
+        # Add candidates if we have room
+        remaining_slots = self.max_wallets - len(final_wallets)
+        if remaining_slots > 0:
+            candidates_to_add = list(candidates)[:remaining_slots]
+            final_wallets.update(candidates_to_add)
+            remaining_slots -= len(candidates_to_add)
+        
+        # Add new wallets if we have room
+        if remaining_slots > 0 and new_wallets:
+            new_to_add = new_wallets[:remaining_slots]
+            final_wallets.update(new_to_add)
+        
+        # Ensure we have minimum wallets
+        if len(final_wallets) < self.min_wallets:
+            # Keep some candidates even if they scored low
+            additional_needed = self.min_wallets - len(final_wallets)
+            additional_candidates = [w for w in candidates if w not in final_wallets][:additional_needed]
+            final_wallets.update(additional_candidates)
+        
+        # Step 5: Update the wallet tracker
+        old_wallets = set(self.wallet_tracker.watched_wallets)
+        added_wallets = final_wallets - old_wallets
+        removed_wallets = old_wallets - final_wallets
+        kept_wallets = final_wallets & old_wallets
+        
+        # Update wallet tracker
+        self.wallet_tracker.watched_wallets = final_wallets
+        
+        # Initialize new wallets in performance tracker
+        for wallet in added_wallets:
+            self.wallet_tracker.add_watched_wallet(wallet)
+        
+        # Step 6: Update config file
+        await self._update_config_file(list(final_wallets))
+        
+        # Step 7: Record the rotation
+        self.wallet_tracker.performance_tracker.record_rotation(
+            list(kept_wallets), list(added_wallets), list(removed_wallets)
+        )
+        
+        # Step 8: Log results
+        total_time = time.time() - start_time
+        self.logger.info("=" * 60)
+        self.logger.info(f"Wallet rotation completed in {total_time:.1f}s:")
+        self.logger.info(f"  Kept: {len(kept_wallets)} wallets")
+        self.logger.info(f"  Added: {len(added_wallets)} new wallets")
+        self.logger.info(f"  Removed: {len(removed_wallets)} wallets")
+        self.logger.info(f"  Total: {len(final_wallets)} wallets")
+        
+        if added_wallets:
+            sample_new = list(added_wallets)[:3]
+            self.logger.info(f"  New wallets (sample): {[w[:8]+'...' for w in sample_new]}")
+        
+        if removed_wallets:
+            sample_removed = list(removed_wallets)[:3]
+            self.logger.info(f"  Removed wallets (sample): {[w[:8]+'...' for w in sample_removed]}")
+        
+        self.logger.info("=" * 60)
+        
+        # Step 9: Get performance summary
+        performance_summary = self.wallet_tracker.get_performance_summary()
+        self.logger.info(f"Performance summary: {performance_summary['active_wallets']}/{performance_summary['total_wallets']} active, "
+                        f"win rate: {performance_summary['overall_win_rate']:.1%}")
+    
+    async def _update_config_file(self, wallet_list: List[str]):
+        """Update the config file with new wallet list"""
+        try:
+            # Read current config
+            with open(self.config_path, 'r') as f:
+                config = yaml.safe_load(f)
+            
+            # Update watched wallets
+            config['watched_wallets'] = wallet_list
+            
+            # Write back to file
+            with open(self.config_path, 'w') as f:
+                yaml.safe_dump(config, f, default_flow_style=False)
+            
+            self.logger.info(f"Updated config file with {len(wallet_list)} wallets")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to update config file: {e}")
+    
+    def force_rotation(self):
+        """Force an immediate rotation (for testing/manual trigger)"""
+        self.last_rotation = 0  # Reset timer to trigger rotation
+        self.logger.info("Forced rotation scheduled for next check")
+    
+    def get_rotation_status(self) -> Dict:
+        """Get current rotation status"""
+        current_time = time.time()
+        time_since_last = current_time - self.last_rotation
+        time_until_next = max(0, self.rotation_interval - time_since_last)
+        
+        return {
+            "running": self.running,
+            "last_rotation": self.last_rotation,
+            "time_since_last_rotation": time_since_last,
+            "time_until_next_rotation": time_until_next,
+            "rotation_interval": self.rotation_interval,
+            "total_wallets": len(self.wallet_tracker.watched_wallets),
+            "performance_summary": self.wallet_tracker.get_performance_summary()
+        }
