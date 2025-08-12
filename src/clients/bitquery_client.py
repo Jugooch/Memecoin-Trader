@@ -557,11 +557,15 @@ class BitqueryClient:
                 error_str = str(e)
                 self.logger.error(f"Error on page {page + 1}: {error_str}")
                 
-                # Handle token rotation for 402 errors
-                if '402' in error_str or 'Payment Required' in error_str:
+                # Handle token rotation for 402 and 403 errors
+                if '402' in error_str or 'Payment Required' in error_str or '403' in error_str or 'Forbidden' in error_str:
                     if self.current_client_token_index is not None:
-                        self.token_stats[self.current_client_token_index]['payment_required'] = True
-                        self.logger.warning(f"Token #{self.current_client_token_index} marked as payment required")
+                        if '402' in error_str or 'Payment Required' in error_str:
+                            self.token_stats[self.current_client_token_index]['payment_required'] = True
+                            self.logger.warning(f"Token #{self.current_client_token_index} marked as payment required")
+                        elif '403' in error_str or 'Forbidden' in error_str:
+                            self.token_stats[self.current_client_token_index]['forbidden'] = True
+                            self.logger.warning(f"Token #{self.current_client_token_index} marked as forbidden/invalid")
                     
                     self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
                     
