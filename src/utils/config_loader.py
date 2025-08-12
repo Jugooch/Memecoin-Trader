@@ -123,3 +123,114 @@ def validate_required_keys(config: Dict[str, Any]) -> None:
     
     if missing_keys:
         raise ValueError(f"Missing required configuration keys: {', '.join(missing_keys)}")
+
+
+def safe_update_config(updates: Dict[str, Any], config_path: str = None) -> bool:
+    """
+    Safely update config file with atomic write and validation
+    
+    Args:
+        updates: Dictionary of config updates to apply
+        config_path: Path to config file (auto-detected if None)
+        
+    Returns:
+        True if update successful, False otherwise
+    """
+    import shutil
+    import tempfile
+    from pathlib import Path
+    
+    if not config_path:
+        project_root = Path(__file__).parent.parent.parent
+        config_path = str(project_root / "config" / "config.yml")
+    
+    try:
+        # Step 1: Create backup
+        backup_path = f"{config_path}.backup"
+        shutil.copy2(config_path, backup_path)
+        
+        # Step 2: Load current config
+        current_config = load_config()
+        
+        # Step 3: Apply updates (deep merge)
+        def deep_merge(base, updates):
+            for key, value in updates.items():
+                if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+                    deep_merge(base[key], value)
+                else:
+                    base[key] = value
+        
+        deep_merge(current_config, updates)
+        
+        # Step 4: Write to temporary file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as tmp_file:
+            yaml.safe_dump(current_config, tmp_file, default_flow_style=False, sort_keys=False)
+            tmp_path = tmp_file.name
+        
+        # Step 5: Validate temp file has required keys
+        validate_config_file(tmp_path)
+        
+        # Step 6: Atomically replace original
+        shutil.move(tmp_path, config_path)
+        
+        return True
+        
+    except Exception as e:
+        # Restore from backup on any error
+        if os.path.exists(backup_path):
+            shutil.copy2(backup_path, config_path)
+        raise RuntimeError(f"Config update failed, restored from backup: {e}")
+
+
+def validate_config_file(config_path: str) -> None:
+    """Validate that config file has all required keys"""
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        raise ValueError(f"Config file corrupted or unreadable: {e}")
+    
+    # Check for critical API keys
+    critical_keys = ['moralis_keys', 'bitquery_tokens']
+    missing_critical = [k for k in critical_keys if k not in config or not config[k]]
+    
+    if missing_critical:
+        raise ValueError(f"Config corruption: Missing critical API keys: {missing_critical}")
+    
+    # Check for essential sections
+    essential_sections = ['trading', 'pump_fun', 'rpc_endpoint', 'watched_wallets']
+    missing_sections = [s for s in essential_sections if s not in config]
+    
+    if missing_sections:
+        raise ValueError(f"Config corruption: Missing essential sections: {missing_sections}")
+
+
+def restore_missing_config_sections() -> Dict[str, Any]:
+    """Return default values for commonly missing config sections"""
+    return {
+        'rpc_endpoint': 'https://api.mainnet-beta.solana.com',
+        'trading_mode': 'simulation',
+        'time_window_sec': 300,
+        'tp_multiplier': 1.25,
+        'stop_loss_pct': 0.92,
+        'trading': {
+            'initial_capital': 500.0,
+            'max_trades_per_day': 20,
+            'min_time_between_trades': 120,
+            'max_concurrent_positions': 3
+        },
+        'paper_trading': {
+            'fee_bps': 30,
+            'buy_slippage_bps': 75,
+            'sell_slippage_bps': 100,
+            'max_slippage_bps': 150
+        },
+        'pump_fun': {
+            'program_address': '6EF8rrecthHAuSStzpf6aXr9HWs8jgPVr5S6fqF6P',
+            'api_endpoint': 'https://pumpapi.fun'
+        },
+        'notifications': {
+            'discord_webhook_url': '',
+            'enabled': True
+        }
+    }

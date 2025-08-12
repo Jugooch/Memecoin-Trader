@@ -215,20 +215,15 @@ class WalletRotationManager:
                 self.logger.warning(f"Failed to send rotation notification to Discord: {e}")
     
     async def _update_config_file(self, wallet_list: List[str]):
-        """Update the config file with new wallet list"""
+        """Update the config file with new wallet list using safe atomic write"""
         try:
-            # Read current config
-            with open(self.config_path, 'r') as f:
-                config = yaml.safe_load(f)
+            from src.utils.config_loader import safe_update_config
             
-            # Update watched wallets
-            config['watched_wallets'] = wallet_list
+            # Use safe atomic update
+            updates = {'watched_wallets': wallet_list}
+            safe_update_config(updates, self.config_path)
             
-            # Write back to file
-            with open(self.config_path, 'w') as f:
-                yaml.safe_dump(config, f, default_flow_style=False)
-            
-            self.logger.info(f"Updated config file with {len(wallet_list)} wallets")
+            self.logger.info(f"Updated config file with {len(wallet_list)} wallets (safe atomic write)")
             
         except Exception as e:
             self.logger.error(f"Failed to update config file: {e}")
