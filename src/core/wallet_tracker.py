@@ -44,7 +44,7 @@ class WalletTracker:
         
         # Deduplication cache for alpha detections
         self.alpha_detection_cache = {}  # {"token:wallet": timestamp}
-        self.dedup_cache_ttl = 900  # 15 minutes TTL for deduplication
+        self.dedup_cache_ttl = 75  # 75 seconds TTL for deduplication - FIXED: was 900
         self.dedupe_stats = {'total_checks': 0, 'deduped_checks': 0}  # Statistics
 
     async def check_alpha_activity(self, mint_address: str, time_window_sec: int, threshold_buys: int, moralis_client=None) -> bool:

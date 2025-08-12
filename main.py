@@ -310,11 +310,14 @@ class MemecoinTradingBot:
                                   f"Score: {rug_score}, Warnings: {warnings}")
                 return  # Skip this trade
             
-            # Log the trade decision
+            # ENHANCED: Comprehensive trade decision logging
             tier_summary = ', '.join([f"{addr[:8]}({tier})" for addr, tier in wallet_tiers.items()])
-            self.logger.info(f"TRADE SIGNAL: {mint_address[:8]} - Confidence: {confidence_score:.1f}, "
-                           f"Multiplier: {investment_multiplier:.1f}x, Safety: {safety_check['rug_score']}, "
-                           f"Wallets: {tier_summary}")
+            wallet_details = [f"{addr[:8]}(tier={tier})" for addr, tier in wallet_tiers.items()]
+            
+            self.logger.info(f"TradeDecision: mint={mint_address[:8]}... weight={confidence_score:.1f} "
+                           f"wallets=[{', '.join(wallet_details)}] safety_score={safety_check['rug_score']} "
+                           f"multiplier={investment_multiplier:.1f}x distinct_wallets={distinct_wallets} "
+                           f"liquidity=${liquidity.get('usd', 0):,.0f}")
             
             # Track execution latency
             trade_executed_time = time.time()
@@ -342,6 +345,19 @@ class MemecoinTradingBot:
             
             await self.execute_trade(mint_address, metadata, liquidity, 
                                    confidence_score, investment_multiplier, wallet_tiers)
+        else:
+            # ENHANCED: Log why trade was rejected
+            rejection_reasons = []
+            if confidence_score < min_confidence:
+                rejection_reasons.append(f"low_confidence({confidence_score:.1f}<{min_confidence})")
+            if distinct_wallets < min_distinct_wallets:
+                rejection_reasons.append(f"insufficient_distinct_wallets({distinct_wallets}<{min_distinct_wallets})")
+            if len(alpha_wallets) < self.config.threshold_alpha_buys:
+                rejection_reasons.append(f"insufficient_alpha_buys({len(alpha_wallets)}<{self.config.threshold_alpha_buys})")
+            
+            self.logger.debug(f"TradeRejected: mint={mint_address[:8]}... reasons=[{', '.join(rejection_reasons)}] "
+                            f"confidence={confidence_score:.1f} alpha_wallets={len(alpha_wallets)} "
+                            f"distinct={distinct_wallets}")
 
     def _extract_liquidity_usd(self, liquidity: Dict) -> float:
         """Extract liquidity USD value from various possible field names"""
@@ -902,11 +918,24 @@ class MemecoinTradingBot:
                     # Add wallet status
                     summary += f"\n  Alpha Wallets: {len(active_wallets)}/{total_wallets} active, {len(inactive_wallets)} inactive"
                     
-                    # Add wallet performance summary
+                    # ENHANCED: Add detailed wallet performance summary
                     perf_summary = self.wallet_tracker.get_performance_summary()
                     if perf_summary['total_trades'] > 0:
                         summary += f"\n  Performance: {perf_summary['overall_win_rate']:.1%} win rate, " \
                                   f"{perf_summary['total_trades']} total trades tracked"
+                        
+                        # Add tier performance breakdown
+                        try:
+                            tier_stats = self.wallet_tracker.get_tier_performance_stats()
+                            tier_summary = []
+                            for tier in ['S', 'A', 'B', 'C']:
+                                stats = tier_stats.get(tier, {})
+                                if stats.get('count', 0) > 0:
+                                    tier_summary.append(f"{tier}:{stats['count']}w({stats['win_rate']:.0%})")
+                            if tier_summary:
+                                summary += f"\n  Wallet Tiers: {', '.join(tier_summary)}"
+                        except Exception as e:
+                            self.logger.debug(f"Error getting tier stats: {e}")
                     
                     # Check if rotation is due soon
                     rotation_status = self.wallet_rotation_manager.get_rotation_status()

@@ -41,7 +41,7 @@ time_window_sec: 300          # Time window to wait for alpha activity (5 minute
 max_trade_pct: 0.05           # Max % of capital per trade (5%)
 tp_multiplier: 1.25           # Take profit multiplier (1.25x - more realistic)
 stop_loss_pct: 0.92           # Stop loss percentage (8% loss - tighter stop)
-max_hold_seconds: 300         # Maximum time to hold position (5 minutes)
+max_hold_seconds: 900         # Maximum time to hold position (15 minutes) - FIXED: was 300
 
 # Trading execution mode
 trading_mode: "simulation"    # Options: "simulation", "alerts", "auto"

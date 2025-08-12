@@ -1,0 +1,27 @@
+# Testing Dependencies for Memecoin Trading Bot
+
+# Core testing framework
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.1
+pytest-watch>=4.2.0
+
+# Test utilities
+freezegun>=1.2.2          # Mock time for testing
+memory-profiler>=0.60.0    # Memory usage profiling
+psutil>=5.9.0             # System resource monitoring
+
+# Mock and fixture utilities
+responses>=0.23.0         # Mock HTTP requests
+factory-boy>=3.3.0        # Generate test data
+faker>=19.0.0             # Generate fake data
+
+# Performance testing
+locust>=2.16.0            # Load testing
+pytest-benchmark>=4.0.0   # Benchmark tests
+
+# Code quality
+flake8>=6.0.0             # Code style
+mypy>=1.5.0               # Type checking
+black>=23.0.0             # Code formatting

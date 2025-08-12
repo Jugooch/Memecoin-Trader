@@ -287,6 +287,185 @@ class DiscordNotifier:
             description=description
         )
     
+    # NEW ENHANCED NOTIFICATIONS for Implementation Plan
+    
+    async def send_daily_summary(self,
+                                equity: float,
+                                daily_pnl: float,
+                                total_trades: int,
+                                wins: int,
+                                losses: int,
+                                best_trade: Optional[float] = None,
+                                worst_trade: Optional[float] = None,
+                                top_wallet: Optional[str] = None,
+                                top_wallet_wr: Optional[float] = None) -> bool:
+        """Send comprehensive daily summary"""
+        
+        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+        pnl_emoji = "📈" if daily_pnl >= 0 else "📉"
+        
+        fields = {
+            "P&L": f"{pnl_emoji} ${daily_pnl:+.2f} ({daily_pnl/equity*100:+.1f}%)" if equity > 0 else f"{pnl_emoji} ${daily_pnl:+.2f}",
+            "Trades": f"{total_trades} ({wins}W, {losses}L)",
+            "Win Rate": f"{win_rate:.1f}%",
+            "Equity": f"${equity:.2f}"
+        }
+        
+        if best_trade is not None:
+            fields["Best Trade"] = f"+{best_trade:.1f}%"
+            
+        if worst_trade is not None:
+            fields["Worst Trade"] = f"{worst_trade:.1f}%"
+            
+        if top_wallet and top_wallet_wr:
+            fields["Top Wallet"] = f"{top_wallet[:8]}... ({top_wallet_wr:.0f}% WR)"
+        
+        # Color based on daily performance
+        if daily_pnl > 0:
+            color = 0x10B981  # Green
+        elif daily_pnl < -10:
+            color = 0xEF4444  # Red
+        else:
+            color = 0x3B82F6  # Blue
+        
+        return await self.send_embed(
+            title="📊 Daily Summary",
+            fields=fields,
+            color=color
+        )
+    
+    async def send_risk_management_alert(self,
+                                        daily_pnl_pct: float,
+                                        action: str,
+                                        new_requirements: Dict[str, Any]) -> bool:
+        """Send risk management trigger notification"""
+        
+        fields = {
+            "Daily P&L": f"{daily_pnl_pct:+.1f}%",
+            "Action": action
+        }
+        
+        if "min_wallets" in new_requirements:
+            fields["Min Wallets"] = str(new_requirements["min_wallets"])
+        if "min_weight" in new_requirements:
+            fields["Min Weight"] = f"{new_requirements['min_weight']:.1f}"
+        if "max_daily_trades" in new_requirements:
+            fields["Max Daily Trades"] = str(new_requirements["max_daily_trades"])
+        
+        return await self.send_embed(
+            title="⚠️ Risk Management Activated",
+            fields=fields,
+            color=0xF59E0B  # Orange
+        )
+    
+    async def send_big_winner_alert(self, symbol: str, mint: str, pnl_pct: float, hold_time: int) -> bool:
+        """Send notification for exceptional winning trades"""
+        
+        fields = {
+            "Token": f"`{mint[:8]}...`",
+            "Gain": f"📈 +{pnl_pct:.1f}%",
+            "Hold Time": f"{hold_time//60}m {hold_time%60}s",
+            "Symbol": symbol if symbol != "UNKNOWN" else "N/A"
+        }
+        
+        return await self.send_embed(
+            title="🚀 Big Winner!",
+            fields=fields,
+            color=0x10B981  # Green
+        )
+    
+    async def send_stop_loss_alert(self, symbol: str, mint: str, pnl_pct: float, hold_time: int) -> bool:
+        """Send notification for stop loss hits"""
+        
+        fields = {
+            "Token": f"`{mint[:8]}...`",
+            "Loss": f"💀 {pnl_pct:.1f}%",
+            "Hold Time": f"{hold_time//60}m {hold_time%60}s",
+            "Symbol": symbol if symbol != "UNKNOWN" else "N/A"
+        }
+        
+        return await self.send_embed(
+            title="💀 Stop Loss Hit",
+            fields=fields,
+            color=0xEF4444  # Red
+        )
+    
+    async def send_wallet_tier_change(self, wallet: str, old_tier: str, new_tier: str, win_rate: float, trades: int) -> bool:
+        """Send notification for wallet tier changes"""
+        
+        if new_tier == "S":
+            emoji = "⭐"
+            title = "New S-Tier Wallet!"
+            color = 0xFFD700  # Gold
+        elif old_tier in ["A", "B", "C"] and new_tier == "Unknown":
+            emoji = "📉"
+            title = "Wallet Demoted"
+            color = 0xEF4444  # Red
+        else:
+            emoji = "🔄"
+            title = "Wallet Tier Updated"
+            color = 0x3B82F6  # Blue
+        
+        fields = {
+            "Wallet": f"`{wallet[:8]}...`",
+            "Change": f"{old_tier} → {new_tier}",
+            "Win Rate": f"{win_rate:.1f}%",
+            "Trades": str(trades)
+        }
+        
+        return await self.send_embed(
+            title=f"{emoji} {title}",
+            fields=fields,
+            color=color
+        )
+    
+    async def send_system_health_check(self,
+                                      uptime_hours: int,
+                                      moralis_usage: tuple,
+                                      bitquery_usage: tuple,
+                                      active_positions: int,
+                                      memory_mb: int) -> bool:
+        """Send periodic system health notification"""
+        
+        moralis_used, moralis_limit = moralis_usage
+        bitquery_used, bitquery_limit = bitquery_usage
+        
+        fields = {
+            "Uptime": f"{uptime_hours}h",
+            "API Usage": f"Moralis: {moralis_used}/{moralis_limit}\nBitquery: {bitquery_used}/{bitquery_limit}",
+            "Positions": str(active_positions),
+            "Memory": f"{memory_mb} MB"
+        }
+        
+        # Color based on health
+        if moralis_used/moralis_limit > 0.9 or bitquery_used/bitquery_limit > 0.9:
+            color = 0xF59E0B  # Orange - high usage
+        elif memory_mb > 500:
+            color = 0xF59E0B  # Orange - high memory
+        else:
+            color = 0x10B981  # Green - healthy
+        
+        return await self.send_embed(
+            title="❤️ System Health Check",
+            fields=fields,
+            color=color
+        )
+    
+    async def send_cooldown_alert(self, reason: str, duration_minutes: int) -> bool:
+        """Send notification when cooldown is activated"""
+        
+        fields = {
+            "Reason": reason,
+            "Duration": f"{duration_minutes} minutes",
+            "Status": "Trading temporarily reduced"
+        }
+        
+        return await self.send_embed(
+            title="⏰ Cooldown Activated",
+            fields=fields,
+            color=0xF59E0B  # Orange
+        )
+    
     async def close(self):
         """Close the HTTP client"""
         await self._client.aclose()

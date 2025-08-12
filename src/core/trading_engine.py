@@ -94,15 +94,24 @@ class TradingEngine:
             
             return {"success": False, "error": str(e)}
 
-    async def sell_token(self, mint_address: str, percentage: float, paper_mode: bool = True, symbol: str = "UNKNOWN") -> Dict:
+    async def sell_token(self, mint_address: str, percentage: float, paper_mode: bool = True, symbol: str = "UNKNOWN", exit_reason: str = "unknown") -> Dict:
         """Execute a sell order for a token"""
         try:
-            self.logger.info(f"Executing SELL for {mint_address}, percentage: {percentage}")
+            # ENHANCED: Comprehensive exit logging with position details
+            position_info = ""
+            if mint_address in self.active_positions:
+                pos = self.active_positions[mint_address]
+                hold_time = (datetime.now() - pos.entry_time).total_seconds()
+                current_price = await self.moralis.get_current_price(mint_address) or pos.entry_price
+                pnl_pct = ((current_price / pos.entry_price) - 1) * 100 if pos.entry_price > 0 else 0
+                position_info = f"hold_sec={hold_time:.0f} pnl={pnl_pct:+.1f}% entry=${pos.entry_price:.8f} current=${current_price:.8f}"
+            
+            self.logger.info(f"Exit: mint={mint_address[:8]}... reason={exit_reason} percentage={percentage*100:.0f}% {position_info}")
             
             if paper_mode:
-                return await self._execute_paper_sell(mint_address, percentage, symbol)
+                return await self._execute_paper_sell(mint_address, percentage, symbol, exit_reason)
             else:
-                return await self._execute_real_sell(mint_address, percentage)
+                return await self._execute_real_sell(mint_address, percentage, exit_reason)
                 
         except Exception as e:
             self.logger.error(f"Error executing sell: {e}")
@@ -233,7 +242,7 @@ class TradingEngine:
         self.logger.warning("Real trading not implemented, falling back to paper mode")
         return await self._execute_paper_buy(mint_address, usd_amount)
 
-    async def _execute_paper_sell(self, mint_address: str, percentage: float, symbol: str = "UNKNOWN") -> Dict:
+    async def _execute_paper_sell(self, mint_address: str, percentage: float, symbol: str = "UNKNOWN", exit_reason: str = "unknown") -> Dict:
         """Execute a paper trading sell"""
         if mint_address not in self.active_positions:
             return {"success": False, "error": "No position found"}
@@ -342,11 +351,11 @@ class TradingEngine:
             "paper_mode": True
         }
 
-    async def _execute_real_sell(self, mint_address: str, percentage: float) -> Dict:
+    async def _execute_real_sell(self, mint_address: str, percentage: float, exit_reason: str = "unknown") -> Dict:
         """Execute a real sell transaction"""
         # This would require actual wallet integration
         self.logger.warning("Real trading not implemented, falling back to paper mode")
-        return await self._execute_paper_sell(mint_address, percentage)
+        return await self._execute_paper_sell(mint_address, percentage, exit_reason=exit_reason)
 
     async def check_exit_conditions(self, mint_address: str) -> Optional[str]:
         """Check if position should be closed"""
@@ -405,7 +414,7 @@ class TradingEngine:
                     else:
                         sell_pct = 1.0  # Sell all on stop loss or other conditions
                     
-                    await self.sell_token(mint_address, sell_pct, position.paper_mode)
+                    await self.sell_token(mint_address, sell_pct, position.paper_mode, exit_reason=exit_reason)
                     
             except Exception as e:
                 self.logger.error(f"Error updating position {mint_address}: {e}")

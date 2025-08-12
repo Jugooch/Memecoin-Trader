@@ -103,20 +103,22 @@ class WalletPerformanceTracker:
         
         self._atomic_write()
     
-    def record_trade_follow(self, wallet_address: str, mint_address: str, confidence_score: float):
+    def record_trade_follow(self, wallet_address: str, mint_address: str, confidence_score: float, tx_signature: str = None):
         """Record that we followed this wallet's trade"""
         self.initialize_wallet(wallet_address)
         
         wallet_data = self.data["wallets"][wallet_address]
         wallet_data["trades_followed"] += 1
         
-        # Add to trade history
+        # Add to trade history with full mint address and tx signature for proper attribution
         trade_record = {
             "timestamp": time.time(),
-            "mint": mint_address[:16],  # Shortened for storage
+            "mint": mint_address,  # FIXED: Store full mint address
+            "tx_signature": tx_signature,  # NEW: Store transaction signature for better matching
             "confidence_score": confidence_score,
             "outcome": None,  # Will be updated when trade closes
-            "pnl_pct": None
+            "pnl_pct": None,
+            "lookback_window": 900  # 15 minutes lookback for outcome matching
         }
         
         wallet_data["trade_history"].append(trade_record)
@@ -127,17 +129,23 @@ class WalletPerformanceTracker:
         
         self._atomic_write()
     
-    def record_trade_outcome(self, mint_address: str, pnl_pct: float):
+    def record_trade_outcome(self, mint_address: str, pnl_pct: float, exit_timestamp: float = None):
         """Record the outcome of a trade for all wallets that triggered it"""
         is_win = pnl_pct > 0
+        exit_ts = exit_timestamp or time.time()
+        matches_found = 0
         
         for wallet_address, wallet_data in self.data["wallets"].items():
-            # Find the trade in this wallet's history
+            # Find the trade in this wallet's history using proper attribution
             for trade in reversed(wallet_data["trade_history"]):
-                if trade["mint"] == mint_address[:16] and trade["outcome"] is None:
+                # FIXED: Match on full mint address and ensure proper timing
+                if (trade["mint"] == mint_address and 
+                    trade["outcome"] is None and
+                    0 < exit_ts - trade["timestamp"] <= trade.get("lookback_window", 900)):
                     # Update the trade outcome
                     trade["outcome"] = "win" if is_win else "loss"
                     trade["pnl_pct"] = pnl_pct
+                    trade["exit_timestamp"] = exit_ts
                     
                     # Update wallet stats
                     if is_win:
@@ -153,7 +161,14 @@ class WalletPerformanceTracker:
                     # Update wallet tier based on new performance data
                     self.calculate_wallet_tier(wallet_address)
                     
+                    matches_found += 1
                     break
+        
+        # Log attribution results for debugging
+        if matches_found > 0:
+            self.logger.info(f"Trade outcome recorded: mint={mint_address[:8]}... pnl={pnl_pct:.2f}% matched to {matches_found} wallets")
+        else:
+            self.logger.warning(f"No attribution found for trade: mint={mint_address[:8]}... pnl={pnl_pct:.2f}%")
         
         self._atomic_write()
     
