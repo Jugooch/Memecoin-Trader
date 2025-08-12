@@ -129,11 +129,12 @@ class BitqueryClient:
             while True:
                 try:
                     recent_trades = await self.get_recent_token_launches(limit=10)
-                    for trade in recent_trades:
-                        # Parse the raw trade data to extract token info
-                        token_data = self._parse_dex_trade(trade)
-                        if token_data:
-                            yield token_data
+                    if recent_trades:  # Check if not None or empty
+                        for trade in recent_trades:
+                            # Parse the raw trade data to extract token info
+                            token_data = self._parse_dex_trade(trade)
+                            if token_data:
+                                yield token_data
                     await asyncio.sleep(30)  # Poll every 30 seconds
                 except Exception as poll_error:
                     self.logger.error(f"Polling error: {poll_error}")
@@ -144,111 +145,144 @@ class BitqueryClient:
         import websockets
         import json
         
-        # Get current token
-        token_index, api_token = self._get_next_available_token()
-        if not api_token:
-            raise Exception("No available Bitquery API tokens")
-        
-        # EAP endpoint with token in URL (as per Bitquery docs)
-        ws_url = f"wss://streaming.bitquery.io/eap?token={api_token}"
-        
-        # Required headers (only these two)
-        headers = {
-            "Sec-WebSocket-Protocol": "graphql-ws",
-            "Content-Type": "application/json"
-        }
-        
-        self.logger.info(f"Connecting to Bitquery WebSocket: {ws_url[:50]}...")
-        
-        async with websockets.connect(ws_url, additional_headers=headers) as websocket:
-            # Step 1: Initialize connection
-            await websocket.send(json.dumps({"type": "connection_init"}))
-            self.logger.debug("Sent connection_init")
+        # Try tokens until we find one that works
+        for attempt in range(len(self.api_tokens)):
+            # Get current token
+            token_index, api_token = self._get_next_available_token()
+            if not api_token:
+                raise Exception("No available Bitquery API tokens")
             
-            # Step 2: Wait for acknowledgment
-            while True:
-                response = await websocket.recv()
-                response_data = json.loads(response)
-                if response_data.get("type") == "connection_ack":
-                    self.logger.info("WebSocket connection acknowledged")
-                    break
-                elif response_data.get("type") == "error":
-                    raise Exception(f"Connection error: {response_data}")
+            # EAP endpoint with token in URL (as per Bitquery docs)
+            ws_url = f"wss://streaming.bitquery.io/eap?token={api_token}"
             
-            # Step 3: Send subscription
-            subscription_query = """
-            subscription {
-              Solana {
-                DEXTrades(
-                  where: {
-                    Trade: { Dex: { ProtocolName: { is: "pump" } } }
-                    Transaction: { Result: { Success: true } }
-                  }
-                ) {
-                  Block { Time }
-                  Trade {
-                    Dex {
-                      ProtocolFamily
-                      ProtocolName
-                    }
-                    Buy {
-                      Amount
-                      Account { Address }
-                      Currency {
-                        Symbol
-                        MintAddress
-                      }
-                    }
-                    Sell {
-                      Amount
-                      Account { Address }
-                      Currency {
-                        Symbol
-                        MintAddress
-                      }
-                    }
-                  }
-                  Transaction { Signature }
-                }
-              }
+            # Required headers (only these two)
+            headers = {
+                "Sec-WebSocket-Protocol": "graphql-ws",
+                "Content-Type": "application/json"
             }
-            """
             
-            await websocket.send(json.dumps({
-                "type": "start",
-                "id": "1", 
-                "payload": {"query": subscription_query}
-            }))
+            self.logger.info(f"Connecting to Bitquery WebSocket: {ws_url[:50]}...")
             
-            self.logger.info("Bitquery WebSocket subscription started - listening for pump.fun trades...")
-            
-            # Step 4: Listen for messages
-            async for message in websocket:
-                try:
-                    data = json.loads(message)
-                    message_type = data.get("type")
+            try:
+                async with websockets.connect(ws_url, additional_headers=headers) as websocket:
+                    # Step 1: Initialize connection
+                    await websocket.send(json.dumps({"type": "connection_init"}))
+                    self.logger.debug("Sent connection_init")
                     
-                    if message_type == "data":
-                        # Extract trades from the payload
-                        trades = data.get("payload", {}).get("data", {}).get("Solana", {}).get("DEXTrades", [])
-                        for trade in trades:
-                            token_data = self._parse_dex_trade(trade)
-                            if token_data:
-                                yield token_data
+                    # Step 2: Wait for acknowledgment
+                    while True:
+                        response = await websocket.recv()
+                        response_data = json.loads(response)
+                        if response_data.get("type") == "connection_ack":
+                            self.logger.info("WebSocket connection acknowledged")
+                            break
+                        elif response_data.get("type") == "error":
+                            raise Exception(f"Connection error: {response_data}")
+                    
+                    # Step 3: Send subscription
+                    subscription_query = """
+                    subscription {
+                      Solana {
+                        DEXTrades(
+                          where: {
+                            Trade: { Dex: { ProtocolName: { is: "pump" } } }
+                            Transaction: { Result: { Success: true } }
+                          }
+                        ) {
+                          Block { Time }
+                          Trade {
+                            Dex {
+                              ProtocolFamily
+                              ProtocolName
+                            }
+                            Buy {
+                              Amount
+                              Account { Address }
+                              Currency {
+                                Symbol
+                                MintAddress
+                              }
+                            }
+                            Sell {
+                              Amount
+                              Account { Address }
+                              Currency {
+                                Symbol
+                                MintAddress
+                              }
+                            }
+                          }
+                          Transaction { Signature }
+                        }
+                      }
+                    }
+                    """
+                    
+                    await websocket.send(json.dumps({
+                        "type": "start",
+                        "id": "1", 
+                        "payload": {"query": subscription_query}
+                    }))
+                    
+                    self.logger.info("Bitquery WebSocket subscription started - listening for pump.fun trades...")
+                    
+                    # Step 4: Listen for messages
+                    async for message in websocket:
+                        try:
+                            data = json.loads(message)
+                            message_type = data.get("type")
+                            
+                            if message_type == "data":
+                                # Extract trades from the payload
+                                trades = data.get("payload", {}).get("data", {}).get("Solana", {}).get("DEXTrades", [])
+                                for trade in trades:
+                                    token_data = self._parse_dex_trade(trade)
+                                    if token_data:
+                                        yield token_data
+                                        
+                            elif message_type == "ka":
+                                # Keep-alive message - just log occasionally
+                                pass
                                 
-                    elif message_type == "ka":
-                        # Keep-alive message - just log occasionally
-                        pass
-                        
-                    elif message_type == "error":
-                        self.logger.error(f"WebSocket error: {data}")
-                        raise Exception(f"Subscription error: {data}")
-                        
-                except json.JSONDecodeError as e:
-                    self.logger.warning(f"Failed to parse WebSocket message: {e}")
-                except Exception as e:
-                    self.logger.error(f"Error processing WebSocket message: {e}")
-                    raise
+                            elif message_type == "error":
+                                self.logger.error(f"WebSocket error: {data}")
+                                raise Exception(f"Subscription error: {data}")
+                                
+                        except json.JSONDecodeError as e:
+                            self.logger.warning(f"Failed to parse WebSocket message: {e}")
+                        except Exception as e:
+                            self.logger.error(f"Error processing WebSocket message: {e}")
+                    
+                    # If we get here, connection succeeded, so we can return
+                    return
+                    
+            except Exception as ws_error:
+                error_str = str(ws_error)
+                self.logger.warning(f"WebSocket connection failed with token #{token_index}: {error_str}")
+                
+                # Check for payment required error
+                if '402' in error_str or 'Payment Required' in error_str:
+                    # Mark current token as payment required
+                    if token_index is not None:
+                        self.token_stats[token_index]['payment_required'] = True
+                        self.logger.warning(f"Token #{token_index} marked as payment required")
+                    
+                    # Rotate to next token and try again
+                    self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
+                    continue
+                elif '403' in error_str or 'Forbidden' in error_str:
+                    # Mark current token as forbidden and try next
+                    if token_index is not None:
+                        self.logger.warning(f"Token #{token_index} returned 403, trying next token")
+                    self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
+                    continue
+                else:
+                    # For other errors, still try next token
+                    self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
+                    continue
+        
+        # If we exhausted all tokens, raise the last error
+        raise Exception("All Bitquery tokens failed for WebSocket connection")
 
     def _parse_dex_trade(self, trade: Dict) -> Dict:
         """Parse DEX trade data to extract new token info"""
@@ -432,6 +466,9 @@ class BitqueryClient:
                 except Exception as reinit_error:
                     self.logger.error(f"Failed to reinitialize with new token: {reinit_error}")
                     return []
+            
+            # For all other errors (like 403), return empty list
+            return []
     
     async def get_trades_windowed_paginated(self, start_iso: str, end_iso: str, page_limit: int = 3000, max_pages: int = 20) -> List[Dict]:
         """Paginate Bitquery to actually cover the full time window
