@@ -123,16 +123,27 @@ class TradingEngine:
         if price <= 0:
             return {"success": False, "error": "Could not get price"}
         
-        # Calculate SOL amount (assuming SOL = $20 for paper trading)
-        sol_price = 20.0  # Mock SOL price
+        # Calculate SOL amount using current estimate
+        sol_price = getattr(self.config, "paper_trading", {}).get("sol_price_estimate", 140)
         sol_amount = usd_amount / sol_price
         
-        # Apply slippage and fees for realistic simulation
-        fee_bps = getattr(self.config, "fee_bps", 30) if hasattr(self.config, "paper_trading") else 30
-        buy_slip_bps = getattr(self.config, "buy_slippage_bps", 75) if hasattr(self.config, "paper_trading") else 75
+        # Apply realistic fees for alpha-following strategy (not sniping)
+        paper_config = getattr(self.config, "paper_trading", {})
         
-        # Slippage rejection gate - reject if estimated slippage is too high
-        max_slippage_bps = getattr(self.config, "max_slippage_bps", 150) if hasattr(self.config, "paper_trading") else 150
+        # DEX trading fee (pump.fun ~0.30%)
+        dex_fee_bps = paper_config.get("dex_fee_bps", 30)
+        
+        # Network fees (less aggressive since we're following, not sniping)
+        sol_price_usd = paper_config.get("sol_price_estimate", 140)  # Current SOL price estimate
+        base_tx_fee_sol = paper_config.get("base_tx_fee_sol", 0.000005)  # Base Solana tx fee
+        priority_fee_sol = paper_config.get("priority_fee_sol", 0.002)    # Medium priority (not high)
+        network_fee_usd = (base_tx_fee_sol + priority_fee_sol) * sol_price_usd
+        
+        # Slippage (lower since we're not competing with MEV bots)
+        buy_slip_bps = paper_config.get("buy_slippage_bps", 50)  # Reduced from 75
+        max_slippage_bps = paper_config.get("max_slippage_bps", 150)
+        
+        # Slippage rejection gate
         if buy_slip_bps > max_slippage_bps:
             self.logger.warning(f"Trade rejected: estimated slippage {buy_slip_bps}bps > max {max_slippage_bps}bps")
             return {"success": False, "error": f"Slippage too high: {buy_slip_bps/100:.1f}%"}
@@ -140,9 +151,19 @@ class TradingEngine:
         # Calculate fill price with slippage
         fill_price = price * (1 + buy_slip_bps/10000)
         
-        # Calculate tokens received after fees
-        net_usd_amount = usd_amount * (1 - fee_bps/10000)
+        # Calculate total fees: DEX fee + network fee
+        dex_fee_usd = usd_amount * (dex_fee_bps/10000)
+        total_fee_usd = dex_fee_usd + network_fee_usd
+        
+        # Calculate tokens received after all fees
+        net_usd_amount = usd_amount - total_fee_usd
+        if net_usd_amount <= 0:
+            return {"success": False, "error": f"Trade too small: fees (${total_fee_usd:.2f}) exceed trade size"}
+        
         tokens_received = net_usd_amount / fill_price
+        
+        # Log fee breakdown for transparency
+        self.logger.debug(f"Buy fees: DEX ${dex_fee_usd:.3f} + Network ${network_fee_usd:.3f} = ${total_fee_usd:.3f} (on ${usd_amount})")
         
         # Update paper capital
         if self.paper_capital < usd_amount:
@@ -229,17 +250,33 @@ class TradingEngine:
         if tokens_to_sell <= 0:
             return {"success": False, "error": "Nothing to sell"}
         
-        # Apply slippage and fees for realistic simulation
-        fee_bps = getattr(self.config, "fee_bps", 30) if hasattr(self.config, "paper_trading") else 30
-        sell_slip_bps = getattr(self.config, "sell_slippage_bps", 100) if hasattr(self.config, "paper_trading") else 100
+        # Apply realistic fees for alpha-following strategy
+        paper_config = getattr(self.config, "paper_trading", {})
+        
+        # DEX trading fee
+        dex_fee_bps = paper_config.get("dex_fee_bps", 30)
+        
+        # Network fees (same as buy)
+        sol_price_usd = paper_config.get("sol_price_estimate", 140)
+        base_tx_fee_sol = paper_config.get("base_tx_fee_sol", 0.000005)
+        priority_fee_sol = paper_config.get("priority_fee_sol", 0.002)
+        network_fee_usd = (base_tx_fee_sol + priority_fee_sol) * sol_price_usd
+        
+        # Slippage (slightly higher on sells due to market impact)
+        sell_slip_bps = paper_config.get("sell_slippage_bps", 75)  # Reduced from 100
         
         # Calculate fill price with slippage
         fill_price = current_price * (1 - sell_slip_bps/10000)
         
-        # Calculate USD received after fees and correct cost basis
+        # Calculate USD received after all fees
         cost_basis_usd = tokens_to_sell * position.avg_cost_per_token
         gross_usd = tokens_to_sell * fill_price
-        usd_received = gross_usd * (1 - fee_bps/10000)
+        dex_fee_usd = gross_usd * (dex_fee_bps/10000)
+        total_fee_usd = dex_fee_usd + network_fee_usd
+        usd_received = gross_usd - total_fee_usd
+        
+        # Log fee breakdown
+        self.logger.debug(f"Sell fees: DEX ${dex_fee_usd:.3f} + Network ${network_fee_usd:.3f} = ${total_fee_usd:.3f} (on ${gross_usd:.2f})")
         
         # Update position with proper accounting
         position.amount -= tokens_to_sell

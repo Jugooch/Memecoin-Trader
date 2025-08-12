@@ -51,7 +51,7 @@ trading_mode: "simulation"    # Options: "simulation", "alerts", "auto"
 
 # Trading limits
 trading:
-  initial_capital: 100.0      # Starting capital ($)
+  initial_capital: 500.0      # Starting capital ($) - optimized for $15-25 trades
   max_trades_per_day: 20      # Daily trade limit (reasonable for active trading)
   min_time_between_trades: 120 # Minimum seconds between trades (2 minutes to avoid overtrading)
   max_concurrent_positions: 3  # Maximum positions open at once
