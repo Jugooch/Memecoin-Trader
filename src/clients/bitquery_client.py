@@ -155,8 +155,10 @@ class BitqueryClient:
             # EAP endpoint with token in URL (as per Bitquery docs)
             ws_url = f"wss://streaming.bitquery.io/eap?token={api_token}"
             
-            # Try without subprotocol first, as Bitquery might not support it
-            headers = {}
+            # Add WebSocket protocol header as required by Bitquery
+            headers = {
+                "Sec-WebSocket-Protocol": "graphql-ws"
+            }
             
             self.logger.info(f"Connecting to Bitquery WebSocket: {ws_url[:50]}...")
             
