@@ -16,71 +16,48 @@ from pathlib import Path
 # Add parent directory to path  
 sys.path.append(str(Path(__file__).parent))
 
-from src.utils.config_loader import load_config, get_database_path
-from src.core.database import Database
+from src.utils.config_loader import load_config
 from src.utils.pnl_store import PnLStore
 
 
-async def reset_paper_trading_stats():
+def reset_paper_trading_stats():
     """Reset all paper trading statistics"""
     print("🔄 Resetting Paper Trading Statistics...")
     
     try:
         # Load config
         config = load_config('config.yml')
-        db_path = get_database_path(config)
         initial_capital = config.get('trading', {}).get('initial_capital', 500.0)
         
-        print(f"📊 Database: {db_path}")
         print(f"💰 Reset Capital: ${initial_capital}")
-        
-        # Initialize database
-        database = Database(db_path)
-        await database.initialize()
         
         # Reset operations
         print("\n🗑️ Clearing data...")
         
-        # Clear all paper trading trades
-        async with database.get_connection() as db:
-            # Clear paper trades
-            await db.execute("DELETE FROM trades WHERE paper_mode = 1")
-            print("   ✅ Cleared paper trading trades")
-            
-            # Clear positions (they'll be recreated)
-            await db.execute("DELETE FROM positions WHERE paper_mode = 1") 
-            print("   ✅ Cleared paper trading positions")
-            
-            # Clear performance metrics
-            await db.execute("DELETE FROM performance_metrics WHERE 1=1")
-            print("   ✅ Cleared performance metrics")
-            
-            # Reset paper trading stats in the bot (if table exists)
-            try:
-                await db.execute("""
-                    UPDATE bot_stats 
-                    SET paper_capital = ?, daily_pnl = 0, total_trades = 0 
-                    WHERE 1=1
-                """, (initial_capital,))
-                print("   ✅ Reset bot statistics")
-            except:
-                # Table might not exist yet
-                pass
-            
-            await db.commit()
+        # Clear P&L store JSON files
+        pnl_files = [
+            'data/pnl_state.json',    # Main P&L store
+            'pnl_data.json',          # Legacy/alternative locations
+            'data/pnl_data.json',
+            'logs/pnl_data.json'
+        ]
         
-        # Clear P&L store files if they exist
-        pnl_files = ['pnl_data.json', 'data/pnl_data.json', 'logs/pnl_data.json']
         for pnl_file in pnl_files:
             if os.path.exists(pnl_file):
                 os.remove(pnl_file)
                 print(f"   ✅ Removed {pnl_file}")
         
+        # Create fresh P&L store with reset capital
+        pnl_store = PnLStore("data/pnl_state.json", initial_capital)
+        print("   ✅ Created fresh P&L store")
+        
         # Clear any cached data files
         cache_files = [
             'data/token_cache.json', 
             'data/alpha_cache.json',
-            'logs/daily_summary.json'
+            'logs/daily_summary.json',
+            'data/wallet_performance.json',
+            'data/trade_analytics.json'
         ]
         for cache_file in cache_files:
             if os.path.exists(cache_file):
@@ -92,23 +69,15 @@ async def reset_paper_trading_stats():
         print(f"🕐 Reset timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         # Show reset summary
-        async with database.get_connection() as db:
-            # Count remaining trades (should be 0)
-            cursor = await db.execute("SELECT COUNT(*) FROM trades WHERE paper_mode = 1")
-            trade_count = (await cursor.fetchone())[0]
-            
-            cursor = await db.execute("SELECT COUNT(*) FROM positions WHERE paper_mode = 1") 
-            position_count = (await cursor.fetchone())[0]
-            
-            print(f"\n📊 Post-reset verification:")
-            print(f"   Paper Trades: {trade_count}")
-            print(f"   Active Positions: {position_count}")
-        
-        await database.close()
+        summary = pnl_store.get_summary()
+        print(f"\n📊 Post-reset verification:")
+        print(f"   Starting Capital: ${summary['starting_capital']}")
+        print(f"   Current Equity: ${summary['equity']}")
+        print(f"   Total Trades: {summary['total_trades']}")
+        print(f"   Active Positions: {summary['active_positions']}")
         
     except Exception as e:
         print(f"❌ Error during reset: {e}")
-        print(f"   This is normal if database doesn't exist yet")
         return False
     
     return True
@@ -133,7 +102,7 @@ def reset_log_files():
     print("   ✅ Log files cleared")
 
 
-async def main():
+def main():
     """Main reset function"""
     print("=" * 50)
     print("🔄 PAPER TRADING RESET UTILITY")
@@ -145,8 +114,8 @@ async def main():
         print("❌ Reset cancelled")
         return
     
-    # Reset database
-    success = await reset_paper_trading_stats()
+    # Reset P&L data
+    success = reset_paper_trading_stats()
     
     if success:
         # Reset logs
@@ -157,9 +126,12 @@ async def main():
         print("=" * 50)
         print("\n🚀 You can now start the bot with clean stats:")
         print("   python start_bot.py")
+        print("\n📊 Expected trade sizes with new config:")
+        print("   $500 capital × 5% = $25 max trade size")
+        print("   Realistic fees: ~$0.34 per $20 trade (1.7%)")
     else:
         print("\n❌ Reset failed - check error messages above")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
