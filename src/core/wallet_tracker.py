@@ -301,6 +301,12 @@ class WalletTracker:
 
     def get_wallet_tier(self, wallet_address: str) -> str:
         """Get the performance tier for a wallet (S, A, B, C)"""
+        # Get tier from performance tracker (where real data lives)
+        wallet_stats = self.performance_tracker.get_wallet_stats(wallet_address)
+        if wallet_stats and 'current_tier' in wallet_stats:
+            return wallet_stats['current_tier']
+        
+        # Fallback to old system if available
         if wallet_address in self.wallet_tiers:
             return self.wallet_tiers[wallet_address]
         
@@ -582,3 +588,11 @@ class WalletTracker:
     def get_performance_summary(self):
         """Get performance tracking summary"""
         return self.performance_tracker.get_summary()
+    
+    def recalculate_all_wallet_tiers(self):
+        """Recalculate tiers for all wallets based on performance data"""
+        return self.performance_tracker.recalculate_all_tiers()
+    
+    def get_tier_performance_stats(self):
+        """Get performance statistics grouped by wallet tiers"""
+        return self.performance_tracker.get_tier_performance_stats()

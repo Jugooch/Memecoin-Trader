@@ -179,20 +179,35 @@ class WalletRotationManager:
         
         self.logger.info("=" * 60)
         
-        # Step 9: Get performance summary and send Discord notification
+        # Step 9: Get performance summary and tier stats for Discord notification
         performance_summary = self.wallet_tracker.get_performance_summary()
+        tier_stats = self.wallet_tracker.get_tier_performance_stats()
+        
         self.logger.info(f"Performance summary: {performance_summary['active_wallets']}/{performance_summary['total_wallets']} active, "
                         f"win rate: {performance_summary['overall_win_rate']:.1%}")
         
         # Send Discord notification about rotation
         if self.discord_notifier and (len(added_wallets) > 0 or len(removed_wallets) > 0):
+            # Build tier performance breakdown
+            tier_breakdown = []
+            for tier in ['S', 'A', 'B', 'C', 'Unknown']:
+                stats = tier_stats[tier]
+                if stats['count'] > 0:
+                    tier_breakdown.append(
+                        f"**{tier}**: {stats['count']} wallets, {stats['trades']} trades, "
+                        f"{stats['win_rate']:.1%} WR, {stats['avg_pnl']:.1f}% avg P/L"
+                    )
+            
+            tier_section = "\n".join(tier_breakdown) if tier_breakdown else "No wallet performance data yet"
+            
             rotation_message = f"🔄 **Wallet Rotation Completed** ({total_time:.0f}s)\n" \
                              f"• Kept: {len(kept_wallets)} high-performing wallets\n" \
                              f"• Added: {len(added_wallets)} new alpha wallets\n" \
                              f"• Removed: {len(removed_wallets)} underperforming wallets\n" \
                              f"• **Total: {len(final_wallets)} wallets active**\n" \
                              f"• Performance: {performance_summary['active_wallets']}/{performance_summary['total_wallets']} active, " \
-                             f"{performance_summary['overall_win_rate']:.1%} win rate"
+                             f"{performance_summary['overall_win_rate']:.1%} win rate\n\n" \
+                             f"**📊 Wallet Tier Breakdown:**\n{tier_section}"
             
             try:
                 await self.discord_notifier.send_text(rotation_message)

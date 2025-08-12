@@ -150,9 +150,101 @@ class WalletPerformanceTracker:
                     wallet_data["total_pnl_pct"] += pnl_pct
                     wallet_data["avg_pnl_pct"] = wallet_data["total_pnl_pct"] / total_trades if total_trades > 0 else 0
                     
+                    # Update wallet tier based on new performance data
+                    self.calculate_wallet_tier(wallet_address)
+                    
                     break
         
         self._atomic_write()
+    
+    def calculate_wallet_tier(self, wallet_address: str) -> str:
+        """Calculate wallet tier based on performance metrics (S, A, B, C)"""
+        if wallet_address not in self.data["wallets"]:
+            return "Unknown"
+        
+        wallet_data = self.data["wallets"][wallet_address]
+        total_trades = wallet_data["wins"] + wallet_data["losses"]
+        
+        # Need at least 3 trades for reliable tier calculation
+        if total_trades < 3:
+            return "Unknown"
+        
+        win_rate = wallet_data["wins"] / total_trades
+        avg_profit_pct = wallet_data["avg_pnl_pct"]
+        
+        # Tier calculation logic (same as WalletTracker)
+        if win_rate >= 0.70 and avg_profit_pct >= 100:
+            tier = 'S'
+        elif win_rate >= 0.60 and avg_profit_pct >= 50:
+            tier = 'A'
+        elif win_rate >= 0.50 and avg_profit_pct >= 20:
+            tier = 'B'
+        else:
+            tier = 'C'
+        
+        # Update the wallet's tier
+        old_tier = wallet_data.get("current_tier", "Unknown")
+        wallet_data["current_tier"] = tier
+        
+        # Save if tier changed
+        if old_tier != tier:
+            self._atomic_write()
+        
+        return tier
+    
+    def recalculate_all_tiers(self):
+        """Recalculate tiers for all wallets based on current performance data"""
+        updated_count = 0
+        tier_changes = []
+        
+        for wallet_address in self.data["wallets"]:
+            old_tier = self.data["wallets"][wallet_address].get("current_tier", "Unknown")
+            new_tier = self.calculate_wallet_tier(wallet_address)
+            
+            if old_tier != new_tier:
+                updated_count += 1
+                tier_changes.append(f"{wallet_address[:8]}... {old_tier}→{new_tier}")
+        
+        if updated_count > 0:
+            self._atomic_write()
+        
+        return {
+            "updated_count": updated_count,
+            "tier_changes": tier_changes
+        }
+    
+    def get_tier_performance_stats(self) -> Dict:
+        """Get performance statistics grouped by wallet tiers"""
+        tier_stats = {
+            'S': {'count': 0, 'trades': 0, 'wins': 0, 'total_pnl': 0.0},
+            'A': {'count': 0, 'trades': 0, 'wins': 0, 'total_pnl': 0.0},
+            'B': {'count': 0, 'trades': 0, 'wins': 0, 'total_pnl': 0.0},
+            'C': {'count': 0, 'trades': 0, 'wins': 0, 'total_pnl': 0.0},
+            'Unknown': {'count': 0, 'trades': 0, 'wins': 0, 'total_pnl': 0.0}
+        }
+        
+        for wallet_address, wallet_data in self.data["wallets"].items():
+            # Get wallet tier (calculate if needed)
+            tier = self.calculate_wallet_tier(wallet_address)
+            if tier not in tier_stats:
+                tier = 'Unknown'
+                
+            # Update tier statistics
+            tier_stats[tier]['count'] += 1
+            tier_stats[tier]['trades'] += wallet_data['wins'] + wallet_data['losses']
+            tier_stats[tier]['wins'] += wallet_data['wins']
+            tier_stats[tier]['total_pnl'] += wallet_data.get('total_pnl_pct', 0.0)
+        
+        # Calculate win rates and average PnL for each tier
+        for tier, stats in tier_stats.items():
+            if stats['trades'] > 0:
+                stats['win_rate'] = stats['wins'] / stats['trades']
+                stats['avg_pnl'] = stats['total_pnl'] / stats['trades']
+            else:
+                stats['win_rate'] = 0.0
+                stats['avg_pnl'] = 0.0
+        
+        return tier_stats
     
     def evaluate_wallet(self, wallet_address: str) -> float:
         """Calculate evaluation score for a wallet (0-100)"""
@@ -162,17 +254,17 @@ class WalletPerformanceTracker:
         wallet_data = self.data["wallets"][wallet_address]
         current_time = time.time()
         
-        # Activity Score (0-40 points)
+        # Activity Score (0-40 points) - Tighter windows for 2-hour rotation cycle
         last_activity = wallet_data.get("last_activity", 0)
         time_since_activity = current_time - last_activity
         
-        if time_since_activity < 2 * 3600:  # < 2 hours
+        if time_since_activity < 30 * 60:  # < 30 minutes
             activity_score = 40
-        elif time_since_activity < 6 * 3600:  # < 6 hours
+        elif time_since_activity < 60 * 60:  # < 1 hour
             activity_score = 30
-        elif time_since_activity < 12 * 3600:  # < 12 hours
+        elif time_since_activity < 2 * 3600:  # < 2 hours
             activity_score = 20
-        elif time_since_activity < 24 * 3600:  # < 24 hours
+        elif time_since_activity < 4 * 3600:  # < 4 hours
             activity_score = 10
         else:
             activity_score = 0
@@ -183,7 +275,7 @@ class WalletPerformanceTracker:
             win_rate = wallet_data["wins"] / total_trades
             performance_score = win_rate * 40
         else:
-            performance_score = 20  # Neutral score for new wallets
+            performance_score = 5  # Low score for inactive wallets to encourage rotation
         
         # Hit Rate Score (0-20 points)
         trades_detected = wallet_data.get("trades_detected", 0)
@@ -215,10 +307,10 @@ class WalletPerformanceTracker:
             if score >= 70:
                 keep_wallets.append(wallet_address)
             elif score >= min_score:
-                # Check if active in last 6 hours
+                # Check if active in last 2 hours (consistent with new activity scoring)
                 wallet_data = self.data["wallets"][wallet_address]
                 last_activity = wallet_data.get("last_activity", 0)
-                if time.time() - last_activity < 6 * 3600:
+                if time.time() - last_activity < 2 * 3600:
                     keep_wallets.append(wallet_address)
                 else:
                     replace_candidates.append(wallet_address)
@@ -271,7 +363,7 @@ class WalletPerformanceTracker:
         last_activity = wallet_data.get("last_activity", 0)
         hours_since_activity = (time.time() - last_activity) / 3600
         wallet_data["hours_since_activity"] = hours_since_activity
-        wallet_data["is_active"] = hours_since_activity < 6
+        wallet_data["is_active"] = hours_since_activity < 2  # Consistent with new 2-hour window
         
         return wallet_data
     
@@ -284,7 +376,7 @@ class WalletPerformanceTracker:
         
         for wallet_data in self.data["wallets"].values():
             last_activity = wallet_data.get("last_activity", 0)
-            if time.time() - last_activity < 6 * 3600:  # Active in last 6 hours
+            if time.time() - last_activity < 2 * 3600:  # Active in last 2 hours
                 active_wallets += 1
             
             total_trades += wallet_data["wins"] + wallet_data["losses"]
