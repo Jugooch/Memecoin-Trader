@@ -103,6 +103,7 @@ class BitqueryClient:
         self.client = Client(transport=http_transport)
         
         # WebSocket transport for subscriptions (using EAP endpoint for Solana)
+        # Note: Token MUST be in URL, not headers per Bitquery docs
         ws_url = f"wss://streaming.bitquery.io/eap?token={api_token}"
         ws_transport = WebsocketsTransport(
             url=ws_url,
@@ -116,11 +117,66 @@ class BitqueryClient:
 
     async def subscribe_token_launches(self) -> AsyncGenerator[Dict, None]:
         """Subscribe to new Pump.fun token creation events"""
-        if not self.ws_client:
-            await self.initialize()
+        # Try WebSocket first with proper Bitquery protocol
+        try:
+            async for token_data in self._websocket_subscription():
+                yield token_data
+        except Exception as e:
+            self.logger.error(f"WebSocket subscription failed: {e}")
+            self.logger.info("Falling back to polling mode...")
+            
+            # Fallback to polling recent launches
+            while True:
+                try:
+                    recent_trades = await self.get_recent_token_launches(limit=10)
+                    for trade in recent_trades:
+                        # Parse the raw trade data to extract token info
+                        token_data = self._parse_dex_trade(trade)
+                        if token_data:
+                            yield token_data
+                    await asyncio.sleep(30)  # Poll every 30 seconds
+                except Exception as poll_error:
+                    self.logger.error(f"Polling error: {poll_error}")
+                    await asyncio.sleep(60)
+
+    async def _websocket_subscription(self) -> AsyncGenerator[Dict, None]:
+        """Direct WebSocket implementation following Bitquery docs exactly"""
+        import websockets
+        import json
         
-        # GraphQL subscription using correct V2 schema for pump.fun
-        subscription = gql("""
+        # Get current token
+        token_index, api_token = self._get_next_available_token()
+        if not api_token:
+            raise Exception("No available Bitquery API tokens")
+        
+        # EAP endpoint with token in URL (as per Bitquery docs)
+        ws_url = f"wss://streaming.bitquery.io/eap?token={api_token}"
+        
+        # Required headers (only these two)
+        headers = {
+            "Sec-WebSocket-Protocol": "graphql-ws",
+            "Content-Type": "application/json"
+        }
+        
+        self.logger.info(f"Connecting to Bitquery WebSocket: {ws_url[:50]}...")
+        
+        async with websockets.connect(ws_url, extra_headers=headers) as websocket:
+            # Step 1: Initialize connection
+            await websocket.send(json.dumps({"type": "connection_init"}))
+            self.logger.debug("Sent connection_init")
+            
+            # Step 2: Wait for acknowledgment
+            while True:
+                response = await websocket.recv()
+                response_data = json.loads(response)
+                if response_data.get("type") == "connection_ack":
+                    self.logger.info("WebSocket connection acknowledged")
+                    break
+                elif response_data.get("type") == "error":
+                    raise Exception(f"Connection error: {response_data}")
+            
+            # Step 3: Send subscription
+            subscription_query = """
             subscription {
               Solana {
                 DEXTrades(
@@ -138,50 +194,61 @@ class BitqueryClient:
                     Buy {
                       Amount
                       Account { Address }
+                      Currency {
+                        Symbol
+                        MintAddress
+                      }
                     }
                     Sell {
                       Amount
                       Account { Address }
+                      Currency {
+                        Symbol
+                        MintAddress
+                      }
                     }
                   }
                   Transaction { Signature }
                 }
               }
             }
-        """)
-        
-        self.logger.info("Starting Bitquery subscription for token launches")
-        
-        try:
-            # Connect to WebSocket first
-            await self.ws_client.transport.connect()
+            """
             
-            # Now subscribe and iterate
-            subscription_iterator = self.ws_client.subscribe(subscription)
-            async for result in subscription_iterator:
-                if 'Solana' in result and 'DEXTrades' in result['Solana']:
-                    for trade in result['Solana']['DEXTrades']:
-                        token_data = self._parse_dex_trade(trade)
-                        if token_data:
-                            yield token_data
-                            
-        except Exception as e:
-            self.logger.error(f"Bitquery subscription error: {e}")
-            self.logger.info("Falling back to polling mode...")
+            await websocket.send(json.dumps({
+                "type": "start",
+                "id": "1", 
+                "payload": {"query": subscription_query}
+            }))
             
-            # Fallback to polling recent launches
-            while True:
+            self.logger.info("Bitquery WebSocket subscription started - listening for pump.fun trades...")
+            
+            # Step 4: Listen for messages
+            async for message in websocket:
                 try:
-                    recent_trades = await self.get_recent_token_launches(limit=10)
-                    for trade in recent_trades:
-                        # Parse the raw trade data to extract token info
-                        token_data = self._parse_dex_trade(trade)
-                        if token_data:
-                            yield token_data
-                    await asyncio.sleep(30)  # Poll every 30 seconds
-                except Exception as poll_error:
-                    self.logger.error(f"Polling error: {poll_error}")
-                    await asyncio.sleep(60)
+                    data = json.loads(message)
+                    message_type = data.get("type")
+                    
+                    if message_type == "data":
+                        # Extract trades from the payload
+                        trades = data.get("payload", {}).get("data", {}).get("Solana", {}).get("DEXTrades", [])
+                        for trade in trades:
+                            token_data = self._parse_dex_trade(trade)
+                            if token_data:
+                                yield token_data
+                                
+                    elif message_type == "ka":
+                        # Keep-alive message - just log occasionally
+                        pass
+                        
+                    elif message_type == "error":
+                        self.logger.error(f"WebSocket error: {data}")
+                        raise Exception(f"Subscription error: {data}")
+                        
+                except json.JSONDecodeError as e:
+                    self.logger.warning(f"Failed to parse WebSocket message: {e}")
+                except Exception as e:
+                    self.logger.error(f"Error processing WebSocket message: {e}")
+                    raise
 
     def _parse_dex_trade(self, trade: Dict) -> Dict:
         """Parse DEX trade data to extract new token info"""

@@ -16,12 +16,14 @@ from src.core.database import Database
 
 class WalletRotationManager:
     def __init__(self, wallet_tracker: WalletTracker, bitquery: BitqueryClient, 
-                 moralis: MoralisClient, database: Database, config_path: str = "config/config.yml"):
+                 moralis: MoralisClient, database: Database, config_path: str = "config/config.yml",
+                 discord_notifier=None):
         self.wallet_tracker = wallet_tracker
         self.bitquery = bitquery
         self.moralis = moralis
         self.database = database
         self.config_path = config_path
+        self.discord_notifier = discord_notifier
         self.logger = logging.getLogger(__name__)
         
         # Rotation settings
@@ -177,10 +179,25 @@ class WalletRotationManager:
         
         self.logger.info("=" * 60)
         
-        # Step 9: Get performance summary
+        # Step 9: Get performance summary and send Discord notification
         performance_summary = self.wallet_tracker.get_performance_summary()
         self.logger.info(f"Performance summary: {performance_summary['active_wallets']}/{performance_summary['total_wallets']} active, "
                         f"win rate: {performance_summary['overall_win_rate']:.1%}")
+        
+        # Send Discord notification about rotation
+        if self.discord_notifier and (len(added_wallets) > 0 or len(removed_wallets) > 0):
+            rotation_message = f"🔄 **Wallet Rotation Completed** ({total_time:.0f}s)\n" \
+                             f"• Kept: {len(kept_wallets)} high-performing wallets\n" \
+                             f"• Added: {len(added_wallets)} new alpha wallets\n" \
+                             f"• Removed: {len(removed_wallets)} underperforming wallets\n" \
+                             f"• **Total: {len(final_wallets)} wallets active**\n" \
+                             f"• Performance: {performance_summary['active_wallets']}/{performance_summary['total_wallets']} active, " \
+                             f"{performance_summary['overall_win_rate']:.1%} win rate"
+            
+            try:
+                await self.discord_notifier.send_message(rotation_message)
+            except Exception as e:
+                self.logger.warning(f"Failed to send rotation notification to Discord: {e}")
     
     async def _update_config_file(self, wallet_list: List[str]):
         """Update the config file with new wallet list"""

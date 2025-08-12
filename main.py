@@ -75,7 +75,7 @@ class MemecoinTradingBot:
         self.trading_engine = TradingEngine(self.config, moralis_client=self.moralis)
         self.database = Database(self.config.database_file)
         
-        # Initialize wallet rotation manager
+        # Initialize wallet rotation manager (will get discord notifier later)
         self.wallet_rotation_manager = WalletRotationManager(
             self.wallet_tracker, self.bitquery, self.moralis, self.database, config_path
         )
@@ -159,6 +159,9 @@ class MemecoinTradingBot:
                 f"Starting Capital: ${self.config.initial_capital}\n"
                 f"Watching {len(self.config.watched_wallets)} alpha wallets"
             )
+            
+            # Pass discord notifier to rotation manager
+            self.wallet_rotation_manager.discord_notifier = self.trading_engine.notifier
         
         # Initialize database
         await self.database.initialize()
@@ -898,6 +901,18 @@ class MemecoinTradingBot:
                     
                     # Add wallet status
                     summary += f"\n  Alpha Wallets: {len(active_wallets)}/{total_wallets} active, {len(inactive_wallets)} inactive"
+                    
+                    # Add wallet performance summary
+                    perf_summary = self.wallet_tracker.get_performance_summary()
+                    if perf_summary['total_trades'] > 0:
+                        summary += f"\n  Performance: {perf_summary['overall_win_rate']:.1%} win rate, " \
+                                  f"{perf_summary['total_trades']} total trades tracked"
+                    
+                    # Check if rotation is due soon
+                    rotation_status = self.wallet_rotation_manager.get_rotation_status()
+                    time_until_rotation = rotation_status['time_until_next_rotation']
+                    if time_until_rotation < 600:  # Less than 10 minutes
+                        summary += f"\n  🔄 Wallet rotation in {int(time_until_rotation/60)} minutes"
                     
                     # Add deduplication savings if significant
                     if dedup_stats['deduped_checks'] > 0:
