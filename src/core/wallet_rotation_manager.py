@@ -195,7 +195,7 @@ class WalletRotationManager:
                              f"{performance_summary['overall_win_rate']:.1%} win rate"
             
             try:
-                await self.discord_notifier.send_message(rotation_message)
+                await self.discord_notifier.send_text(rotation_message)
             except Exception as e:
                 self.logger.warning(f"Failed to send rotation notification to Discord: {e}")
     

@@ -160,7 +160,7 @@ class BitqueryClient:
         
         self.logger.info(f"Connecting to Bitquery WebSocket: {ws_url[:50]}...")
         
-        async with websockets.connect(ws_url, extra_headers=headers) as websocket:
+        async with websockets.connect(ws_url, additional_headers=headers) as websocket:
             # Step 1: Initialize connection
             await websocket.send(json.dumps({"type": "connection_init"}))
             self.logger.debug("Sent connection_init")
