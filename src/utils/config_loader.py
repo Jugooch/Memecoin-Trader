@@ -55,6 +55,14 @@ def load_config(config_filename: str = "config.yml") -> Dict[str, Any]:
         if isinstance(config_data['bitquery_tokens'], str):
             config_data['bitquery_tokens'] = [config_data['bitquery_tokens']]
     
+    # Set default realtime source if not specified
+    if 'realtime_source' not in config_data:
+        # Default to pumpportal if configured, otherwise bitquery
+        if 'pumpportal' in config_data and config_data['pumpportal'].get('api_key'):
+            config_data['realtime_source'] = 'pumpportal'
+        else:
+            config_data['realtime_source'] = 'bitquery'
+    
     return config_data
 
 

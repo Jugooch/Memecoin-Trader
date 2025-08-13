@@ -21,7 +21,7 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from src.clients.bitquery_client import BitqueryClient
+from src.clients.realtime_client import RealtimeClient
 from src.clients.moralis_client import MoralisClient
 from src.clients.pumpfun_client import PumpFunClient
 from src.core.wallet_tracker import WalletTracker
@@ -63,7 +63,7 @@ class MemecoinTradingBot:
         self.config = self._load_config(config_path)
         self.logger = setup_logging(self.config.logging_level, self.config.logging_file)
         
-        self.bitquery = BitqueryClient(self.config.bitquery_token)
+        self.realtime_client = RealtimeClient(self._get_realtime_config())
         self.moralis = MoralisClient(self.config.moralis_key)
         
         # QuickNode is optional - only for automated trading
@@ -77,7 +77,7 @@ class MemecoinTradingBot:
         
         # Initialize wallet rotation manager (will get discord notifier later)
         self.wallet_rotation_manager = WalletRotationManager(
-            self.wallet_tracker, self.bitquery, self.moralis, self.database, config_path
+            self.wallet_tracker, self.realtime_client.bitquery_client, self.moralis, self.database, config_path
         )
         
         self.running = False
@@ -143,6 +143,17 @@ class MemecoinTradingBot:
             notifications=config_data.get('notifications', {})  # Add notifications section
         )
 
+    def _get_realtime_config(self) -> Dict:
+        """Get configuration for realtime client"""
+        # Load the full config data again
+        config_data = load_config('config.yml')
+        
+        return {
+            'bitquery_tokens': config_data.get('bitquery_tokens'),
+            'pumpportal': config_data.get('pumpportal', {}),
+            'realtime_source': config_data.get('realtime_source', 'pumpportal')
+        }
+
     async def start(self):
         """Start the trading bot"""
         self.logger.info("Starting Memecoin Trading Bot")
@@ -166,6 +177,10 @@ class MemecoinTradingBot:
         # Initialize database
         await self.database.initialize()
         
+        # Initialize realtime client
+        await self.realtime_client.initialize()
+        self.logger.info(f"Realtime client initialized with source: {self.realtime_client.get_source()}")
+        
         # Start monitoring tasks
         await asyncio.gather(
             self.monitor_new_tokens(),
@@ -180,7 +195,7 @@ class MemecoinTradingBot:
         """Monitor for new token launches via Bitquery"""
         self.logger.info("Starting token launch monitoring")
         
-        async for token_event in self.bitquery.subscribe_token_launches():
+        async for token_event in self.realtime_client.subscribe_token_launches():
             if not self.running:
                 break
                 
@@ -1026,7 +1041,7 @@ class MemecoinTradingBot:
             
             # Create discovery instance
             finder = ProvenAlphaFinder(
-                bitquery=self.bitquery,
+                bitquery=self.realtime_client.bitquery_client,
                 moralis=self.moralis, 
                 database=self.database
             )
@@ -1139,6 +1154,9 @@ class MemecoinTradingBot:
         
         # Stop wallet rotation
         self.wallet_rotation_manager.stop_rotation()
+        
+        # Close realtime client
+        await self.realtime_client.close()
         
         # Send shutdown notification to Discord
         if self.trading_engine.notifier:

@@ -14,6 +14,17 @@ bitquery_tokens:
 # Legacy single token support (will be converted to list)
 bitquery_token: "your_bitquery_token_here"
 
+# Pump Portal API configuration (recommended for real-time feeds)
+pumpportal:
+  api_key: "your_pumpportal_api_key_here"
+  wallet_public_key: "your_wallet_public_key_here"    # Optional: for trading features
+  wallet_private_key: "your_wallet_private_key_here"  # Optional: for trading features  
+  ws_endpoint: "wss://pumpportal.fun/api/data"
+  trade_endpoint: "https://pumpportal.fun/api/trade"
+
+# Choose your real-time data source
+realtime_source: "pumpportal"  # Options: "pumpportal" (recommended) or "bitquery"
+
 # Moralis API Keys - You can add multiple keys for rotation
 # Get from https://moralis.io (sign up for free accounts)
 moralis_keys:
