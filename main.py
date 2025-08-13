@@ -863,10 +863,54 @@ class MemecoinTradingBot:
             self.trades_today = 0
             self.logger.info("Daily trade counter reset")
     
+    async def diagnostic_check(self):
+        """Run diagnostic checks on the realtime connection"""
+        self.logger.info("=== DIAGNOSTIC CHECK ===")
+        
+        try:
+            # Get diagnostic info
+            diag_info = await self.realtime_client.get_diagnostic_info()
+            self.logger.info(f"Realtime client diagnostic: {diag_info}")
+            
+            # Check connection status
+            is_connected = self.realtime_client.is_connected()
+            self.logger.info(f"Realtime client connected: {is_connected}")
+            
+            # Test a simple message receive (with timeout)
+            self.logger.info("Testing message reception...")
+            message_received = False
+            
+            try:
+                async def test_messages():
+                    nonlocal message_received
+                    async for token_data in self.realtime_client.subscribe_token_launches():
+                        self.logger.info(f"Test message received: {token_data}")
+                        message_received = True
+                        break
+                
+                # Run test with 10 second timeout
+                await asyncio.wait_for(test_messages(), timeout=10.0)
+                
+            except asyncio.TimeoutError:
+                self.logger.warning("No messages received within 10 seconds - this indicates a subscription issue")
+                
+                # Try to get more detailed connection info
+                if hasattr(self.realtime_client, 'pumpportal_client') and self.realtime_client.pumpportal_client:
+                    conn_info = await self.realtime_client.pumpportal_client.get_connection_info()
+                    self.logger.info(f"Detailed PumpPortal connection info: {conn_info}")
+            
+        except Exception as e:
+            self.logger.error(f"Diagnostic check failed: {e}")
+        
+        self.logger.info("=== END DIAGNOSTIC ===")
+
     async def heartbeat_task(self):
         """Show periodic heartbeat status instead of constant WebSocket spam"""
         last_ws_activity = time.time()
         ws_active = True
+        
+        # Run diagnostic check after 60 seconds
+        diagnostic_run = False
         
         while self.running:
             await asyncio.sleep(30)  # Every 30 seconds
@@ -879,11 +923,17 @@ class MemecoinTradingBot:
             elif current_time - last_ws_activity > 60:  # No activity for 60 seconds
                 ws_active = False
             
+            # Run diagnostic check after 60 seconds of no activity
+            if not diagnostic_run and current_time - last_ws_activity > 60:
+                self.logger.warning("No activity detected for 60 seconds - running diagnostic check...")
+                await self.diagnostic_check()
+                diagnostic_run = True
+            
             # Only show heartbeat if no other activity
             if ws_active and self.tokens_processed == 0:
                 self.logger.debug("WebSocket active - monitoring for new tokens...")
             elif not ws_active:
-                self.logger.warning("No WebSocket activity detected - checking connection...")
+                self.logger.warning("No WebSocket activity detected - connection may be inactive")
     
     async def periodic_summary_task(self):
         """Log periodic summary to show the bot is working"""

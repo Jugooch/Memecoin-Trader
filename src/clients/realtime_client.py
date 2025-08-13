@@ -174,3 +174,25 @@ class RealtimeClient:
             return {"error": "Bitquery client not available"}
         
         return self.bitquery_client.get_token_status()
+    
+    async def get_diagnostic_info(self) -> Dict:
+        """Get diagnostic information for troubleshooting"""
+        info = {
+            'active_source': self.source,
+            'bitquery_available': bool(self.bitquery_client),
+            'pumpportal_available': bool(self.pumpportal_client),
+        }
+        
+        # Get connection status
+        if self.source == 'pumpportal' and self.pumpportal_client:
+            info['pumpportal_connected'] = self.pumpportal_client.is_connected()
+            try:
+                info['pumpportal_details'] = await self.pumpportal_client.get_connection_info()
+            except Exception as e:
+                info['pumpportal_error'] = str(e)
+        
+        if self.bitquery_client:
+            info['bitquery_connected'] = hasattr(self.bitquery_client, 'client') and self.bitquery_client.client is not None
+            info['bitquery_token_status'] = self.bitquery_client.get_token_status()
+        
+        return info
