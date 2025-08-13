@@ -8,15 +8,22 @@ import time
 from typing import List, Set, Dict
 from src.clients.moralis_client import MoralisClient
 from src.utils.wallet_performance import WalletPerformanceTracker
+from src.core.wallet_scorer import WalletScorer
 
 
 class WalletTracker:
-    def __init__(self, watched_wallets: List[str]):
+    def __init__(self, watched_wallets: List[str], config: Dict = None):
         self.watched_wallets = set(watched_wallets)
         self.logger = logging.getLogger(__name__)
+        self.config = config or {}
         
         # Initialize performance tracker
         self.performance_tracker = WalletPerformanceTracker()
+        
+        # Initialize Bayesian wallet scorer with Beta(3,5) prior
+        prior_alpha = self.config.get('beta_prior_alpha', 3)
+        prior_beta = self.config.get('beta_prior_beta', 5)
+        self.wallet_scorer = WalletScorer(prior_alpha=prior_alpha, prior_beta=prior_beta)
         
         # Initialize tracking for all watched wallets
         for wallet in watched_wallets:
@@ -236,30 +243,55 @@ class WalletTracker:
                 self.logger.error(f"Error checking alpha activity: {e}")
                 await asyncio.sleep(2)
         
-        # Calculate wallet tiers and scores
+        # Calculate weighted voting score using Bayesian scorer
         wallet_tiers = {}
-        tier_scores = []
+        wallet_weights = {}
+        total_weight = 0.0
         
         for wallet in alpha_buyers:
+            # Get traditional tier for backward compatibility
             tier = self.get_wallet_tier(wallet)
             wallet_tiers[wallet] = tier
             
-            # Tier scoring: S=40, A=30, B=20, C=10
-            tier_score = {'S': 40, 'A': 30, 'B': 20, 'C': 10}.get(tier, 5)
-            tier_scores.append(tier_score)
+            # Calculate Bayesian weighted score
+            base_score = self.wallet_scorer.get_wallet_score(wallet)
+            recency_boost = self.wallet_scorer.get_recency_boost(wallet)
+            size_factor = self.wallet_scorer.get_size_factor(wallet)
+            
+            # Combined weight for this wallet
+            wallet_weight = base_score * recency_boost * size_factor
+            wallet_weights[wallet] = wallet_weight
+            total_weight += wallet_weight
+            
+            self.logger.debug(f"Wallet {wallet[:8]}... weight: {wallet_weight:.3f} "
+                            f"(base={base_score:.3f}, recency={recency_boost:.2f}, size={size_factor:.2f})")
         
-        # Calculate confidence score and investment multiplier
-        if not alpha_buyers:
-            return {'alpha_wallets': set(), 'wallet_tiers': {}, 'confidence_score': 0, 'investment_multiplier': 0.6}
+        # Check if we meet minimum weight threshold
+        min_weight = self.config.get('alpha_weight_min', 2.5)
+        require_high_confidence = self.config.get('require_one_wallet_pge_55', True)
         
-        # Base confidence from number of wallets
-        wallet_count_score = min(len(alpha_buyers) * 15, 60)  # Max 60 from count
+        # Check for at least one high-confidence wallet (>55% win rate)
+        has_high_confidence = False
+        if require_high_confidence:
+            for wallet in alpha_buyers:
+                if self.wallet_scorer.get_wallet_score(wallet) >= 0.55:
+                    has_high_confidence = True
+                    break
         
-        # Average tier score
-        avg_tier_score = sum(tier_scores) / len(tier_scores)
+        # Calculate confidence score based on weighted voting
+        if not alpha_buyers or total_weight < min_weight:
+            return {'alpha_wallets': set(), 'wallet_tiers': {}, 'confidence_score': 0, 
+                   'investment_multiplier': 0.6, 'total_weight': total_weight, 'meets_threshold': False}
         
-        # Total confidence
-        confidence_score = wallet_count_score + avg_tier_score
+        # Check high confidence requirement
+        if require_high_confidence and not has_high_confidence:
+            self.logger.info(f"Weight threshold met ({total_weight:.2f}) but no wallet with >55% win rate")
+            return {'alpha_wallets': alpha_buyers, 'wallet_tiers': wallet_tiers, 
+                   'confidence_score': total_weight * 10, 'investment_multiplier': 0.6, 
+                   'total_weight': total_weight, 'meets_threshold': False}
+        
+        # Convert weight to confidence score (scale to 0-100)
+        confidence_score = min(total_weight * 20, 100)  # Scale weight to confidence
         
         # Calculate individual wallet multipliers and get the highest one for the signal
         wallet_multipliers = {}
@@ -270,19 +302,27 @@ class WalletTracker:
         # Use the highest multiplier for the overall signal strength
         best_tier_multiplier = max(wallet_multipliers.values()) if wallet_multipliers else 0.60
         
+        # Calibrate wallet scores from stream data if we have swap data
+        if 'swaps' in locals() and swaps:
+            self.calibrate_from_stream(swaps, mint_address)
+        
         # Clean up old deduplication entries
         self._cleanup_dedup_cache()
         
         dedup_saved = self.dedupe_stats['deduped_checks']
         self.logger.info(f"Alpha analysis for {mint_address[:8]}: {len(alpha_buyers)} wallets, "
-                        f"confidence: {confidence_score:.1f}, multiplier: {best_tier_multiplier:.1f}x (saved {dedup_saved} duplicate calls)")
+                        f"weight: {total_weight:.2f}, confidence: {confidence_score:.1f}, "
+                        f"multiplier: {best_tier_multiplier:.1f}x (saved {dedup_saved} duplicate calls)")
         
         return {
             'alpha_wallets': alpha_buyers,
             'wallet_tiers': wallet_tiers,
+            'wallet_weights': wallet_weights,  # Bayesian weights for each wallet
             'wallet_multipliers': wallet_multipliers,  # Individual multipliers for each wallet
             'confidence_score': confidence_score,
             'investment_multiplier': best_tier_multiplier,
+            'total_weight': total_weight,  # Total weighted vote
+            'meets_threshold': True,  # Passed all checks
             'last_swaps_data': swaps if 'swaps' in locals() else []  # Include swap data for reuse
         }
 
@@ -507,6 +547,98 @@ class WalletTracker:
         self.wallet_last_activity[wallet_address] = time.time()
         # Remove from inactive set if it was marked inactive
         self.inactive_wallets.discard(wallet_address)
+    
+    def update_wallet_outcome(self, wallet: str, win: bool, timestamp: float = None, trade_size: float = None):
+        """
+        Update Bayesian scorer with trade outcome
+        
+        Args:
+            wallet: Wallet address
+            win: True if trade was profitable
+            timestamp: Unix timestamp of trade
+            trade_size: Size of trade in USD
+        """
+        self.wallet_scorer.update_wallet_outcome(wallet, win, timestamp, trade_size)
+        self.logger.debug(f"Updated Bayesian score for wallet {wallet[:8]}... with outcome: {'WIN' if win else 'LOSS'}")
+    
+    def calibrate_from_stream(self, swaps: List[Dict], mint_address: str, time_window: int = 900) -> None:
+        """
+        Calibrate wallet scores from stream data by observing price movements
+        
+        Args:
+            swaps: List of swap transactions from stream
+            mint_address: Token mint address
+            time_window: Time window to observe outcomes (default 15 minutes)
+        """
+        if not swaps:
+            return
+            
+        current_time = time.time()
+        
+        # Calculate VWAP from recent trades (last 20 trades)
+        recent_trades = []
+        for swap in swaps[-20:]:
+            if swap.get('side') in ['buy', 'sell']:
+                price = swap.get('price', 0)
+                amount = swap.get('amount', 0)
+                if price > 0 and amount > 0:
+                    recent_trades.append({'price': price, 'amount': amount})
+        
+        if len(recent_trades) < 5:
+            return  # Not enough data for VWAP
+            
+        # Calculate VWAP
+        total_value = sum(t['price'] * t['amount'] for t in recent_trades)
+        total_volume = sum(t['amount'] for t in recent_trades)
+        vwap = total_value / total_volume if total_volume > 0 else 0
+        
+        if vwap == 0:
+            return
+            
+        # Track wallet buys and their entry prices
+        wallet_entries = {}
+        
+        for swap in swaps:
+            swap_time = self._parse_timestamp(swap.get('timestamp'))
+            
+            # Only look at recent transactions
+            if current_time - swap_time > time_window:
+                continue
+                
+            wallet = swap.get('wallet', '')
+            side = swap.get('side', '')
+            price = swap.get('price', 0)
+            
+            if wallet in self.watched_wallets and side == 'buy' and price > 0:
+                if wallet not in wallet_entries:
+                    wallet_entries[wallet] = {
+                        'entry_price': price,
+                        'entry_time': swap_time
+                    }
+        
+        # Check outcomes for wallets that bought
+        for wallet, entry_data in wallet_entries.items():
+            entry_price = entry_data['entry_price']
+            entry_time = entry_data['entry_time']
+            
+            # Check if enough time has passed to evaluate
+            time_elapsed = current_time - entry_time
+            if time_elapsed < 60:  # Need at least 1 minute
+                continue
+                
+            # Calculate performance relative to entry
+            price_change = (vwap - entry_price) / entry_price if entry_price > 0 else 0
+            
+            # Define win as VWAP +20% before -8% within observation window
+            win = price_change >= 0.20  # 20% gain
+            loss = price_change <= -0.08  # 8% loss
+            
+            if win or loss:
+                # Update the Bayesian scorer with observed outcome
+                self.update_wallet_outcome(wallet, win, entry_time)
+                
+                self.logger.info(f"Stream calibration: Wallet {wallet[:8]}... "
+                               f"{'WIN' if win else 'LOSS'} (change: {price_change:.1%})")
         
     def check_inactive_wallets(self):
         """Check for wallets that haven't been active and mark them as inactive"""

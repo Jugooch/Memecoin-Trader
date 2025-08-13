@@ -28,6 +28,8 @@ from src.core.wallet_tracker import WalletTracker
 from src.core.trading_engine import TradingEngine
 from src.core.database import Database
 from src.core.wallet_rotation_manager import WalletRotationManager
+from src.core.safety_checks import SafetyChecker
+from src.core.risk_manager import AdaptiveRiskManager
 from src.utils.logger_setup import setup_logging
 from src.utils.config_loader import load_config, validate_required_keys
 
@@ -71,13 +73,27 @@ class MemecoinTradingBot:
         if hasattr(self.config, 'quicknode_endpoint') and self.config.quicknode_endpoint:
             self.pumpfun = PumpFunClient(self.config.quicknode_endpoint, self.config.quicknode_api_key)
         
-        self.wallet_tracker = WalletTracker(self.config.watched_wallets)
+        # Pass config dict to WalletTracker for Bayesian scoring parameters
+        wallet_config = {
+            'beta_prior_alpha': getattr(self.config, 'beta_prior_alpha', 3),
+            'beta_prior_beta': getattr(self.config, 'beta_prior_beta', 5),
+            'alpha_weight_min': getattr(self.config, 'alpha_weight_min', 2.5),
+            'require_one_wallet_pge_55': getattr(self.config, 'require_one_wallet_pge_55', True)
+        }
+        self.wallet_tracker = WalletTracker(self.config.watched_wallets, config=wallet_config)
         self.trading_engine = TradingEngine(self.config, moralis_client=self.moralis)
         self.database = Database(self.config.database_file)
         
         # Initialize wallet rotation manager (will get discord notifier later)
         self.wallet_rotation_manager = WalletRotationManager(
             self.wallet_tracker, self.realtime_client.bitquery_client, self.moralis, self.database, config_path
+        )
+        
+        # Initialize safety checker and risk manager (Phase 4)
+        self.safety_checker = SafetyChecker()
+        self.risk_manager = AdaptiveRiskManager(
+            pnl_store=self.trading_engine.pnl_store if hasattr(self.trading_engine, 'pnl_store') else None,
+            config={'initial_capital': self.config.initial_capital}
         )
         
         self.running = False
@@ -306,11 +322,25 @@ class MemecoinTradingBot:
         distinct_wallets = len(set(alpha_wallets))
         min_distinct_wallets = max(self.config.threshold_alpha_buys, 3)  # At least 3 distinct wallets
         
-        # Additional quality checks
+        # Phase 4.2: Check adaptive risk management before proceeding
+        can_trade, block_reason = self.risk_manager.can_trade()
+        if not can_trade:
+            self.logger.info(f"Trade blocked by risk management: {block_reason}")
+            return
+        
+        # Get current risk-adjusted parameters
+        risk_params = self.risk_manager.get_trading_params()
+        
+        # Use weighted voting from Phase 2 (check meets_threshold from alpha_analysis)
+        weighted_threshold_passed = alpha_analysis.get('meets_threshold', False)
+        total_weight = alpha_analysis.get('total_weight', 0)
+        
+        # Additional quality checks with dynamic thresholds
         signal_quality_passed = (
+            weighted_threshold_passed and
             confidence_score >= min_confidence and 
-            distinct_wallets >= min_distinct_wallets and
-            len(alpha_wallets) >= self.config.threshold_alpha_buys
+            distinct_wallets >= risk_params['min_wallets'] and  # Dynamic based on P&L
+            total_weight >= risk_params['min_weight']  # Dynamic weighted voting threshold
         )
         
         if signal_quality_passed:
@@ -325,12 +355,17 @@ class MemecoinTradingBot:
                                   f"Score: {rug_score}, Warnings: {warnings}")
                 return  # Skip this trade
             
-            # ENHANCED: Comprehensive trade decision logging
+            # ENHANCED: Comprehensive trade decision logging with Bayesian scores
             tier_summary = ', '.join([f"{addr[:8]}({tier})" for addr, tier in wallet_tiers.items()])
             wallet_details = [f"{addr[:8]}(tier={tier})" for addr, tier in wallet_tiers.items()]
             
-            self.logger.info(f"TradeDecision: mint={mint_address[:8]}... weight={confidence_score:.1f} "
-                           f"wallets=[{', '.join(wallet_details)}] safety_score={safety_check['rug_score']} "
+            # Show weighted voting details
+            wallet_weights = alpha_analysis.get('wallet_weights', {})
+            weight_details = [f"{addr[:8]}({weight:.2f})" for addr, weight in wallet_weights.items()]
+            
+            self.logger.info(f"TradeDecision: mint={mint_address[:8]}... total_weight={total_weight:.2f} "
+                           f"confidence={confidence_score:.1f} risk_level={risk_params['risk_level']} "
+                           f"wallets=[{', '.join(weight_details)}] safety_score={safety_check['rug_score']} "
                            f"multiplier={investment_multiplier:.1f}x distinct_wallets={distinct_wallets} "
                            f"liquidity=${liquidity.get('usd', 0):,.0f}")
             
@@ -486,7 +521,7 @@ class MemecoinTradingBot:
     
     async def check_token_safety(self, mint_address: str, metadata: Dict, liquidity: Dict, cached_swaps: List = None) -> Dict:
         """
-        Check token safety and calculate rug risk score
+        Enhanced token safety check using stream-based safety checker (Phase 4.1)
         Returns: {'safe': bool, 'rug_score': 0-100, 'warnings': []}
         """
         # Check cache first
@@ -497,6 +532,28 @@ class MemecoinTradingBot:
         
         warnings = []
         rug_score = 0  # 0 = safe, 100 = definite rug
+        
+        # Use Phase 4.1 safety checker if we have swap data
+        if cached_swaps and len(cached_swaps) > 0:
+            # Calculate our order size
+            order_size = self.config.initial_capital * self.config.max_trade_pct
+            
+            # Perform comprehensive safety check
+            safety_result = self.safety_checker.check_token_safety(
+                mint_address, 
+                order_size,
+                cached_swaps,
+                max_impact=getattr(self.config, 'max_price_impact', 0.01)
+            )
+            
+            # Convert to legacy format for compatibility
+            if not safety_result['safe']:
+                rug_score += 50  # Major penalty for failing safety checks
+                warnings.extend(safety_result['warnings'])
+            
+            # Add price impact to rug score
+            impact_penalty = min(safety_result['price_impact'] * 1000, 30)  # Max 30 points
+            rug_score += impact_penalty
         
         try:
             # Check liquidity amount (basic check)

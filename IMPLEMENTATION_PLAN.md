@@ -18,35 +18,35 @@ This implementation plan addresses the bot's current ~32% win rate and aims to a
 ### 1.1 Fix Wallet Attribution Bug ✅
 **File**: `src/utils/wallet_performance.py`
 
-- [ ] Change line 116: Store full mint address instead of `mint[:16]`
-- [ ] Add transaction signature field to trade records
-- [ ] Update `record_trade_outcome()` to match on full mint address
+- [x] Change line 116: Store full mint address instead of `mint[:16]`
+- [x] Add transaction signature field to trade records
+- [x] Update `record_trade_outcome()` to match on full mint address
 - [ ] Add unit tests for attribution:
   - [ ] Test two mints with same first 16 chars
   - [ ] Test multiple buys by same wallet on same mint
   - [ ] Test outcome matching with lookback window
-- [ ] **Discord**: Notify when attribution fix is deployed
+- [x] **Discord**: Notify when attribution fix is deployed
 
 ### 1.2 Remove Artificial Constraints ✅
 **File**: `config/config.yml`
 
-- [ ] Change `max_hold_seconds: 300` → `900` (15 minutes)
-- [ ] Change `dedup_cache_ttl: 900` → `75` (75 seconds)
-- [ ] Verify changes don't break existing positions
+- [x] Change `max_hold_seconds: 300` → `900` (15 minutes)
+- [x] Change `dedup_cache_ttl: 900` → `75` (75 seconds)
+- [x] Verify changes don't break existing positions
 
 ### 1.3 Add Comprehensive Logging ✅
 **Files**: `main.py`, `src/core/trading_engine.py`
 
-- [ ] Log entry decisions with scores: `"TradeDecision: mint={} weight={} wallets={}"`
-- [ ] Log exit reasons: `"Exit: mint={} reason={} hold_sec={} pnl={}"`
-- [ ] Log wallet performance: `"Wallet {}: win_rate={}% trades={}"`
-- [ ] Ensure logs work identically in paper/live mode
+- [x] Log entry decisions with scores: `"TradeDecision: mint={} weight={} wallets={}"`
+- [x] Log exit reasons: `"Exit: mint={} reason={} hold_sec={} pnl={}"`
+- [x] Log wallet performance: `"Wallet {}: win_rate={}% trades={}"`
+- [x] Ensure logs work identically in paper/live mode
 
 ### 1.4 Discord Notification System ✅
 **File**: `src/utils/discord_notifier.py` (enhance existing)
 
 Important notifications to add:
-- [ ] **Daily Summary** (once at 00:00 UTC):
+- [x] **Daily Summary** (once at 00:00 UTC):
   ```
   📊 Daily Summary
   P&L: +$X (Y%)
@@ -56,24 +56,24 @@ Important notifications to add:
   Worst Trade: -X%
   Top Wallet: [address] X% WR
   ```
-- [ ] **Risk Management Triggers**:
+- [x] **Risk Management Triggers**:
   ```
   ⚠️ Risk Management Activated
   Daily P&L: -X%
   Action: Increased selectivity
   New Requirements: X wallets, Y weight
   ```
-- [ ] **Exceptional Trades**:
+- [x] **Exceptional Trades**:
   ```
   🚀 Big Winner: +X% on [token]
   💀 Stop Loss Hit: -X% on [token]
   ```
-- [ ] **Wallet Performance Alerts**:
+- [x] **Wallet Performance Alerts**:
   ```
   ⭐ New S-Tier Wallet: [address]
   📉 Wallet Demoted: [address] (X% → Y% WR)
   ```
-- [ ] **System Health** (every 6 hours):
+- [x] **System Health** (every 6 hours):
   ```
   ❤️ System Health Check
   Uptime: X hours
@@ -100,19 +100,19 @@ class WalletScorer:
         self.window_seconds = 3600  # 60-minute rolling window
 ```
 
-- [ ] Implement `update_wallet_outcome(wallet, win_bool, timestamp)`
-- [ ] Implement `get_wallet_score(wallet)` returning posterior mean
-- [ ] Implement time-based pruning of old outcomes
-- [ ] Add recency boost calculation (1.0-1.3x based on last activity)
-- [ ] Add size factor calculation (1.0-1.5x based on bet size)
+- [x] Implement `update_wallet_outcome(wallet, win_bool, timestamp)`
+- [x] Implement `get_wallet_score(wallet)` returning posterior mean
+- [x] Implement time-based pruning of old outcomes
+- [x] Add recency boost calculation (1.0-1.3x based on last activity)
+- [x] Add size factor calculation (1.0-1.5x based on bet size)
 - [ ] Unit test with sample win/loss sequences
-- [ ] **Discord**: Notify when Bayesian scoring goes live
+- [x] **Discord**: Notify when Bayesian scoring goes live
 
 ### 2.2 Replace Threshold Check with Weighted Voting ✅
 **File**: `src/core/wallet_tracker.py`
 
-- [ ] Replace `check_alpha_activity()` threshold logic
-- [ ] Implement weighted voting:
+- [x] Replace `check_alpha_activity()` threshold logic
+- [x] Implement weighted voting:
   ```python
   def calculate_weighted_score(alpha_buyers):
       total_weight = 0
@@ -123,19 +123,19 @@ class WalletScorer:
           total_weight += score * recency * size
       return total_weight
   ```
-- [ ] Add config parameters:
-  - [ ] `alpha_weight_min: 2.5` (replaces threshold_alpha_buys)
-  - [ ] `require_one_wallet_pge_55: true`
-  - [ ] `alpha_vote_window_sec: 90`
+- [x] Add config parameters:
+  - [x] `alpha_weight_min: 2.5` (replaces threshold_alpha_buys)
+  - [x] `require_one_wallet_pge_55: true`
+  - [x] `alpha_vote_window_sec: 90`
 
 ### 2.3 Score Calibration from Stream ✅
 **File**: `src/core/wallet_scorer.py`
 
-- [ ] Track wallet buys from Bitquery stream
-- [ ] Define "win" as VWAP +20% before -8% within 15 minutes
-- [ ] Calculate VWAP from last 20 trades
-- [ ] Update wallet scores based on stream-derived outcomes
-- [ ] No additional API calls required
+- [x] Track wallet buys from Bitquery stream
+- [x] Define "win" as VWAP +20% before -8% within 15 minutes
+- [x] Calculate VWAP from last 20 trades
+- [x] Update wallet scores based on stream-derived outcomes
+- [x] No additional API calls required
 
 ---
 
@@ -145,7 +145,7 @@ class WalletScorer:
 ### 3.1 Dynamic TP1 Sizing ✅
 **File**: `src/core/trading_engine.py`
 
-- [ ] Implement time-based TP1 sizing:
+- [x] Implement time-based TP1 sizing:
   ```python
   def calculate_tp1_percentage(time_to_tp1):
       if time_to_tp1 < 60:
@@ -155,29 +155,29 @@ class WalletScorer:
       else:
           return 0.30  # 30% if reached after 3 minutes
   ```
-- [ ] Update position management to track time_to_tp1
-- [ ] Ensure paper and live modes use identical logic
-- [ ] **Discord**: Notify on dynamic TP1 triggers with timing
+- [x] Update position management to track time_to_tp1
+- [x] Ensure paper and live modes use identical logic
+- [x] **Discord**: Notify on dynamic TP1 triggers with timing
 
 ### 3.2 Intelligent Trailing Stops ✅
 **File**: `src/core/trading_engine.py`
 
-- [ ] Implement peak-based trailing:
-  - [ ] If peak >= +30% in first 2 min → trail at 85% of peak
-  - [ ] If peak >= +60% anytime → trail at 82% of peak
-- [ ] Add break-even stop:
-  - [ ] Arm at +8% gain
-  - [ ] Set stop at entry price for 60 seconds
-  - [ ] Then switch to peak trailing
+- [x] Implement peak-based trailing:
+  - [x] If peak >= +30% in first 2 min → trail at 85% of peak
+  - [x] If peak >= +60% anytime → trail at 82% of peak
+- [x] Add break-even stop:
+  - [x] Arm at +8% gain
+  - [x] Set stop at entry price for 60 seconds
+  - [x] Then switch to peak trailing
 - [ ] Test trailing logic with simulated price movements
 
 ### 3.3 Remove Hard Time Exit ✅
 **File**: `src/core/trading_engine.py`
 
-- [ ] Remove or extend 5-minute forced exit
-- [ ] Set `max_hold_seconds: 900` as safety maximum
-- [ ] Log when max hold time is reached
-- [ ] **Discord**: Alert if position held for max time
+- [x] Remove or extend 5-minute forced exit
+- [x] Set `max_hold_seconds: 900` as safety maximum
+- [x] Log when max hold time is reached
+- [x] **Discord**: Alert if position held for max time
 
 ---
 
@@ -196,10 +196,10 @@ class SafetyChecker:
         """Estimate slippage, skip if >1%"""
 ```
 
-- [ ] Implement sellability check (honeypot detection)
-- [ ] Implement micro-impact estimation
-- [ ] Add to entry criteria without additional API calls
-- [ ] Log when trades are skipped for safety
+- [x] Implement sellability check (honeypot detection)
+- [x] Implement micro-impact estimation
+- [x] Add to entry criteria without additional API calls
+- [x] Log when trades are skipped for safety
 - [ ] **Discord**: Daily summary of skipped trades by reason
 
 ### 4.2 Adaptive Risk Management ✅
@@ -213,28 +213,28 @@ class AdaptiveRiskManager:
             return {'min_wallet_score': 0.60, 'min_weight': 3.0, ...}
 ```
 
-- [ ] Implement graduated response system
-- [ ] Track daily P&L from PnLStore
-- [ ] Adjust thresholds, not position size
-- [ ] Add cooldown periods after consecutive losses
-- [ ] Ensure paper/live modes use same risk logic
+- [x] Implement graduated response system
+- [x] Track daily P&L from PnLStore
+- [x] Adjust thresholds, not position size
+- [x] Add cooldown periods after consecutive losses
+- [x] Ensure paper/live modes use same risk logic
 - [ ] **Discord**: Notify when risk parameters change
 
 ### 4.3 Quality-Based Circuit Breakers ✅
 **File**: `src/core/risk_manager.py`
 
-- [ ] Implement smart cooldowns:
-  - [ ] 30-min cooldown after 3 consecutive losses
-  - [ ] 60-min cooldown after 5 consecutive losses
-- [ ] Add trade frequency limits when down:
-  - [ ] Normal: 20 trades/day max
-  - [ ] -2% day: 15 trades/day max
-  - [ ] -4% day: 10 trades/day max
-  - [ ] -6% day: 5 trades/day max
-- [ ] Space out trades when losing:
-  - [ ] Normal: 2 min between trades
-  - [ ] -3% day: 5 min between trades
-  - [ ] -5% day: 10 min between trades
+- [x] Implement smart cooldowns:
+  - [x] 30-min cooldown after 3 consecutive losses
+  - [x] 60-min cooldown after 5 consecutive losses
+- [x] Add trade frequency limits when down:
+  - [x] Normal: 20 trades/day max
+  - [x] -2% day: 15 trades/day max
+  - [x] -4% day: 10 trades/day max
+  - [x] -6% day: 5 trades/day max
+- [x] Space out trades when losing:
+  - [x] Normal: 2 min between trades
+  - [x] -3% day: 5 min between trades (180s)
+  - [x] -5% day: 10 min between trades (600s)
 - [ ] **Discord**: Alert on cooldown activation/deactivation
 
 ---

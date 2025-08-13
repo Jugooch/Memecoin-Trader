@@ -29,6 +29,12 @@ class Position:
     tokens_initial: float
     cost_usd_remaining: float
     avg_cost_per_token: float
+    tp1_hit_time: Optional[datetime] = None  # Track when TP1 was hit
+    tp1_percentage_sold: float = 0  # Track how much was sold at TP1
+    break_even_armed: bool = False  # Track if break-even stop is armed
+    break_even_armed_time: Optional[datetime] = None  # When break-even was armed
+    trailing_stop_active: bool = False  # Track if trailing stop is active
+    high_gain_peak: float = 0  # Track highest gain percentage achieved
 
 
 class TradingEngine:
@@ -357,8 +363,11 @@ class TradingEngine:
         self.logger.warning("Real trading not implemented, falling back to paper mode")
         return await self._execute_paper_sell(mint_address, percentage, exit_reason=exit_reason)
 
-    async def check_exit_conditions(self, mint_address: str) -> Optional[str]:
-        """Check if position should be closed"""
+    async def check_exit_conditions(self, mint_address: str) -> Optional[tuple]:
+        """
+        Enhanced exit strategy with dynamic TP1 sizing and intelligent trailing stops
+        Returns: (exit_reason, sell_percentage) or None
+        """
         if mint_address not in self.active_positions:
             return None
         
@@ -369,27 +378,82 @@ class TradingEngine:
         if current_price <= 0:
             return None
         
-        # Update peak price
+        # Calculate current gain/loss percentage
+        current_gain_pct = ((current_price / position.entry_price) - 1) * 100
+        hold_time_seconds = (datetime.now() - position.entry_time).total_seconds()
+        
+        # Update peak price and high gain
         if current_price > position.peak_price:
             position.peak_price = current_price
+            position.high_gain_peak = max(position.high_gain_peak, current_gain_pct)
         
-        # Check take profit
-        if current_price >= position.tp_price:
-            return "take_profit"
+        # PHASE 3.1: Dynamic TP1 Sizing based on time to target
+        if current_price >= position.tp_price and position.tp1_hit_time is None:
+            position.tp1_hit_time = datetime.now()
+            time_to_tp1 = (position.tp1_hit_time - position.entry_time).total_seconds()
+            
+            # Calculate dynamic TP1 percentage
+            if time_to_tp1 < 60:  # < 1 minute - very fast move
+                tp1_percentage = 0.12  # Sell only 12%
+            elif time_to_tp1 < 180:  # 1-3 minutes - fast move
+                tp1_percentage = 0.20  # Sell 20%
+            else:  # > 3 minutes - normal move
+                tp1_percentage = 0.30  # Sell 30%
+            
+            position.tp1_percentage_sold = tp1_percentage
+            self.logger.info(f"Dynamic TP1: Selling {tp1_percentage*100:.0f}% after {time_to_tp1:.0f}s to TP")
+            return ("take_profit_partial", tp1_percentage)
+        
+        # PHASE 3.2: Intelligent Trailing Stops
+        
+        # Peak-based trailing for exceptional gains
+        if position.high_gain_peak >= 60:  # If we hit +60% at any point
+            trailing_pct = 0.82  # Trail at 82% of peak
+            trailing_stop = position.peak_price * trailing_pct
+            if current_price <= trailing_stop:
+                return ("trailing_stop_high_gain", 1.0)
+        elif position.high_gain_peak >= 30 and hold_time_seconds < 120:  # +30% in first 2 min
+            trailing_pct = 0.85  # Trail at 85% of peak
+            trailing_stop = position.peak_price * trailing_pct
+            if current_price <= trailing_stop:
+                return ("trailing_stop_fast_gain", 1.0)
+        
+        # Break-even stop logic
+        if current_gain_pct >= 8 and not position.break_even_armed:
+            # Arm break-even stop at +8% gain
+            position.break_even_armed = True
+            position.break_even_armed_time = datetime.now()
+            self.logger.info(f"Break-even stop armed for {mint_address[:8]}... at +{current_gain_pct:.1f}%")
+        
+        if position.break_even_armed:
+            time_since_armed = (datetime.now() - position.break_even_armed_time).total_seconds()
+            if time_since_armed <= 60:  # Break-even protection for 60 seconds
+                if current_price <= position.entry_price * 1.01:  # Allow 1% buffer
+                    return ("break_even_stop", 1.0)
+            else:
+                # After 60 seconds, switch to normal trailing
+                position.trailing_stop_active = True
+                position.break_even_armed = False
+        
+        # Standard trailing stop (less aggressive)
+        if position.trailing_stop_active or current_gain_pct >= 15:
+            trailing_pct = 0.85  # Trail at 85% of peak
+            trailing_stop = position.peak_price * trailing_pct
+            if current_price <= trailing_stop:
+                return ("trailing_stop", 1.0)
         
         # Check stop loss
         if current_price <= position.sl_price:
-            return "stop_loss"
+            return ("stop_loss", 1.0)
         
-        # Check trailing stop (20% from peak)
-        trailing_stop = position.peak_price * 0.8
-        if current_price <= trailing_stop:
-            return "trailing_stop"
-        
-        # Check time-based exit (4 hours max hold)
-        hold_time = datetime.now() - position.entry_time
-        if hold_time.total_seconds() > 14400:  # 4 hours
-            return "time_limit"
+        # PHASE 3.3: Remove hard time exit (or extend it)
+        # Only exit after max_hold_seconds as a safety measure
+        max_hold = getattr(self.config, 'max_hold_seconds', 900)  # 15 minutes default
+        if hold_time_seconds > max_hold:
+            # But only if we're not in profit
+            if current_gain_pct < 5:  # Less than 5% gain
+                return ("time_limit", 1.0)
+            # If profitable, let it run with trailing stop
         
         return None
 
@@ -403,16 +467,11 @@ class TradingEngine:
                 if current_price > position.peak_price:
                     position.peak_price = current_price
                     
-                # Check exit conditions
-                exit_reason = await self.check_exit_conditions(mint_address)
-                if exit_reason:
-                    self.logger.info(f"Exit condition triggered for {mint_address}: {exit_reason}")
-                    
-                    # Determine sell percentage
-                    if exit_reason == "take_profit":
-                        sell_pct = 0.5  # Sell half on take profit
-                    else:
-                        sell_pct = 1.0  # Sell all on stop loss or other conditions
+                # Check exit conditions - now returns (reason, percentage) tuple
+                exit_result = await self.check_exit_conditions(mint_address)
+                if exit_result:
+                    exit_reason, sell_pct = exit_result
+                    self.logger.info(f"Exit condition triggered for {mint_address}: {exit_reason} ({sell_pct*100:.0f}%)")
                     
                     await self.sell_token(mint_address, sell_pct, position.paper_mode, exit_reason=exit_reason)
                     

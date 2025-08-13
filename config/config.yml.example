@@ -45,14 +45,18 @@ watched_wallets:
   # - wallet_address_1
   # - wallet_address_2
 
-# Trading parameters
-threshold_alpha_buys: 4        # Number of alpha wallets needed to trigger trade (raised for quality)
+# Trading parameters (Phase 2: Bayesian Scoring)
+alpha_weight_min: 2.5         # Minimum weighted vote score (replaces threshold_alpha_buys)
+require_one_wallet_pge_55: true  # Require at least one wallet with >55% win rate
+beta_prior_alpha: 3           # Bayesian prior alpha (wins + 1)
+beta_prior_beta: 5            # Bayesian prior beta (losses + 1) = 37.5% baseline
+threshold_alpha_buys: 3       # DEPRECATED - kept for backward compatibility
 min_liquidity_usd: 25000      # Minimum liquidity required (raised to avoid slippage)
 time_window_sec: 300          # Time window to wait for alpha activity (5 minutes for better signals)
 max_trade_pct: 0.05           # Max % of capital per trade (5%)
 tp_multiplier: 1.25           # Take profit multiplier (1.25x - more realistic)
 stop_loss_pct: 0.92           # Stop loss percentage (8% loss - tighter stop)
-max_hold_seconds: 900         # Maximum time to hold position (15 minutes) - FIXED: was 300
+max_hold_seconds: 900         # Maximum time to hold position (15 minutes)
 
 # Trading execution mode
 trading_mode: "simulation"    # Options: "simulation", "alerts", "auto"
@@ -110,6 +114,39 @@ pump_fun:
   program_address: "6EF8rrecthHAuSStzpf6aXr9HWs8jgPVr5S6fqF6P"
   api_endpoint: "https://pumpapi.fun"
   
+# Safety checks (Phase 4.1)
+safety:
+  require_sellability: true    # Check for recent sells (honeypot detection)
+  max_price_impact: 0.01      # Maximum acceptable price impact (1%)
+  sellability_window: 60      # Look for sells in last N seconds
+  
+# Adaptive risk management (Phase 4.2)
+risk_management:
+  enabled: true               # Enable adaptive risk management
+  position_size_pct: 0.05    # NEVER changes - always 5% to avoid fees
+  # Risk levels based on daily P&L
+  levels:
+    normal:                  # 0% or positive P&L
+      min_wallets: 3
+      min_weight: 2.5
+      max_daily_trades: 20
+      min_time_between: 120
+    cautious:                # -2% P&L
+      min_wallets: 4
+      min_weight: 3.0
+      max_daily_trades: 15
+      min_time_between: 180
+    conservative:            # -4% P&L
+      min_wallets: 5
+      min_weight: 3.5
+      max_daily_trades: 10
+      min_time_between: 300
+    defensive:               # -6% P&L or worse
+      min_wallets: 6
+      min_weight: 4.0
+      max_daily_trades: 5
+      min_time_between: 600
+
 # Logging configuration
 logging:
   level: "INFO"               # DEBUG, INFO, WARNING, ERROR
