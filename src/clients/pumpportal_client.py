@@ -32,13 +32,12 @@ class PumpPortalClient:
             self.logger.info(f"Using API key: {self.api_key[:10]}...")
             
             # Add more verbose connection logging
+            # Use basic connection parameters for compatibility
             self.websocket = await websockets.connect(
                 self.ws_endpoint,
                 additional_headers=headers,
                 ping_interval=30,
-                ping_timeout=10,
-                max_size=10**7,  # 10MB max message size
-                read_limit=10**7  # 10MB read buffer
+                ping_timeout=10
             )
             
             self.connected = True
