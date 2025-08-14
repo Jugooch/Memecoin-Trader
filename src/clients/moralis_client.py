@@ -148,159 +148,124 @@ class MoralisClient:
     
     async def _make_request(self, url: str, params: Dict = None, cache_type: str = None) -> Dict:
         """Make HTTP request with intelligent caching, coalescing, and error handling"""
-
-        self.logger.debug(f"Starting _make_request: url={url}, params={params}, cache_type={cache_type}")
-
+        
         # Periodic cache cleanup
         self._cleanup_expired_cache()
-
+        
         # Create request key for caching and coalescing
         cache_key = self._get_cache_key(url, params)
-        self.logger.debug(f"Computed cache key: {cache_key}")
-
+        
         # Check cache first
         if cache_type:
             cache_entry = self.cache.get(cache_key)
-            if cache_entry:
-                self.logger.debug(f"Found cache entry for {cache_type}")
-            else:
-                self.logger.debug(f"No cache entry for {cache_type}")
-
+            
             if self._is_cache_valid(cache_entry, cache_type):
-                self.logger.debug(f"Cache hit for {cache_type}, returning cached data")
+                self.logger.debug(f"Cache hit for {cache_type}")
                 return cache_entry['data']
-
+        
         # In-flight coalescing - check if same request is already running
         if cache_key in self._inflight:
             self.logger.debug(f"Coalescing request: {url}")
-            data = await self._inflight[cache_key]
-            self.logger.debug(f"Coalesced request completed: data={data}")
-            return data
-
+            return await self._inflight[cache_key]
+        
         # Create and track the actual HTTP request task
         async def _fetch():
             async with self._sem:  # Global concurrency cap
-                self.logger.debug(f"Acquired semaphore for request: {url}")
-
                 session = await self._get_session()
                 if not session:
-                    self.logger.warning("No available API keys — returning empty data")
+                    self.logger.warning("No available API keys")
                     return {}
-
-                self.logger.debug(f"Using session {session} for request: {url}")
+                    
                 await self._rate_limit()
-
-                self.logger.debug(f"Making HTTP request to {url} with params={params}")
-                data = await self._execute_request(session, url, params, cache_type, cache_key)
-                self.logger.debug(f"HTTP request complete: {url}, received data={data}")
-                return data
-
+                return await self._execute_request(session, url, params, cache_type, cache_key)
+        
         # Store the task for coalescing
         task = asyncio.create_task(_fetch())
         self._inflight[cache_key] = task
-
+        
         try:
             data = await task
-            self.logger.debug(f"_make_request completed for {url} — returning data: {data}")
             return data
         finally:
             # Clean up after request completes
-            self.logger.debug(f"Cleaning up inflight entry for {cache_key}")
             self._inflight.pop(cache_key, None)
 
     
     async def _execute_request(self, session, url, params, cache_type, cache_key):
-       """Execute the actual HTTP request with retry logic"""
-       current_key_index = getattr(session, '_current_key_index', 0)
-       self.logger.debug(f"Starting _execute_request: url={url}, params={params}, key_index={current_key_index}")
-    
-       max_retries = len(self.api_keys)  # Try all keys before giving up
-       for attempt in range(max_retries):
-           self.logger.debug(f"Attempt {attempt + 1}/{max_retries} with key #{current_key_index}")
-    
-           try:
-               async with session.get(url, params=params) as response:
-                   self.logger.debug(f"HTTP status {response.status} for {url} (key #{current_key_index})")
-    
-                   # Track usage for current key
-                   self.key_stats[current_key_index]['calls_today'] += 1
-    
-                   if response.status == 200:
-                       data = await response.json()
-                       self.logger.debug(f"Received data from {url}: {data}")
-    
-                       # Cache successful response
-                       if cache_type:
-                           self.cache[cache_key] = {
-                               'data': data,
-                               'timestamp': time.time()
-                           }
-                           self.logger.debug(f"Cached response for cache_type={cache_type}, key={cache_key}")
-    
-                       return data
-    
-                   elif response.status == 429:  # Rate limited
-                       self.logger.warning(f"Key #{current_key_index} rate limited, rotating...")
-                       self.key_stats[current_key_index]['rate_limited'] = True
-                       self.key_stats[current_key_index]['reset_time'] = time.time() + 60
-    
-                       # Try next key
-                       self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
-                       session = await self._get_session()
-                       current_key_index = getattr(session, '_current_key_index', 0)
-                       if not session:
-                           self.logger.error("No session available after rate limit rotation — returning empty")
-                           return {}
-                       continue
+        """Execute the actual HTTP request with retry logic"""
+        current_key_index = getattr(session, '_current_key_index', 0)
+        
+        max_retries = len(self.api_keys)  # Try all keys before giving up
+        for attempt in range(max_retries):
+            try:
+                async with session.get(url, params=params) as response:
+                    # Track usage for current key
+                    self.key_stats[current_key_index]['calls_today'] += 1
                     
-                   elif response.status == 401:  # API limit hit
-                       error_text = await response.text()
-                       self.logger.warning(f"Key #{current_key_index} got 401: {error_text}")
-    
-                       if "consumed" in error_text or "upgrade" in error_text:
-                           self.logger.warning(f"Key #{current_key_index} daily limit reached, rotating...")
-                           self.key_stats[current_key_index]['rate_limited'] = True
-                           self.key_stats[current_key_index]['reset_time'] = time.time() + 86400  # 24 hours
-    
-                           # Try next key
-                           self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
-                           session = await self._get_session()
-                           current_key_index = getattr(session, '_current_key_index', 0)
-                           if not session:
-                               self.logger.error("All API keys exhausted — returning empty")
-                               return {}
-                           continue
-                       else:
-                           self.logger.error("401 unauthorized but not daily limit — returning empty")
-                           return {}
-    
-                   else:
-                       # Log 404s at info for now (debug before)
-                       if response.status == 404:
-                           self.logger.info(f"API 404 for {url} — token metadata not found")
-                       else:
-                           error_body = await response.text()
-                           self.logger.error(f"API error {response.status}: {error_body}")
-                       return {}
-    
-           except Exception as e:
-               self.logger.error(f"Request failed (attempt {attempt + 1}): {e}")
-    
-               if attempt < max_retries - 1:
-                   self.logger.debug("Rotating to next key due to request failure")
-                   self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
-                   session = await self._get_session()
-                   current_key_index = getattr(session, '_current_key_index', 0)
-                   if not session:
-                       self.logger.error("No session available after exception rotation — returning empty")
-                       return {}
-                   await asyncio.sleep(1)  # Small delay before retry
-               else:
-                   self.logger.error("Max retries reached — returning empty")
-                   return {}
-    
-       self.logger.error("All retries exhausted — returning empty")
-       return {}
+                    if response.status == 200:
+                        data = await response.json()
+                        
+                        # Cache successful response
+                        if cache_type:
+                            self.cache[cache_key] = {
+                                'data': data,
+                                'timestamp': time.time()
+                            }
+                        
+                        return data
+                        
+                    elif response.status == 429:  # Rate limited
+                        self.logger.warning(f"Key #{current_key_index} rate limited, rotating...")
+                        self.key_stats[current_key_index]['rate_limited'] = True
+                        self.key_stats[current_key_index]['reset_time'] = time.time() + 60
+                        
+                        # Try next key
+                        self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
+                        session = await self._get_session()
+                        current_key_index = getattr(session, '_current_key_index', 0)
+                        if not session:
+                            return {}
+                        continue
+                        
+                    elif response.status == 401:  # API limit hit
+                        error_text = await response.text()
+                        if "consumed" in error_text or "upgrade" in error_text:
+                            self.logger.warning(f"Key #{current_key_index} daily limit reached, rotating...")
+                            self.key_stats[current_key_index]['rate_limited'] = True
+                            self.key_stats[current_key_index]['reset_time'] = time.time() + 86400  # 24 hours
+                            
+                            # Try next key
+                            self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
+                            session = await self._get_session()
+                            current_key_index = getattr(session, '_current_key_index', 0)
+                            if not session:
+                                self.logger.error("All API keys exhausted!")
+                                return {}
+                            continue
+                        return {}
+                        
+                    else:
+                        # Log 404s at debug level since they're common for new tokens
+                        if response.status == 404:
+                            self.logger.debug(f"API 404: Token metadata not found")
+                        else:
+                            self.logger.error(f"API error {response.status}: {await response.text()}")
+                        return {}
+                        
+            except Exception as e:
+                self.logger.error(f"Request failed (attempt {attempt + 1}): {e}")
+                if attempt < max_retries - 1:
+                    # Try rotating to next key on exception
+                    self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
+                    session = await self._get_session()
+                    current_key_index = getattr(session, '_current_key_index', 0)
+                    if not session:
+                        return {}
+                    await asyncio.sleep(1)  # Small delay before retry
+                else:
+                    return {}
+        
+        return {}
     
 
     async def get_token_metadata(self, mint_address: str) -> Dict:
@@ -368,7 +333,6 @@ class MoralisClient:
             # Skip cache if fresh=True (for position monitoring)
             cache_type = None if fresh else 'price'
             data = await self._make_request(url, cache_type=cache_type)
-            self.logger.debug(f"Current data for {mint_address}: {data}")
             return float(data.get('usdPrice', 0))
             
         except Exception as e:

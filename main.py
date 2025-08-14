@@ -312,20 +312,25 @@ class MemecoinTradingBot:
             self.logger.debug("Trading limits reached, skipping")
             return
         
-        # Get token metadata and liquidity from Moralis
+        # Get token liquidity from Moralis (required) and metadata (optional for new tokens)
         try:
             # If Moralis is rate limited, skip this token entirely (safer approach)
             if self.moralis.rate_limited:
                 self.logger.debug(f"Moralis rate limited - skipping {mint_address[:8]}...")
                 return
                 
-            metadata = await self.moralis.get_token_metadata(mint_address)
             liquidity = await self.moralis.get_token_liquidity(mint_address)
             
-            # If we can't get proper data, skip the token (no guessing)
-            if not metadata or not liquidity:
-                self.logger.debug(f"Incomplete data for {mint_address[:8]}... - skipping")
+            # Require liquidity data - this is essential for safety
+            if not liquidity:
+                self.logger.debug(f"No liquidity data for {mint_address[:8]}... - skipping")
                 return
+            
+            # Try to get metadata, but don't block on it for new tokens
+            metadata = await self.moralis.get_token_metadata(mint_address)
+            if not metadata:
+                self.logger.debug(f"No metadata yet for {mint_address[:8]}... (proceeding with liquidity-only checks)")
+                metadata = {}  # Empty dict for safe access
             
             if not self._passes_filters(metadata, liquidity, deployer):
                 # Only log failures at debug level to reduce noise
@@ -337,7 +342,8 @@ class MemecoinTradingBot:
             total_wallets = len(self.wallet_tracker.watched_wallets)
             
             # If we get here, token passed basic filters - now it's worth logging
-            self.logger.info(f"Token {mint_address[:8]}... passed initial filters - checking alpha activity (watching {len(active_wallets)}/{total_wallets} active wallets)")
+            metadata_status = "with metadata" if metadata else "metadata-pending"
+            self.logger.info(f"Token {mint_address[:8]}... passed initial filters ({metadata_status}) - checking alpha activity (watching {len(active_wallets)}/{total_wallets} active wallets)")
                 
         except Exception as e:
             # Only log 404s at debug level since they're common for new tokens
@@ -518,13 +524,14 @@ class MemecoinTradingBot:
         if liquidity_usd < self.config.min_liquidity_usd:
             return False
             
-        # Skip tokens with suspicious names (basic spam filter)
-        name = metadata.get('name', '').lower()
-        symbol = metadata.get('symbol', '').lower()
-        spam_keywords = ['test', 'fake', 'scam', 'rugpull', 'honeypot']
-        if any(keyword in name or keyword in symbol for keyword in spam_keywords):
-            return False
-            
+        # Skip tokens with suspicious names (basic spam filter) - only if metadata available
+        if metadata:  # Only check spam filter if we have metadata
+            name = metadata.get('name', '').lower()
+            symbol = metadata.get('symbol', '').lower()
+            spam_keywords = ['test', 'fake', 'scam', 'rugpull', 'honeypot']
+            if any(keyword in name or keyword in symbol for keyword in spam_keywords):
+                return False
+        
         # Add deployer blacklist check here if needed
         
         return True
