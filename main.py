@@ -84,9 +84,10 @@ class MemecoinTradingBot:
         self.trading_engine = TradingEngine(self.config, moralis_client=self.moralis)
         self.database = Database(self.config.database_file)
         
-        # Initialize wallet rotation manager (will get discord notifier later)
+        # Initialize wallet rotation manager (will get discord notifier and realtime client later)
         self.wallet_rotation_manager = WalletRotationManager(
-            self.wallet_tracker, self.realtime_client.bitquery_client, self.moralis, self.database, config_path
+            self.wallet_tracker, self.realtime_client.bitquery_client, self.moralis, self.database, config_path,
+            realtime_client=self.realtime_client
         )
         
         # Monitoring state
@@ -259,8 +260,10 @@ class MemecoinTradingBot:
                     self.logger.info("Subscribing to PumpPortal all events stream...")
                     
                     event_count = 0
-                    # Use the unified stream from PumpPortal, passing our watched wallets
+                    # Use the unified stream from PumpPortal, passing our CURRENT watched wallets
+                    # This ensures we always use the latest wallet list after rotation
                     watched_wallets = list(self.wallet_tracker.watched_wallets)
+                    self.logger.info(f"Using {len(watched_wallets)} current watched wallets for PumpPortal subscription")
                     async for event in self.realtime_client.pumpportal_client.subscribe_all_events(watched_wallets):
                         event_count += 1
                         if event_count <= 3:  # Log first few events
@@ -1407,6 +1410,15 @@ class MemecoinTradingBot:
                     await self._update_config_with_new_wallets(finder, new_wallets)
                 except Exception as e:
                     self.logger.warning(f"Could not update config file: {e}")
+                
+                # Update PumpPortal subscriptions with new wallet list
+                try:
+                    self.logger.info("Updating PumpPortal subscriptions after alpha discovery...")
+                    current_wallets = list(self.wallet_tracker.watched_wallets)
+                    await self.realtime_client.update_wallet_subscriptions(current_wallets)
+                    self.logger.info("PumpPortal subscriptions updated successfully")
+                except Exception as e:
+                    self.logger.error(f"Failed to update PumpPortal subscriptions after discovery: {e}")
                     
             else:
                 self.logger.warning("Alpha discovery found no new wallets")

@@ -17,13 +17,14 @@ from src.core.database import Database
 class WalletRotationManager:
     def __init__(self, wallet_tracker: WalletTracker, bitquery: BitqueryClient, 
                  moralis: MoralisClient, database: Database, config_path: str = "config/config.yml",
-                 discord_notifier=None):
+                 discord_notifier=None, realtime_client=None):
         self.wallet_tracker = wallet_tracker
         self.bitquery = bitquery
         self.moralis = moralis
         self.database = database
         self.config_path = config_path
         self.discord_notifier = discord_notifier
+        self.realtime_client = realtime_client  # Add realtime client for updating subscriptions
         self.logger = logging.getLogger(__name__)
         
         # Rotation settings
@@ -169,12 +170,21 @@ class WalletRotationManager:
         # Step 6: Update config file
         await self._update_config_file(list(final_wallets))
         
-        # Step 7: Record the rotation
+        # Step 7: Update PumpPortal subscriptions with new wallet list
+        if self.realtime_client:
+            try:
+                self.logger.info("Updating PumpPortal subscriptions with new wallet list...")
+                await self.realtime_client.update_wallet_subscriptions(list(final_wallets))
+                self.logger.info("PumpPortal subscriptions updated successfully")
+            except Exception as e:
+                self.logger.error(f"Failed to update PumpPortal subscriptions: {e}")
+        
+        # Step 8: Record the rotation
         self.wallet_tracker.performance_tracker.record_rotation(
             list(kept_wallets), list(added_wallets), list(removed_wallets)
         )
         
-        # Step 8: Log results
+        # Step 9: Log results
         total_time = time.time() - start_time
         self.logger.info("=" * 60)
         self.logger.info(f"Wallet rotation completed in {total_time:.1f}s:")
@@ -193,7 +203,7 @@ class WalletRotationManager:
         
         self.logger.info("=" * 60)
         
-        # Step 9: Get performance summary and tier stats for Discord notification
+        # Step 10: Get performance summary and tier stats for Discord notification
         performance_summary = self.wallet_tracker.get_performance_summary()
         tier_stats = self.wallet_tracker.get_tier_performance_stats()
         

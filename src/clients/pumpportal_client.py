@@ -29,6 +29,9 @@ class PumpPortalClient:
         self._recv_lock = asyncio.Lock()
         self._is_receiving = False
         
+        # Store watched wallets for reconnection
+        self.watched_wallets = []
+        
     async def initialize(self):
         """Initialize the WebSocket connection with proper cleanup"""
         try:
@@ -81,6 +84,12 @@ class PumpPortalClient:
         """Subscribe to both token launches and trades in a single stream with reconnection"""
         self.logger.info("subscribe_all_events called")
         
+        # Store watched wallets for reconnection (use stored list if not provided)
+        if watched_wallets is not None:
+            self.watched_wallets = watched_wallets[:100]  # Limit to 100 wallets
+        elif not self.watched_wallets:
+            self.logger.warning("No watched wallets provided and none stored")
+        
         # Prevent multiple instances from reading the same WebSocket
         async with self._recv_lock:
             if self._is_receiving:
@@ -103,10 +112,10 @@ class PumpPortalClient:
                         ]
                         
                         # Try different approaches for trade subscription
-                        if watched_wallets and len(watched_wallets) > 0:
+                        if self.watched_wallets and len(self.watched_wallets) > 0:
                             # Subscribe to trades from specific wallets (alpha wallets)
-                            subscriptions.append({"method": "subscribeAccountTrade", "keys": watched_wallets[:100]})  # Limit to first 100 wallets
-                            self.logger.info(f"Subscribing to trades from {len(watched_wallets[:100])} alpha wallets")
+                            subscriptions.append({"method": "subscribeAccountTrade", "keys": self.watched_wallets})  # Already limited to 100
+                            self.logger.info(f"Subscribing to trades from {len(self.watched_wallets)} alpha wallets")
                         else:
                             # Try to subscribe to all token trades
                             subscriptions.append({"method": "subscribeTokenTrade", "keys": []})
@@ -476,6 +485,30 @@ class PumpPortalClient:
         except Exception as e:
             self.logger.error(f"Error parsing Pump Portal trade: {e}")
             return None
+    
+    async def update_wallet_subscriptions(self, new_wallets: list):
+        """Update the wallet subscription list by reconnecting with new wallets"""
+        self.logger.info(f"Updating PumpPortal subscriptions with {len(new_wallets)} wallets")
+        
+        # Store the new wallet list
+        self.watched_wallets = new_wallets[:100]  # Limit to 100 wallets
+        
+        # Force reconnection to update subscriptions
+        if self.websocket and not self.websocket.closed:
+            try:
+                self.logger.info("Closing current WebSocket to update subscriptions...")
+                await self.websocket.close()
+                await asyncio.sleep(0.5)  # Brief wait for cleanup
+            except Exception as e:
+                self.logger.warning(f"Error closing WebSocket for update: {e}")
+        
+        # Reset connection state
+        self.connected = False
+        self.websocket = None
+        
+        # The subscribe_all_events will reconnect with new wallet list
+        self.logger.info(f"PumpPortal will reconnect with updated wallet list on next subscription")
+        return True
     
     async def close(self):
         """Close the WebSocket connection"""

@@ -121,6 +121,15 @@ class RealtimeClient:
             self.logger.warning(f"Trade subscription not supported for {self.source}")
             return
     
+    async def update_wallet_subscriptions(self, new_wallets: List[str]):
+        """Update wallet subscriptions for PumpPortal client"""
+        if self.source == 'pumpportal' and self.pumpportal_client:
+            self.logger.info(f"Updating PumpPortal subscriptions with {len(new_wallets)} wallets")
+            return await self.pumpportal_client.update_wallet_subscriptions(new_wallets)
+        else:
+            self.logger.debug(f"Wallet subscription update not needed for {self.source}")
+            return False
+    
     async def close(self):
         """Close all client connections"""
         if self.bitquery_client:
