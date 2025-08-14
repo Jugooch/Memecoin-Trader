@@ -326,8 +326,6 @@ class MemecoinTradingBot:
                 self.logger.debug(f"No liquidity data for {mint_address[:8]}... - skipping")
                 return
             
-            self.logger.info(f"Liquidity data for {mint_address[:8]}: {liquidity.total_liquidity_usd}")
-            
             # Try to get metadata, but don't block on it for new tokens
             metadata = await self.moralis.get_token_metadata(mint_address)
             if not metadata:
