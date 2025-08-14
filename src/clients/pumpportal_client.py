@@ -25,6 +25,10 @@ class PumpPortalClient:
         self.connection_errors = 0
         self.max_connection_errors = 10
         
+        # Prevent multiple concurrent recv operations
+        self._recv_lock = asyncio.Lock()
+        self._is_receiving = False
+        
     async def initialize(self):
         """Initialize the WebSocket connection with proper cleanup"""
         try:
@@ -35,6 +39,9 @@ class PumpPortalClient:
                     await asyncio.sleep(0.1)  # Brief wait for cleanup
                 except:
                     pass  # Ignore cleanup errors
+            
+            # Reset receiving state
+            self._is_receiving = False
             
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
@@ -74,12 +81,21 @@ class PumpPortalClient:
         """Subscribe to both token launches and trades in a single stream with reconnection"""
         self.logger.info("subscribe_all_events called")
         
-        retry_count = 0
-        while retry_count < max_retries:
+        # Prevent multiple instances from reading the same WebSocket
+        async with self._recv_lock:
+            if self._is_receiving:
+                self.logger.warning("Another coroutine is already receiving messages, aborting")
+                return
+            
+            self._is_receiving = True
+            
             try:
-                if not self.connected or not self.websocket:
-                    self.logger.info(f"WebSocket not connected (attempt {retry_count + 1}/{max_retries}), initializing...")
-                    await self.initialize()
+                retry_count = 0
+                while retry_count < max_retries:
+                    try:
+                        if not self.connected or not self.websocket:
+                            self.logger.info(f"WebSocket not connected (attempt {retry_count + 1}/{max_retries}), initializing...")
+                            await self.initialize()
                 
                 # Subscribe to token launches
                 subscriptions = [
@@ -196,9 +212,12 @@ class PumpPortalClient:
                     self.connected = False
                     raise
                     
-        # If we get here, all retries are exhausted
-        self.logger.error("WebSocket connection could not be established after retries")
-        raise ConnectionError("Failed to maintain WebSocket connection to PumpPortal")
+                # If we get here, all retries are exhausted
+                self.logger.error("WebSocket connection could not be established after retries")
+                raise ConnectionError("Failed to maintain WebSocket connection to PumpPortal")
+                
+            finally:
+                self._is_receiving = False
     
     async def subscribe_token_launches(self) -> AsyncGenerator[Dict, None]:
         """Subscribe to new Pump.fun token creation events - matches Bitquery interface"""

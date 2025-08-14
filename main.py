@@ -89,6 +89,9 @@ class MemecoinTradingBot:
             self.wallet_tracker, self.realtime_client.bitquery_client, self.moralis, self.database, config_path
         )
         
+        # Monitoring state
+        self._pumpportal_monitoring = False
+        
         # Initialize safety checker and risk manager (Phase 4)
         self.safety_checker = SafetyChecker()
         self.risk_manager = AdaptiveRiskManager(
@@ -237,10 +240,16 @@ class MemecoinTradingBot:
 
     async def monitor_pumpportal_events(self):
         """Monitor unified PumpPortal stream for both token launches and trades with auto-reconnect"""
+        if self._pumpportal_monitoring:
+            self.logger.warning("PumpPortal monitoring already running, skipping")
+            return
+            
+        self._pumpportal_monitoring = True
         self.logger.info("Starting unified PumpPortal monitoring (tokens + trades)")
         
-        while self.running:  # Add reconnection loop
-            try:
+        try:
+            while self.running:  # Add reconnection loop
+                try:
                 # Check if PumpPortal client exists
                 if not self.realtime_client.pumpportal_client:
                     self.logger.error("PumpPortal client not available!")
@@ -315,6 +324,9 @@ class MemecoinTradingBot:
                 await asyncio.sleep(30)  # Wait before reconnection attempt
                 continue
                 
+        finally:
+            self._pumpportal_monitoring = False
+            
         self.logger.info("PumpPortal monitoring stopped")
 
     async def process_new_token(self, token_event: Dict):
