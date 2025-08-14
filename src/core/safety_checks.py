@@ -33,16 +33,17 @@ class SafetyChecker:
             return False
             
         # Look for sells in the last 60 seconds
-        current_time = datetime.now()
-        cutoff_time = current_time - timedelta(seconds=60)
+        import time
+        current_timestamp = time.time()
+        cutoff_timestamp = current_timestamp - 60
         
         sells_found = 0
         unique_sellers = set()
         
         for trade in recent_trades:
-            # Parse timestamp
-            trade_time = self._parse_timestamp(trade.get('timestamp'))
-            if trade_time < cutoff_time:
+            # Parse timestamp to unix timestamp for consistent comparison
+            trade_timestamp = self._parse_timestamp_to_unix(trade.get('timestamp'))
+            if trade_timestamp < cutoff_timestamp:
                 continue
                 
             # Check if it's a sell
@@ -177,6 +178,20 @@ class SafetyChecker:
                 return datetime.now()
         return datetime.now()
     
+    def _parse_timestamp_to_unix(self, timestamp) -> float:
+        """Parse timestamp to unix timestamp for consistent comparison"""
+        if isinstance(timestamp, (int, float)):
+            return float(timestamp)
+        elif isinstance(timestamp, str):
+            try:
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                return dt.timestamp()
+            except:
+                import time
+                return time.time()
+        import time
+        return time.time()
+    
     def analyze_trading_velocity(self, recent_trades: List[Dict]) -> Dict:
         """
         Analyze trading velocity and momentum
@@ -195,15 +210,16 @@ class SafetyChecker:
             }
             
         # Count trades in last minute
-        current_time = datetime.now()
-        one_minute_ago = current_time - timedelta(minutes=1)
+        import time
+        current_timestamp = time.time()
+        one_minute_ago_timestamp = current_timestamp - 60
         
         recent_buys = 0
         recent_sells = 0
         
         for trade in recent_trades:
-            trade_time = self._parse_timestamp(trade.get('timestamp'))
-            if trade_time < one_minute_ago:
+            trade_timestamp = self._parse_timestamp_to_unix(trade.get('timestamp'))
+            if trade_timestamp < one_minute_ago_timestamp:
                 continue
                 
             if trade.get('side') == 'buy':
