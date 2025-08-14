@@ -85,15 +85,9 @@ class MemecoinTradingBot:
         self.database = Database(self.config.database_file)
         
         # Initialize wallet rotation manager (will get discord notifier later)
-        self.logger.info("Creating WalletRotationManager...")
-        self.logger.info(f"  wallet_tracker: {self.wallet_tracker}")
-        self.logger.info(f"  bitquery_client: {self.realtime_client.bitquery_client}")
-        self.logger.info(f"  moralis: {self.moralis}")
-        self.logger.info(f"  database: {self.database}")
         self.wallet_rotation_manager = WalletRotationManager(
             self.wallet_tracker, self.realtime_client.bitquery_client, self.moralis, self.database, config_path
         )
-        self.logger.info("WalletRotationManager created successfully")
         
         # Initialize safety checker and risk manager (Phase 4)
         self.safety_checker = SafetyChecker()
@@ -204,87 +198,22 @@ class MemecoinTradingBot:
         self.logger.info(f"Realtime client initialized with source: {self.realtime_client.get_source()}")
         
         # Start monitoring tasks
-        self.logger.info("Starting monitoring tasks...")
-        
-        tasks = []
-        
-        self.logger.info("Creating manage_active_positions task...")
-        tasks.append(self.manage_active_positions())
-        
-        self.logger.info("Creating daily_reset_task...")
-        tasks.append(self.daily_reset_task())
-        
-        self.logger.info("Creating periodic_summary_task...")
-        tasks.append(self.periodic_summary_task())
-        
-        self.logger.info("Creating heartbeat_task...")
-        tasks.append(self.heartbeat_task())
-        
-        self.logger.info("Creating wallet_rotation_manager task...")
-        self.logger.info(f"Wallet rotation manager object exists: {self.wallet_rotation_manager is not None}")
-        self.logger.info(f"Wallet rotation manager type: {type(self.wallet_rotation_manager)}")
-        try:
-            self.logger.info("About to create rotation coroutine...")
-            rotation_coro = self.wallet_rotation_manager.start_rotation_loop()
-            self.logger.info(f"Wallet rotation coroutine created: {rotation_coro}")
-            tasks.append(rotation_coro)
-            self.logger.info("Wallet rotation task added to tasks list")
-        except Exception as e:
-            self.logger.error(f"Error creating wallet rotation coroutine: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
-        
-        self.logger.info("Finished wallet rotation task setup")
-        
-        print("DEBUG: About to check config...")
-        print(f"DEBUG: Config object exists: {self.config is not None}")
-        print(f"DEBUG: Config type: {type(self.config)}")
-        
-        try:
-            self.logger.info("Checking if config has realtime_source attribute...")
-            has_attr = hasattr(self.config, 'realtime_source')
-            self.logger.info(f"Has realtime_source: {has_attr}")
-            
-            if has_attr:
-                self.logger.info("Getting realtime_source value...")
-                realtime_source = self.config.realtime_source
-                self.logger.info(f"Got realtime_source: {realtime_source}")
-            else:
-                self.logger.info("No realtime_source attribute, using default")
-                realtime_source = 'pumpportal'
-                
-        except Exception as e:
-            self.logger.error(f"Error getting realtime_source: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
-            realtime_source = 'pumpportal'
+        tasks = [
+            self.manage_active_positions(),
+            self.daily_reset_task(),
+            self.periodic_summary_task(),
+            self.heartbeat_task(),
+            self.wallet_rotation_manager.start_rotation_loop()
+        ]
         
         # Use unified stream for PumpPortal or separate for Bitquery
+        realtime_source = getattr(self.config, 'realtime_source', 'pumpportal')
         if realtime_source == 'pumpportal':
-            self.logger.info("Adding PumpPortal event monitoring task")
-            try:
-                self.logger.info("About to create PumpPortal monitoring coroutine...")
-                pump_coro = self.monitor_pumpportal_events()
-                self.logger.info(f"PumpPortal coroutine created: {pump_coro}")
-                tasks.append(pump_coro)
-                self.logger.info("PumpPortal task added to tasks list")
-            except Exception as e:
-                self.logger.error(f"Error creating PumpPortal coroutine: {e}")
-                import traceback
-                self.logger.error(traceback.format_exc())
+            tasks.append(self.monitor_pumpportal_events())
         else:
-            self.logger.info("Adding Bitquery token monitoring task")
             tasks.append(self.monitor_new_tokens())
         
-        self.logger.info(f"All {len(tasks)} tasks created, starting with asyncio.gather...")
-        
-        try:
-            self.logger.info("About to call asyncio.gather...")
-            await asyncio.gather(*tasks)
-        except Exception as e:
-            self.logger.error(f"Error in asyncio.gather: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
+        await asyncio.gather(*tasks)
 
     async def monitor_new_tokens(self):
         """Monitor for new token launches via Bitquery"""
@@ -311,8 +240,12 @@ class MemecoinTradingBot:
             
             self.logger.info("Subscribing to PumpPortal all events stream...")
             
+            event_count = 0
             # Use the unified stream from PumpPortal
             async for event in self.realtime_client.pumpportal_client.subscribe_all_events():
+                event_count += 1
+                if event_count <= 3:  # Log first few events
+                    self.logger.info(f"Received PumpPortal event #{event_count}: {event.get('event_type', 'unknown')}")
                 if not self.running:
                     break
                     

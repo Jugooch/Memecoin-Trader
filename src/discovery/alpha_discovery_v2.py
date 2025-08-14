@@ -509,8 +509,9 @@ class ProvenAlphaFinder:
         mint = token_data['mint']
         try:
             current_price = await self.moralis.get_current_price(mint)
-
+            
             if current_price <= 0:
+                self.logger.debug(f"Token {mint[:8]}... has no price data (price={current_price})")
                 return False
 
             performance_multiplier = token_data.get('performance_multiplier', 1.0)

@@ -82,8 +82,13 @@ class PumpPortalClient:
             
             self.logger.info("Subscribed to both token launches and trades, waiting for messages...")
             
+            message_count = 0
             # Process all messages from the single WebSocket
             async for message in self.websocket:
+                message_count += 1
+                if message_count <= 5:  # Log first 5 messages for debugging
+                    self.logger.info(f"PumpPortal message #{message_count}: {message[:200]}...")
+                
                 try:
                     data = json.loads(message)
                     
