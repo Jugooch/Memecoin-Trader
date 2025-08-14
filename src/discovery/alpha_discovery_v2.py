@@ -511,27 +511,32 @@ class ProvenAlphaFinder:
             current_price = await self.moralis.get_current_price(mint)
             
             if current_price <= 0:
-                self.logger.debug(f"Token {mint[:8]}... has no price data (price={current_price})")
+                self.logger.warning(f"Token {mint[:8]}... has no price data (price={current_price}) - Moralis may be rate limited or token too new")
                 return False
 
             performance_multiplier = token_data.get('performance_multiplier', 1.0)
             bitquery_score = token_data.get('bitquery_success_score', 0)
             success_tier = token_data.get('success_tier', None)
+            success_threshold = self.success_thresholds['low']
+
+            self.logger.info(f"Token {mint[:8]}... validation check: price=${current_price:.8f}, perf={performance_multiplier:.2f}x, score={bitquery_score}, tier={success_tier}, threshold={success_threshold}")
 
             token_data['current_price'] = current_price
             is_successful = (
                 success_tier is not None and 
                 bitquery_score >= 25 and
-                performance_multiplier >= self.success_thresholds['low']  # At least 1.2x
+                performance_multiplier >= success_threshold  # At least 1.2x
             )
-            if is_successful:
-                self.logger.debug(
-                    f"Token {mint[:8]}... validated: perf={performance_multiplier:.2f}x, score={bitquery_score}"
-                )
+            
+            if not is_successful:
+                self.logger.warning(f"Token {mint[:8]}... FAILED validation: tier_ok={success_tier is not None}, score_ok={bitquery_score >= 25}, perf_ok={performance_multiplier >= success_threshold}")
+            else:
+                self.logger.info(f"Token {mint[:8]}... PASSED validation: perf={performance_multiplier:.2f}x, score={bitquery_score}")
+                
             return is_successful
 
         except Exception as e:
-            self.logger.debug(f"Error validating token {mint[:8]}...: {e}")
+            self.logger.error(f"Error validating token {mint[:8]}...: {e}")
             return False
 
 
