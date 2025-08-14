@@ -250,79 +250,79 @@ class MemecoinTradingBot:
         try:
             while self.running:  # Add reconnection loop
                 try:
-                # Check if PumpPortal client exists
-                if not self.realtime_client.pumpportal_client:
-                    self.logger.error("PumpPortal client not available!")
-                    await asyncio.sleep(60)  # Wait before retry
+                    # Check if PumpPortal client exists
+                    if not self.realtime_client.pumpportal_client:
+                        self.logger.error("PumpPortal client not available!")
+                        await asyncio.sleep(60)  # Wait before retry
+                        continue
+                    
+                    self.logger.info("Subscribing to PumpPortal all events stream...")
+                    
+                    event_count = 0
+                    # Use the unified stream from PumpPortal, passing our watched wallets
+                    watched_wallets = list(self.wallet_tracker.watched_wallets)
+                    async for event in self.realtime_client.pumpportal_client.subscribe_all_events(watched_wallets):
+                        event_count += 1
+                        if event_count <= 3:  # Log first few events
+                            self.logger.info(f"Received PumpPortal event #{event_count}: {event.get('event_type', 'unknown')}")
+                        if not self.running:
+                            break
+                            
+                        try:
+                            event_type = event.get('event_type')
+                            
+                            if event_type == 'token_launch':
+                                # Process as new token
+                                mint = event.get('mint', 'unknown')
+                                self.logger.debug(f"Processing token launch: {mint[:8]}...")
+                                await self.process_new_token(event)
+                                
+                            elif event_type == 'trade':
+                                # Process as trade for alpha detection
+                                mint = event.get('mint')
+                                trader = event.get('buyer') or event.get('seller')
+                                is_buy = event.get('buyer') is not None
+                                timestamp = event.get('timestamp')
+                                
+                                if mint and trader and is_buy:
+                                    # Check if this is from an alpha wallet
+                                    if trader in self.wallet_tracker.watched_wallets:
+                                        # Record this alpha wallet buy for real-time detection
+                                        self.wallet_tracker.record_realtime_alpha_buy(trader, mint, timestamp)
+                                        self.logger.info(f"REALTIME ALPHA: {trader[:8]}... bought {mint[:8]}... (via PumpPortal)")
+                                        
+                                        # Check if we have enough alpha signals to process this token
+                                        current_alpha_buyers = self.wallet_tracker.get_realtime_alpha_buyers(
+                                            mint, 
+                                            self.config.time_window_sec
+                                        )
+                                        
+                                        # If we hit threshold from real-time data alone, process the token
+                                        if len(current_alpha_buyers) >= self.config.threshold_alpha_buys:
+                                            if mint not in self.processed_tokens:
+                                                self.logger.info(f"Alpha threshold reached for {mint[:8]}... from real-time data, processing token")
+                                                # Create a token event for processing
+                                                token_event = {
+                                                    'mint': mint,
+                                                    'deployer': event.get('deployer', 'unknown'),
+                                                    'name': event.get('name', ''),
+                                                    'symbol': event.get('symbol', ''),
+                                                    'timestamp': timestamp
+                                                }
+                                                await self.process_new_token(token_event)
+                                    else:
+                                        # Log non-alpha trades for debugging (limited)
+                                        if event_count <= 10:
+                                            self.logger.debug(f"Non-alpha trade: {trader[:8]}... -> {mint[:8]}...")
+                            
+                        except Exception as e:
+                            self.logger.error(f"Error processing PumpPortal event: {e}")
+                    
+                except (ConnectionError, OSError, Exception) as e:
+                    self.logger.error(f"PumpPortal connection error: {e}")
+                    self.logger.info("Will attempt to reconnect in 30 seconds...")
+                    await asyncio.sleep(30)  # Wait before reconnection attempt
                     continue
-                
-                self.logger.info("Subscribing to PumpPortal all events stream...")
-                
-                event_count = 0
-                # Use the unified stream from PumpPortal, passing our watched wallets
-                watched_wallets = list(self.wallet_tracker.watched_wallets)
-                async for event in self.realtime_client.pumpportal_client.subscribe_all_events(watched_wallets):
-                    event_count += 1
-                if event_count <= 3:  # Log first few events
-                    self.logger.info(f"Received PumpPortal event #{event_count}: {event.get('event_type', 'unknown')}")
-                if not self.running:
-                    break
-                    
-                try:
-                    event_type = event.get('event_type')
-                    
-                    if event_type == 'token_launch':
-                        # Process as new token
-                        mint = event.get('mint', 'unknown')
-                        self.logger.debug(f"Processing token launch: {mint[:8]}...")
-                        await self.process_new_token(event)
-                        
-                    elif event_type == 'trade':
-                        # Process as trade for alpha detection
-                        mint = event.get('mint')
-                        trader = event.get('buyer') or event.get('seller')
-                        is_buy = event.get('buyer') is not None
-                        timestamp = event.get('timestamp')
-                        
-                        if mint and trader and is_buy:
-                            # Check if this is from an alpha wallet
-                            if trader in self.wallet_tracker.watched_wallets:
-                                # Record this alpha wallet buy for real-time detection
-                                self.wallet_tracker.record_realtime_alpha_buy(trader, mint, timestamp)
-                                self.logger.info(f"REALTIME ALPHA: {trader[:8]}... bought {mint[:8]}... (via PumpPortal)")
-                                
-                                # Check if we have enough alpha signals to process this token
-                                current_alpha_buyers = self.wallet_tracker.get_realtime_alpha_buyers(
-                                    mint, 
-                                    self.config.time_window_sec
-                                )
-                                
-                                # If we hit threshold from real-time data alone, process the token
-                                if len(current_alpha_buyers) >= self.config.threshold_alpha_buys:
-                                    if mint not in self.processed_tokens:
-                                        self.logger.info(f"Alpha threshold reached for {mint[:8]}... from real-time data, processing token")
-                                        # Create a token event for processing
-                                        token_event = {
-                                            'mint': mint,
-                                            'deployer': event.get('deployer', 'unknown'),
-                                            'name': event.get('name', ''),
-                                            'symbol': event.get('symbol', ''),
-                                            'timestamp': timestamp
-                                        }
-                                        await self.process_new_token(token_event)
-                            else:
-                                # Log non-alpha trades for debugging (limited)
-                                if event_count <= 10:
-                                    self.logger.debug(f"Non-alpha trade: {trader[:8]}... -> {mint[:8]}...")
-                        
-                except Exception as e:
-                    self.logger.error(f"Error processing PumpPortal event: {e}")
-                    
-            except (ConnectionError, OSError, Exception) as e:
-                self.logger.error(f"PumpPortal connection error: {e}")
-                self.logger.info("Will attempt to reconnect in 30 seconds...")
-                await asyncio.sleep(30)  # Wait before reconnection attempt
-                continue
                 
         finally:
             self._pumpportal_monitoring = False

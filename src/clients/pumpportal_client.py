@@ -96,122 +96,121 @@ class PumpPortalClient:
                         if not self.connected or not self.websocket:
                             self.logger.info(f"WebSocket not connected (attempt {retry_count + 1}/{max_retries}), initializing...")
                             await self.initialize()
-                
-                # Subscribe to token launches
-                subscriptions = [
-                    {"method": "subscribeNewToken"},
-                ]
-                
-                # Try different approaches for trade subscription
-                if watched_wallets and len(watched_wallets) > 0:
-                    # Subscribe to trades from specific wallets (alpha wallets)
-                    subscriptions.append({"method": "subscribeAccountTrade", "keys": watched_wallets[:100]})  # Limit to first 100 wallets
-                    self.logger.info(f"Subscribing to trades from {len(watched_wallets[:100])} alpha wallets")
-                else:
-                    # Try to subscribe to all token trades
-                    subscriptions.append({"method": "subscribeTokenTrade", "keys": []})
-                    self.logger.info("Subscribing to all token trades")
-                
-                self.logger.info(f"Sending {len(subscriptions)} subscription messages...")
-                
-                for sub_msg in subscriptions:
-                    try:
-                        await self.websocket.send(json.dumps(sub_msg))
-                        self.logger.info(f"Sent subscription: {sub_msg}")
-                        await asyncio.sleep(0.1)
-                    except Exception as e:
-                        self.logger.warning(f"Failed to send subscription: {e}")
-                
-                self.logger.info("Subscribed to both token launches and trades, waiting for messages...")
-                
-                message_count = 0
-                # Process all messages from the single WebSocket
-                async for message in self.websocket:
-                    message_count += 1
-                    self.last_message_time = asyncio.get_event_loop().time()
-                    
-                    if message_count <= 5:  # Log first 5 messages for debugging
-                        self.logger.info(f"PumpPortal message #{message_count}: {message[:200]}...")
-                    
-                    # Reset error count on successful message
-                    self.connection_errors = 0
-                    
-                    try:
-                        data = json.loads(message)
                         
-                        # Determine message type and parse accordingly
-                        if 'txType' in data:
-                            tx_type = data.get('txType', '').lower()
-                            
-                            if tx_type == 'create':
-                                # Token creation event
-                                token_data = self._parse_pump_portal_message(data)
-                                if token_data:
-                                    token_data['event_type'] = 'token_launch'
-                                    self.logger.debug(f"Token launch: {token_data.get('symbol')} ({token_data.get('mint', '')[:8]}...)")
-                                    yield token_data
-                                    
-                            elif tx_type in ['buy', 'sell']:
-                                # Trade event
-                                trade_data = self._parse_pump_portal_trade(data)
-                                if trade_data:
-                                    trade_data['event_type'] = 'trade'
-                                    yield trade_data
+                        # Subscribe to token launches
+                        subscriptions = [
+                            {"method": "subscribeNewToken"},
+                        ]
+                        
+                        # Try different approaches for trade subscription
+                        if watched_wallets and len(watched_wallets) > 0:
+                            # Subscribe to trades from specific wallets (alpha wallets)
+                            subscriptions.append({"method": "subscribeAccountTrade", "keys": watched_wallets[:100]})  # Limit to first 100 wallets
+                            self.logger.info(f"Subscribing to trades from {len(watched_wallets[:100])} alpha wallets")
                         else:
-                            # Try to parse as either type
-                            token_data = self._parse_pump_portal_message(data)
-                            if token_data:
-                                token_data['event_type'] = 'token_launch'
-                                yield token_data
-                            else:
-                                trade_data = self._parse_pump_portal_trade(data)
-                                if trade_data:
-                                    trade_data['event_type'] = 'trade'
-                                    yield trade_data
-                                    
-                    except json.JSONDecodeError as e:
-                        self.logger.warning(f"Failed to parse message: {e}")
-                    except Exception as e:
-                        self.logger.error(f"Error processing message: {e}")
+                            # Try to subscribe to all token trades
+                            subscriptions.append({"method": "subscribeTokenTrade", "keys": []})
+                            self.logger.info("Subscribing to all token trades")
+                        
+                        self.logger.info(f"Sending {len(subscriptions)} subscription messages...")
+                        
+                        for sub_msg in subscriptions:
+                            try:
+                                await self.websocket.send(json.dumps(sub_msg))
+                                self.logger.info(f"Sent subscription: {sub_msg}")
+                                await asyncio.sleep(0.1)
+                            except Exception as e:
+                                self.logger.warning(f"Failed to send subscription: {e}")
+                        
+                        self.logger.info("Subscribed to both token launches and trades, waiting for messages...")
+                        
+                        message_count = 0
+                        # Process all messages from the single WebSocket
+                        async for message in self.websocket:
+                            message_count += 1
+                            self.last_message_time = asyncio.get_event_loop().time()
+                            
+                            if message_count <= 5:  # Log first 5 messages for debugging
+                                self.logger.info(f"PumpPortal message #{message_count}: {message[:200]}...")
+                            
+                            # Reset error count on successful message
+                            self.connection_errors = 0
+                            
+                            try:
+                                data = json.loads(message)
                                 
-                    
-            except (websockets.exceptions.ConnectionClosed, 
-                    websockets.exceptions.ConnectionClosedError,
-                    ConnectionResetError, 
-                    OSError) as e:
-                self.logger.warning(f"WebSocket connection lost: {e}")
-                self.connected = False
-                retry_count += 1
-                
-                if retry_count < max_retries:
-                    wait_time = min(2 ** retry_count, 30)  # Exponential backoff, max 30s
-                    self.logger.info(f"Attempting reconnect in {wait_time}s (attempt {retry_count + 1}/{max_retries})")
-                    await asyncio.sleep(wait_time)
-                    continue
-                else:
-                    self.logger.error(f"Max reconnection attempts ({max_retries}) reached")
-                    raise
-                    
-            except Exception as e:
-                # For the specific 'NoneType' resume_reading error, treat as connection issue
-                if "resume_reading" in str(e) or "NoneType" in str(e):
-                    self.logger.warning(f"WebSocket transport error: {e}")
-                    self.connected = False
-                    retry_count += 1
-                    
-                    if retry_count < max_retries:
-                        wait_time = min(2 ** retry_count, 30)
-                        self.logger.info(f"Attempting reconnect after transport error in {wait_time}s")
-                        await asyncio.sleep(wait_time)
-                        continue
-                    else:
-                        self.logger.error(f"Max reconnection attempts ({max_retries}) reached after transport errors")
-                        raise
-                else:
-                    self.logger.error(f"Pump Portal WebSocket error: {e}")
-                    self.connected = False
-                    raise
-                    
+                                # Determine message type and parse accordingly
+                                if 'txType' in data:
+                                    tx_type = data.get('txType', '').lower()
+                                    
+                                    if tx_type == 'create':
+                                        # Token creation event
+                                        token_data = self._parse_pump_portal_message(data)
+                                        if token_data:
+                                            token_data['event_type'] = 'token_launch'
+                                            self.logger.debug(f"Token launch: {token_data.get('symbol')} ({token_data.get('mint', '')[:8]}...)")
+                                            yield token_data
+                                            
+                                    elif tx_type in ['buy', 'sell']:
+                                        # Trade event
+                                        trade_data = self._parse_pump_portal_trade(data)
+                                        if trade_data:
+                                            trade_data['event_type'] = 'trade'
+                                            yield trade_data
+                                else:
+                                    # Try to parse as either type
+                                    token_data = self._parse_pump_portal_message(data)
+                                    if token_data:
+                                        token_data['event_type'] = 'token_launch'
+                                        yield token_data
+                                    else:
+                                        trade_data = self._parse_pump_portal_trade(data)
+                                        if trade_data:
+                                            trade_data['event_type'] = 'trade'
+                                            yield trade_data
+                                            
+                            except json.JSONDecodeError as e:
+                                self.logger.warning(f"Failed to parse message: {e}")
+                            except Exception as e:
+                                self.logger.error(f"Error processing message: {e}")
+                                
+                    except (websockets.exceptions.ConnectionClosed, 
+                            websockets.exceptions.ConnectionClosedError,
+                            ConnectionResetError, 
+                            OSError) as e:
+                        self.logger.warning(f"WebSocket connection lost: {e}")
+                        self.connected = False
+                        retry_count += 1
+                        
+                        if retry_count < max_retries:
+                            wait_time = min(2 ** retry_count, 30)  # Exponential backoff, max 30s
+                            self.logger.info(f"Attempting reconnect in {wait_time}s (attempt {retry_count + 1}/{max_retries})")
+                            await asyncio.sleep(wait_time)
+                            continue
+                        else:
+                            self.logger.error(f"Max reconnection attempts ({max_retries}) reached")
+                            raise
+                            
+                    except Exception as e:
+                        # For the specific 'NoneType' resume_reading error, treat as connection issue
+                        if "resume_reading" in str(e) or "NoneType" in str(e):
+                            self.logger.warning(f"WebSocket transport error: {e}")
+                            self.connected = False
+                            retry_count += 1
+                            
+                            if retry_count < max_retries:
+                                wait_time = min(2 ** retry_count, 30)
+                                self.logger.info(f"Attempting reconnect after transport error in {wait_time}s")
+                                await asyncio.sleep(wait_time)
+                                continue
+                            else:
+                                self.logger.error(f"Max reconnection attempts ({max_retries}) reached after transport errors")
+                                raise
+                        else:
+                            self.logger.error(f"Pump Portal WebSocket error: {e}")
+                            self.connected = False
+                            raise
+                            
                 # If we get here, all retries are exhausted
                 self.logger.error("WebSocket connection could not be established after retries")
                 raise ConnectionError("Failed to maintain WebSocket connection to PumpPortal")
@@ -471,7 +470,7 @@ class PumpPortalClient:
                 'buy_amount': amount if is_buy else 0,
                 'sell_amount': amount if not is_buy else 0,
                 'sol_amount': sol_amount,
-                'trade_type': trade_type
+                'trade_type': 'buy' if is_buy else 'sell'
             }
             
         except Exception as e:
@@ -480,37 +479,9 @@ class PumpPortalClient:
     
     async def close(self):
         """Close the WebSocket connection"""
-        if self.websocket:
+        self.connected = False
+        if self.websocket and not self.websocket.closed:
             try:
                 await self.websocket.close()
-                self.logger.info("Pump Portal WebSocket connection closed")
             except Exception as e:
-                self.logger.debug(f"Error closing WebSocket: {e}")
-        self.websocket = None
-        self.connected = False
-    
-    def is_connected(self) -> bool:
-        """Check if WebSocket is connected"""
-        is_conn = self.connected and self.websocket is not None
-        if not is_conn and self.websocket:
-            self.logger.debug(f"Connection check: connected={self.connected}, websocket_exists={bool(self.websocket)}")
-        return is_conn
-    
-    async def get_connection_info(self) -> Dict:
-        """Get detailed connection information for debugging"""
-        info = {
-            'connected': self.connected,
-            'websocket_exists': bool(self.websocket),
-            'websocket_closed': self.websocket.closed if self.websocket else None,
-            'websocket_state': str(self.websocket.state) if self.websocket else None,
-        }
-        
-        if self.websocket:
-            try:
-                # Try to get more connection details
-                info['remote_address'] = str(self.websocket.remote_address) if hasattr(self.websocket, 'remote_address') else 'unknown'
-                info['local_address'] = str(self.websocket.local_address) if hasattr(self.websocket, 'local_address') else 'unknown'
-            except Exception as e:
-                info['connection_info_error'] = str(e)
-        
-        return info
+                self.logger.error(f"Error closing WebSocket: {e}")
