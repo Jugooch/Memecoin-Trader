@@ -255,6 +255,8 @@ class MemecoinTradingBot:
                     
                     if event_type == 'token_launch':
                         # Process as new token
+                        mint = event.get('mint', 'unknown')
+                        self.logger.info(f"Processing token launch: {mint[:8]}...")
                         await self.process_new_token(event)
                         
                     elif event_type == 'trade':
@@ -269,7 +271,11 @@ class MemecoinTradingBot:
                             if trader in self.wallet_tracker.watched_wallets:
                                 # Record this alpha wallet buy for real-time detection
                                 self.wallet_tracker.record_realtime_alpha_buy(trader, mint, timestamp)
-                                self.logger.debug(f"REALTIME ALPHA: {trader[:8]}... bought {mint[:8]}... (via PumpPortal)")
+                                self.logger.info(f"REALTIME ALPHA: {trader[:8]}... bought {mint[:8]}... (via PumpPortal)")
+                            else:
+                                # Log non-alpha trades for debugging (limited)
+                                if event_count <= 10:
+                                    self.logger.debug(f"Non-alpha trade: {trader[:8]}... -> {mint[:8]}...")
                         
                 except Exception as e:
                     self.logger.error(f"Error processing PumpPortal event: {e}")
