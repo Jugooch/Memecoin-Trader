@@ -507,6 +507,7 @@ class ProvenAlphaFinder:
     async def _validate_token_with_moralis(self, token_data: Dict) -> bool:
         """Validate a promising token with minimal Moralis calls"""
         mint = token_data['mint']
+        self.logger.info(f"Validating token {mint[:8]}... with Moralis")
         try:
             current_price = await self.moralis.get_current_price(mint)
             
