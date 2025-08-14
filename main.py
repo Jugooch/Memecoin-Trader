@@ -389,7 +389,7 @@ class MemecoinTradingBot:
             # If we get here, token has alpha signal - now it's worth detailed checking
             metadata_status = "with metadata" if metadata else "metadata-pending"
             liquidity_status = f"${liquidity.get('total_liquidity_usd', 0):,.0f}" if liquidity.get('total_liquidity_usd', 0) > 0 else "pending"
-            self.logger.info(f"Alpha-signaled token {mint_address[:8]}... proceeding to detailed check (liquidity: {liquidity_status}, {metadata_status})"
+            self.logger.info(f"Alpha-signaled token {mint_address[:8]}... proceeding to detailed check (liquidity: {liquidity_status}, {metadata_status})")
                 
         except Exception as e:
             # Only log 404s at debug level since they're common for new tokens
@@ -776,6 +776,9 @@ class MemecoinTradingBot:
                            f"Score: {rug_score}, Safe: {is_safe}, Warnings: {len(warnings)}")
             
             return result
+        except Exception as e:
+            self.logger.error(f"Error checking token safety for {mint_address}: {e}")
+            return {'safe': False, 'rug_score': 100, 'warnings': ['Safety check failed']}
             
         except Exception as e:
             self.logger.error(f"Error checking token safety for {mint_address}: {e}")
