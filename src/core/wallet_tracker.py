@@ -276,24 +276,39 @@ class WalletTracker:
         
         # Check if we meet minimum weight threshold
         min_weight = self.config.get('alpha_weight_min', 2.5)
-        require_high_confidence = self.config.get('require_one_wallet_pge_55', True)
+        require_high_confidence = self.config.get('require_one_wallet_pge_55', False)
         
-        # Check for at least one high-confidence wallet (>55% win rate)
+        # Use smart confidence scoring that handles fresh wallets appropriately
         has_high_confidence = False
+        high_confidence_wallets = []
         if require_high_confidence:
             for wallet in alpha_buyers:
-                if self.wallet_scorer.get_wallet_score(wallet) >= 0.55:
+                smart_confidence = self.wallet_scorer.get_smart_confidence_score(wallet)
+                if smart_confidence >= 0.55:
                     has_high_confidence = True
-                    break
+                    high_confidence_wallets.append(wallet)
+            
+            # Log confidence scoring details for debugging
+            confidence_details = []
+            for wallet in alpha_buyers:
+                smart_conf = self.wallet_scorer.get_smart_confidence_score(wallet)
+                trade_count = self.wallet_scorer.get_wallet_trade_count(wallet)
+                confidence_details.append(f"{wallet[:8]}({smart_conf:.2f}/tc:{trade_count})")
+            
+            self.logger.debug(f"Confidence check: {len(high_confidence_wallets)}/{len(alpha_buyers)} wallets >= 55%: "
+                            f"[{', '.join(confidence_details)}]")
         
         # Calculate confidence score based on weighted voting
         if not alpha_buyers or total_weight < min_weight:
             return {'alpha_wallets': set(), 'wallet_tiers': {}, 'confidence_score': 0, 
                    'investment_multiplier': 0.6, 'total_weight': total_weight, 'meets_threshold': False}
         
-        # Check high confidence requirement
+        # Check smart confidence requirement
         if require_high_confidence and not has_high_confidence:
-            self.logger.info(f"Weight threshold met ({total_weight:.2f}) but no wallet with >55% win rate")
+            # This should rarely happen now with smart scoring, but keep for safety
+            avg_confidence = sum(self.wallet_scorer.get_smart_confidence_score(w) for w in alpha_buyers) / len(alpha_buyers)
+            self.logger.info(f"Weight threshold met ({total_weight:.2f}) but no wallet with smart confidence >=55% "
+                           f"(avg: {avg_confidence:.2f})")
             return {'alpha_wallets': alpha_buyers, 'wallet_tiers': wallet_tiers, 
                    'confidence_score': total_weight * 10, 'investment_multiplier': 0.6, 
                    'total_weight': total_weight, 'meets_threshold': False}

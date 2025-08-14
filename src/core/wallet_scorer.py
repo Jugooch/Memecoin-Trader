@@ -190,6 +190,50 @@ class WalletScorer:
         
         return weighted_score
         
+    def get_smart_confidence_score(self, wallet: str) -> float:
+        """
+        Smart confidence scoring that handles fresh wallets appropriately
+        
+        Fresh wallets from discovery get benefit of the doubt since they
+        passed rigorous discovery filters. Developing wallets get a floor
+        to prevent cold start issues. Established wallets use full Bayesian.
+        
+        Returns:
+            Confidence score (0.0 to 1.0)
+        """
+        if wallet not in self.wallet_stats:
+            # Fresh wallet from discovery = trust the discovery process
+            self.logger.debug(f"Fresh wallet {wallet[:8]}... gets default confidence: 0.65")
+            return 0.65  # 65% confidence (above 55% threshold)
+            
+        stats = self.wallet_stats[wallet]
+        trade_count = stats.wins + stats.losses
+        
+        if trade_count <= 3:
+            # Developing wallet - use optimistic floor with Bayesian score
+            bayesian_score = self.get_wallet_score(wallet)
+            confidence_score = max(bayesian_score, 0.55)  # Floor at 55%
+            self.logger.debug(f"Developing wallet {wallet[:8]}... (trades={trade_count}): "
+                            f"bayesian={bayesian_score:.3f}, confidence={confidence_score:.3f}")
+            return confidence_score
+        else:
+            # Established wallet - full Bayesian scoring
+            confidence_score = self.get_wallet_score(wallet)
+            self.logger.debug(f"Established wallet {wallet[:8]}... (trades={trade_count}): "
+                            f"confidence={confidence_score:.3f}")
+            return confidence_score
+            
+    def get_wallet_trade_count(self, wallet: str) -> int:
+        """
+        Get total number of trades for a wallet
+        
+        Returns:
+            Total trade count
+        """
+        if wallet not in self.wallet_stats:
+            return 0
+        return self.wallet_stats[wallet].wins + self.wallet_stats[wallet].losses
+        
     def get_wallet_confidence_interval(self, wallet: str, confidence: float = 0.95) -> Tuple[float, float]:
         """
         Calculate confidence interval for wallet win rate

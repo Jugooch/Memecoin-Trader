@@ -46,10 +46,11 @@ from src.utils.config_loader import load_config
 
 
 class ProvenAlphaFinder:
-    def __init__(self, bitquery: BitqueryClient, moralis: MoralisClient, database: Database):
+    def __init__(self, bitquery: BitqueryClient, moralis: MoralisClient, database: Database, config: Dict = None):
         self.bitquery = bitquery
         self.moralis = moralis
         self.database = database
+        self.config = config or {}
         self.logger = logging.getLogger(__name__)
         
         # Strategy parameters - Multi-tier approach for more wallet discovery
@@ -655,6 +656,39 @@ class ProvenAlphaFinder:
             self.logger.error(f"Error analyzing token success {mint}: {e}")
             return False
     
+    def _get_trade_size_usd(self, trade_data: Dict) -> float:
+        """Extract USD trade size from various trade data formats"""
+        # Try common USD amount fields
+        usd_amount = (trade_data.get('amount_usd') or 
+                     trade_data.get('usd_value') or 
+                     trade_data.get('value_usd') or
+                     trade_data.get('AmountUSD') or  # Bitquery format
+                     0)
+        
+        if usd_amount and usd_amount > 0:
+            return float(usd_amount)
+            
+        # Fallback: try to calculate from SOL amount (rough estimate)
+        sol_amount = (trade_data.get('amount_sol') or 
+                     trade_data.get('Amount') or  # Bitquery format
+                     0)
+        
+        if sol_amount and sol_amount > 0:
+            # Rough SOL to USD conversion (~$140 per SOL)
+            return float(sol_amount) * 140
+            
+        return 0
+    
+    def _is_significant_position(self, trade_data: Dict) -> bool:
+        """Check if trade represents a significant position (not noise or whale)"""
+        # Get position filter configuration
+        position_filters = getattr(self, 'config', {}).get('discovery_position_filters', {})
+        min_usd = position_filters.get('min_position_usd', 50)
+        max_usd = position_filters.get('max_position_usd', 5000)
+        
+        usd_size = self._get_trade_size_usd(trade_data)
+        return min_usd <= usd_size <= max_usd
+
     async def _find_early_buyers(self, token_data: Dict) -> List[str]:
         """Find wallets that bought token in first 10 minutes after launch using Bitquery first"""
         mint = token_data['mint']
@@ -667,6 +701,7 @@ class ProvenAlphaFinder:
         try:
             early_window = self.early_window_seconds  # 600 seconds (10 minutes)
             early_buyers = set()
+            filtered_buyers = set()
             
             # FIRST: Try using Bitquery data we already have (cheaper and aligned)
             raw_trades = token_data.get('raw_trades', [])
@@ -683,15 +718,26 @@ class ProvenAlphaFinder:
                     and str(t.get('signer')) != mint
                 ]
                 
-                # Extract unique signers (buyers)
+                # Apply position size filtering
                 for trade in early_trades:
-                    early_buyers.add(str(trade['signer']))
+                    wallet = str(trade['signer'])
+                    early_buyers.add(wallet)
+                    
+                    # Check position size significance
+                    if self._is_significant_position(trade):
+                        filtered_buyers.add(wallet)
                 
-                self.logger.debug(f"Found {len(early_buyers)} early buyers from Bitquery data for {mint[:8]}...")
+                self.logger.debug(f"Found {len(early_buyers)} early buyers from Bitquery ({len(filtered_buyers)} with significant positions) for {mint[:8]}...")
                 
-                # If we found buyers from Bitquery, return them (more efficient)
+                # If we found significant buyers from Bitquery, return them (more efficient)
+                if filtered_buyers:
+                    return list(filtered_buyers)
+                    
+                # Fallback: if no significant buyers but we have any buyers, return top portion
                 if early_buyers:
-                    return list(early_buyers)
+                    buyers_list = list(early_buyers)
+                    # Return up to half of the early buyers as a compromise
+                    return buyers_list[:max(1, len(buyers_list) // 2)]
             
             # FALLBACK: Use Moralis only if Bitquery lacks data or coverage
             self.logger.debug(f"Falling back to Moralis for {mint[:8]}... early buyers (insufficient Bitquery coverage)")
@@ -713,6 +759,10 @@ class ProvenAlphaFinder:
             
             # Sort swaps by timestamp 
             sorted_swaps = sorted(swaps, key=lambda x: self._parse_iso_timestamp(x.get('timestamp', '')))
+            
+            # Reset sets for Moralis processing
+            early_buyers = set()
+            filtered_buyers = set()
             
             for swap in sorted_swaps:
                 swap_time = self._parse_iso_timestamp(swap.get('timestamp', ''))
@@ -737,13 +787,30 @@ class ProvenAlphaFinder:
                     # Validate wallet address and ensure it's a buy (not the token mint address)
                     if wallet and len(str(wallet)) >= 32 and str(wallet) != mint:
                         early_buyers.add(str(wallet))
-                        self.logger.debug(f"Found early buyer from Moralis: {str(wallet)[:8]}...")
+                        
+                        # Check position size significance
+                        if self._is_significant_position(swap):
+                            filtered_buyers.add(str(wallet))
+                            self.logger.debug(f"Found significant early buyer from Moralis: {str(wallet)[:8]}...")
+                        else:
+                            self.logger.debug(f"Found early buyer from Moralis (small position): {str(wallet)[:8]}...")
                 else:
                     # Once we pass the early window, we can break since swaps are sorted
                     break
             
-            self.logger.info(f"Found {len(early_buyers)} early buyers total for {mint[:8]}...")
-            return list(early_buyers)
+            # Prefer significant buyers, fallback to subset of all buyers
+            if filtered_buyers:
+                self.logger.info(f"Found {len(filtered_buyers)} significant early buyers for {mint[:8]}... (from {len(early_buyers)} total)")
+                return list(filtered_buyers)
+            elif early_buyers:
+                buyers_list = list(early_buyers)
+                # Return up to half as compromise if no significant positions found
+                selected_buyers = buyers_list[:max(1, len(buyers_list) // 2)]
+                self.logger.info(f"Found {len(selected_buyers)} early buyers for {mint[:8]}... (filtered from {len(early_buyers)} total)")
+                return selected_buyers
+            else:
+                self.logger.info(f"No early buyers found for {mint[:8]}...")
+                return []
             
         except Exception as e:
             self.logger.error(f"Error finding early buyers for {mint}: {e}")
@@ -791,6 +858,55 @@ class ProvenAlphaFinder:
             
         return False
     
+    def _detect_wash_trading_patterns(self, candidates: Dict) -> set:
+        """Detect wallets with suspicious coordination patterns"""
+        from collections import defaultdict
+        
+        # Check if wash trading detection is enabled
+        quality_checks = self.config.get('discovery_quality_checks', {})
+        if not quality_checks.get('enable_wash_trading_detection', True):
+            self.logger.debug("Wash trading detection disabled in config")
+            return set()
+        
+        max_co_occurrence_rate = quality_checks.get('max_co_occurrence_rate', 0.8)
+        min_tokens_for_check = quality_checks.get('min_tokens_for_check', 3)
+        
+        suspicious_wallets = set()
+        
+        # Build co-occurrence matrix
+        co_occurrence_matrix = defaultdict(lambda: defaultdict(int))
+        
+        for wallet, token_list in candidates.items():
+            for token_entry in token_list:
+                mint = token_entry['token']['mint']
+                # Count how often wallet pairs appear on same tokens
+                for other_wallet in candidates:
+                    if other_wallet != wallet:
+                        other_tokens = [t['token']['mint'] for t in candidates[other_wallet]]
+                        if mint in other_tokens:
+                            co_occurrence_matrix[wallet][other_wallet] += 1
+        
+        # Flag wallets with excessive co-occurrence
+        for wallet, co_occurrences in co_occurrence_matrix.items():
+            wallet_token_count = len(candidates[wallet])
+            
+            # Only check wallets with enough data
+            if wallet_token_count >= min_tokens_for_check:
+                max_co_occurrence = max(co_occurrences.values()) if co_occurrences else 0
+                co_occurrence_rate = max_co_occurrence / wallet_token_count
+                
+                # Flag wallets with excessive coordination
+                if co_occurrence_rate > max_co_occurrence_rate:
+                    suspicious_wallets.add(wallet)
+                    self.logger.warning(f"Suspicious coordination: {wallet[:8]}... co-occurs {co_occurrence_rate:.0%} with another wallet (threshold: {max_co_occurrence_rate:.0%})")
+        
+        if suspicious_wallets:
+            self.logger.info(f"Wash trading detection: flagged {len(suspicious_wallets)} suspicious wallets")
+        else:
+            self.logger.debug("Wash trading detection: no suspicious patterns detected")
+            
+        return suspicious_wallets
+
     async def _score_alpha_candidates(self, candidates: Dict) -> List[str]:
         """Score and rank alpha wallet candidates with recency decay and performance multiplier"""
         import math
@@ -799,6 +915,14 @@ class ProvenAlphaFinder:
         current_time = time.time()
         
         self.logger.info(f"Evaluating {len(candidates)} wallet candidates...")
+        
+        # Detect and filter out suspicious wash trading patterns
+        suspicious_wallets = self._detect_wash_trading_patterns(candidates)
+        if suspicious_wallets:
+            # Remove suspicious wallets from candidates
+            filtered_candidates = {k: v for k, v in candidates.items() if k not in suspicious_wallets}
+            self.logger.info(f"Filtered out {len(suspicious_wallets)} suspicious wallets, {len(filtered_candidates)} remaining")
+            candidates = filtered_candidates
         
         # Show wallet appearance distribution for debugging
         appearance_counts = {}
@@ -845,6 +969,7 @@ class ProvenAlphaFinder:
             # Use actual performance_multiplier from token data
             performance_multipliers = []
             recency_weights = []
+            position_sizes = []
             
             for token_entry in token_list:
                 # Access nested token data correctly
@@ -853,6 +978,10 @@ class ProvenAlphaFinder:
                 # Get performance multiplier (use the value set in the entry)
                 perf_mult = token_entry.get('performance', 1.0)  # This comes from the entry, not nested
                 performance_multipliers.append(perf_mult)
+                
+                # Extract position size if available (for risk adjustment)
+                position_size = token_entry.get('position_size_usd', 100)  # Default $100
+                position_sizes.append(position_size)
                 
                 # Calculate recency decay (12-hour half-life) - use launch_time from raw token data
                 token_time = raw_token_data.get('launch_time', current_time)
@@ -869,22 +998,33 @@ class ProvenAlphaFinder:
                 success_count = sum(w for p, w in zip(performance_multipliers, recency_weights) if p >= 2.0)
                 success_rate = success_count / total_weight
                 
+                # Calculate risk-adjusted performance (normalize by position size)
+                risk_adjusted_returns = []
+                for perf, pos_size, weight in zip(performance_multipliers, position_sizes, recency_weights):
+                    # Risk-adjusted return: excess return per $100 invested
+                    excess_return = (perf - 1.0) * (100 / max(pos_size, 1))
+                    risk_adjusted_returns.append(excess_return * weight)
+                
+                avg_risk_adjusted_return = sum(risk_adjusted_returns) / total_weight
+                
                 # Overall recency factor
                 avg_recency = total_weight / len(recency_weights)
             else:
                 avg_performance = 1.0
                 success_rate = 0.0
+                avg_risk_adjusted_return = 0.0
                 avg_recency = 0.0
             
-            # Calculate tier-weighted final score
+            # Calculate tier-weighted final score with risk adjustment
             tier_base_score = base_score * 100  # Base score from tier multiplier
             
-            # Performance and success bonuses  
+            # Performance and success bonuses (now includes risk adjustment)
             performance_bonus = avg_performance * 25
             success_bonus = success_rate * 40
             volume_bonus = len(token_list) * 10
+            risk_adjusted_bonus = avg_risk_adjusted_return * 15  # Bonus for skill vs capital
             
-            final_score = (tier_base_score + performance_bonus + success_bonus + volume_bonus) * avg_recency
+            final_score = (tier_base_score + performance_bonus + success_bonus + volume_bonus + risk_adjusted_bonus) * avg_recency
             
             scored_wallets.append({
                 'wallet': wallet,
@@ -894,6 +1034,7 @@ class ProvenAlphaFinder:
                 'tier_counts': f"H:{high_count}/M:{medium_count}/L:{low_count}",
                 'avg_performance': avg_performance,
                 'success_rate': success_rate,
+                'avg_risk_adjusted_return': avg_risk_adjusted_return,
                 'avg_recency': avg_recency,
                 'tokens': token_list
             })

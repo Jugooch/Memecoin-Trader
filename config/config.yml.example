@@ -47,10 +47,21 @@ watched_wallets:
 
 # Trading parameters (Phase 2: Bayesian Scoring)
 alpha_weight_min: 2.5         # Minimum weighted vote score (replaces threshold_alpha_buys)
-require_one_wallet_pge_55: true  # Require at least one wallet with >55% win rate
+require_one_wallet_pge_55: false  # Require at least one wallet with >55% win rate (smart scoring handles this)
 beta_prior_alpha: 3           # Bayesian prior alpha (wins + 1)
 beta_prior_beta: 5            # Bayesian prior beta (losses + 1) = 37.5% baseline
 threshold_alpha_buys: 3       # DEPRECATED - kept for backward compatibility
+
+# Discovery Quality Controls (Phase 3: Quality Improvements)
+discovery_position_filters:
+  min_position_usd: 50        # Minimum position size to avoid noise traders
+  max_position_usd: 5000      # Maximum position size to focus on skill vs capital
+  
+discovery_quality_checks:
+  max_co_occurrence_rate: 0.8 # Flag wallets with >80% coordination with others
+  min_tokens_for_check: 3     # Only check wallets with 3+ tokens for wash trading
+  enable_wash_trading_detection: true  # Enable wash trading pattern detection
+  enable_risk_adjusted_scoring: true   # Enable risk-adjusted performance scoring
 min_liquidity_usd: 25000      # Minimum liquidity required (raised to avoid slippage)
 time_window_sec: 300          # Time window to wait for alpha activity (5 minutes for better signals)
 max_trade_pct: 0.05           # Max % of capital per trade (5%)
