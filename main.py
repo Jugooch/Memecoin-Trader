@@ -234,6 +234,9 @@ class MemecoinTradingBot:
             import traceback
             self.logger.error(traceback.format_exc())
         
+        self.logger.info("Finished wallet rotation task setup")
+        self.logger.info(f"Current realtime_source: {self.config.realtime_source}")
+        
         # Use unified stream for PumpPortal or separate for Bitquery
         if self.config.realtime_source == 'pumpportal':
             self.logger.info("Adding PumpPortal event monitoring task")
