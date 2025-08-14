@@ -525,5 +525,11 @@ class MoralisClient:
     async def close(self):
         """Close the HTTP session"""
         if self.session:
-            await self.session.close()
-            self.session = None
+            try:
+                await self.session.close()
+                # Wait a bit for the underlying connection to close
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                self.logger.debug(f"Error closing session: {e}")
+            finally:
+                self.session = None

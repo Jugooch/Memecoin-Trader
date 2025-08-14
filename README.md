@@ -48,22 +48,19 @@ quicknode_endpoint: ""  # Leave empty for simulation mode
 quicknode_api_key: ""
 ```
 
-### 3. Start Alpha Wallet Discovery (Recommended)
-
-```bash
-# PRODUCTION: Run continuous alpha wallet discovery (recommended)
-python scripts/run_alpha_accumulator.py --loop
-
-# TESTING: Run one-off analysis
-python -m src.discovery.alpha_discovery_v2
-```
-
-The accumulator runs continuously and automatically finds proven alpha wallets over time, updating your config.
-
-### 4. Start the Bot
+### 3. Start the Bot
 
 ```bash
 python start_bot.py
+```
+
+**Note:** Alpha wallet discovery is now built into the bot via the Wallet Rotation Manager. No separate process needed!
+
+### 4. Optional: Manual Alpha Discovery (Testing)
+
+```bash
+# Run one-off analysis for testing
+python -m src.discovery.alpha_discovery_v2
 ```
 
 ## Configuration System
@@ -178,9 +175,9 @@ The bot includes an advanced alpha wallet discovery system that automatically fi
 - Requires 2+ appearances on successful tokens
 - Best for: Quick manual discovery
 
-#### 2. Alpha Accumulator (Continuous - RECOMMENDED)
-- Runs every 2 minutes continuously
-- Builds overlap data over time
+#### 2. Wallet Rotation Manager (Built-in - RECOMMENDED)
+- Runs every 2 hours automatically within the bot
+- Smart wallet rotation based on performance
 - Handles Bitquery's 3-4 minute data limitation
 - Stores in SQLite database
 - Best for: Production use
@@ -326,9 +323,9 @@ asyncio.run(report())
   - `alpha_wallets` - Wallet performance
   - `token_analysis` - Research data
   
-- **Accumulator DB**: `data/alpha_accumulator.db`
-  - `tokens` - Tracked token launches
-  - `early_buys` - Wallet-token mappings
+- **Wallet Performance DB**: `data/trading.db`
+  - `wallets` - Alpha wallet performance tracking
+  - `trades` - Trade history and outcomes
 
 ## Error Handling
 

@@ -27,9 +27,9 @@ Two complementary systems for finding profitable wallets:
    - Finds wallets appearing on 2+ successful tokens
    - Success tiers: High (2x), Medium (1.5x), Low (1.2x)
 
-2. **Alpha Accumulator** (`src/discovery/alpha_accumulator.py`)
-   - Continuous discovery system
-   - Runs every 2 minutes
+2. **Wallet Rotation Manager** (`src/core/wallet_rotation_manager.py`)
+   - Built-in continuous discovery system
+   - Runs every 2 hours as part of the main bot
    - Builds historical overlap data
    - Better for production use
 

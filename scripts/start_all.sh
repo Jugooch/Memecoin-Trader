@@ -28,8 +28,5 @@ if [ ! -f "config/config.yml" ]; then
     exit 1
 fi
 
-# Start alpha accumulator (continuous discovery) in background
-nohup "$PYTHON" scripts/run_alpha_accumulator.py --loop > logs/alpha_accumulator.log 2>&1 &
-
-# Start main trading bot (will keep the systemd service alive)
+# Start main trading bot (includes built-in wallet rotation manager)
 "$PYTHON" start_bot.py

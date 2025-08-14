@@ -62,6 +62,8 @@ class BotManager:
         except KeyboardInterrupt:
             print("\nShutdown requested by user")
             await self.shutdown()
+        except asyncio.CancelledError:
+            print("\nShutdown completed")
         except Exception as e:
             print(f"Bot startup failed: {e}")
             sys.exit(1)
@@ -87,7 +89,10 @@ class BotManager:
             
             # Wait for tasks to finish cancelling (with timeout)
             if tasks:
-                await asyncio.wait(tasks, timeout=5.0, return_when=asyncio.ALL_COMPLETED)
+                try:
+                    await asyncio.wait(tasks, timeout=5.0, return_when=asyncio.ALL_COMPLETED)
+                except asyncio.CancelledError:
+                    pass  # Expected when tasks are cancelled
                 
         except Exception as e:
             print(f"Error cancelling tasks: {e}")
