@@ -487,27 +487,29 @@ class PumpPortalClient:
             return None
     
     async def update_wallet_subscriptions(self, new_wallets: list):
-        """Update the wallet subscription list by reconnecting with new wallets"""
+        """Update the wallet subscription list by forcing reconnection"""
         self.logger.info(f"Updating PumpPortal subscriptions with {len(new_wallets)} wallets")
         
         # Store the new wallet list
         self.watched_wallets = new_wallets[:100]  # Limit to 100 wallets
         
-        # Force reconnection to update subscriptions
-        if self.websocket and not self.websocket.closed:
-            try:
-                self.logger.info("Closing current WebSocket to update subscriptions...")
-                await self.websocket.close()
-                await asyncio.sleep(0.5)  # Brief wait for cleanup
-            except Exception as e:
-                self.logger.warning(f"Error closing WebSocket for update: {e}")
-        
-        # Reset connection state
+        # Force reconnection by setting connected = False
+        # This will cause the monitoring loop to reconnect with new wallet list
+        old_connected = self.connected
         self.connected = False
+        
+        # Try to close the websocket gracefully if it exists
+        if self.websocket:
+            try:
+                self.logger.info("Forcing disconnection to update subscriptions...")
+                await self.websocket.close()
+            except Exception as e:
+                self.logger.debug(f"WebSocket close error (expected): {e}")
+        
+        # Clear websocket reference
         self.websocket = None
         
-        # The subscribe_all_events will reconnect with new wallet list
-        self.logger.info(f"PumpPortal will reconnect with updated wallet list on next subscription")
+        self.logger.info(f"PumpPortal subscription update triggered - will reconnect with {len(self.watched_wallets)} wallets")
         return True
     
     async def close(self):
