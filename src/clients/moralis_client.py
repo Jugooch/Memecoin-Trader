@@ -148,47 +148,66 @@ class MoralisClient:
     
     async def _make_request(self, url: str, params: Dict = None, cache_type: str = None) -> Dict:
         """Make HTTP request with intelligent caching, coalescing, and error handling"""
-        
+    
+        self.logger.info(f"Starting _make_request: url={url}, params={params}, cache_type={cache_type}")
+    
         # Periodic cache cleanup
         self._cleanup_expired_cache()
-        
+    
         # Create request key for caching and coalescing
         cache_key = self._get_cache_key(url, params)
-        
+        self.logger.info(f"Computed cache key: {cache_key}")
+    
         # Check cache first
         if cache_type:
             cache_entry = self.cache.get(cache_key)
-            
+            if cache_entry:
+                self.logger.info(f"Found cache entry for {cache_type}")
+            else:
+                self.logger.info(f"No cache entry for {cache_type}")
+    
             if self._is_cache_valid(cache_entry, cache_type):
-                self.logger.debug(f"Cache hit for {cache_type}")
+                self.logger.info(f"Cache hit for {cache_type}, returning cached data")
                 return cache_entry['data']
-        
+    
         # In-flight coalescing - check if same request is already running
         if cache_key in self._inflight:
-            self.logger.debug(f"Coalescing request: {url}")
-            return await self._inflight[cache_key]
-        
+            self.logger.info(f"Coalescing request: {url}")
+            data = await self._inflight[cache_key]
+            self.logger.info(f"Coalesced request completed: data={data}")
+            return data
+    
         # Create and track the actual HTTP request task
         async def _fetch():
             async with self._sem:  # Global concurrency cap
+                self.logger.info(f"Acquired semaphore for request: {url}")
+    
                 session = await self._get_session()
                 if not session:
-                    self.logger.warning("No available API keys")
+                    self.logger.warning("No available API keys — returning empty data")
                     return {}
-                    
+    
+                self.logger.info(f"Using session {session} for request: {url}")
                 await self._rate_limit()
-                return await self._execute_request(session, url, params, cache_type, cache_key)
-        
+    
+                self.logger.info(f"Making HTTP request to {url} with params={params}")
+                data = await self._execute_request(session, url, params, cache_type, cache_key)
+                self.logger.info(f"HTTP request complete: {url}, received data={data}")
+                return data
+    
         # Store the task for coalescing
         task = asyncio.create_task(_fetch())
         self._inflight[cache_key] = task
-        
+    
         try:
             data = await task
+            self.logger.info(f"_make_request completed for {url} — returning data: {data}")
             return data
         finally:
             # Clean up after request completes
+            self.logger.info(f"Cleaning up inflight entry for {cache_key}")
             self._inflight.pop(cache_key, None)
+    
     
     async def _execute_request(self, session, url, params, cache_type, cache_key):
         """Execute the actual HTTP request with retry logic"""
