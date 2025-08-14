@@ -85,9 +85,15 @@ class MemecoinTradingBot:
         self.database = Database(self.config.database_file)
         
         # Initialize wallet rotation manager (will get discord notifier later)
+        self.logger.info("Creating WalletRotationManager...")
+        self.logger.info(f"  wallet_tracker: {self.wallet_tracker}")
+        self.logger.info(f"  bitquery_client: {self.realtime_client.bitquery_client}")
+        self.logger.info(f"  moralis: {self.moralis}")
+        self.logger.info(f"  database: {self.database}")
         self.wallet_rotation_manager = WalletRotationManager(
             self.wallet_tracker, self.realtime_client.bitquery_client, self.moralis, self.database, config_path
         )
+        self.logger.info("WalletRotationManager created successfully")
         
         # Initialize safety checker and risk manager (Phase 4)
         self.safety_checker = SafetyChecker()
@@ -215,12 +221,25 @@ class MemecoinTradingBot:
         tasks.append(self.heartbeat_task())
         
         self.logger.info("Creating wallet_rotation_manager task...")
-        tasks.append(self.wallet_rotation_manager.start_rotation_loop())
+        self.logger.info(f"Wallet rotation manager object exists: {self.wallet_rotation_manager is not None}")
+        self.logger.info(f"Wallet rotation manager type: {type(self.wallet_rotation_manager)}")
+        try:
+            self.logger.info("About to create rotation coroutine...")
+            rotation_coro = self.wallet_rotation_manager.start_rotation_loop()
+            self.logger.info(f"Wallet rotation coroutine created: {rotation_coro}")
+            tasks.append(rotation_coro)
+            self.logger.info("Wallet rotation task added to tasks list")
+        except Exception as e:
+            self.logger.error(f"Error creating wallet rotation coroutine: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
         
         # Use unified stream for PumpPortal or separate for Bitquery
         if self.config.realtime_source == 'pumpportal':
             self.logger.info("Adding PumpPortal event monitoring task")
-            tasks.append(self.monitor_pumpportal_events())
+            pump_coro = self.monitor_pumpportal_events()
+            self.logger.info(f"PumpPortal coroutine created: {pump_coro}")
+            tasks.append(pump_coro)
         else:
             self.logger.info("Adding Bitquery token monitoring task")
             tasks.append(self.monitor_new_tokens())
