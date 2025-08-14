@@ -55,7 +55,7 @@ class PumpPortalClient:
             self.logger.error(f"Connection details: endpoint={self.ws_endpoint}, headers={headers}")
             raise
     
-    async def subscribe_all_events(self) -> AsyncGenerator[Dict, None]:
+    async def subscribe_all_events(self, watched_wallets: list = None) -> AsyncGenerator[Dict, None]:
         """Subscribe to both token launches and trades in a single stream"""
         self.logger.info("subscribe_all_events called")
         
@@ -64,11 +64,20 @@ class PumpPortalClient:
             await self.initialize()
         
         try:
-            # Subscribe to both new tokens and trades
+            # Subscribe to token launches
             subscriptions = [
                 {"method": "subscribeNewToken"},
-                {"method": "subscribeTokenTrade"},
             ]
+            
+            # Try different approaches for trade subscription
+            if watched_wallets and len(watched_wallets) > 0:
+                # Subscribe to trades from specific wallets (alpha wallets)
+                subscriptions.append({"method": "subscribeAccountTrade", "keys": watched_wallets[:100]})  # Limit to first 100 wallets
+                self.logger.info(f"Subscribing to trades from {len(watched_wallets[:100])} alpha wallets")
+            else:
+                # Try to subscribe to all token trades
+                subscriptions.append({"method": "subscribeTokenTrade", "keys": []})
+                self.logger.info("Subscribing to all token trades")
             
             self.logger.info(f"Sending {len(subscriptions)} subscription messages...")
             

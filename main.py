@@ -241,8 +241,9 @@ class MemecoinTradingBot:
             self.logger.info("Subscribing to PumpPortal all events stream...")
             
             event_count = 0
-            # Use the unified stream from PumpPortal
-            async for event in self.realtime_client.pumpportal_client.subscribe_all_events():
+            # Use the unified stream from PumpPortal, passing our watched wallets
+            watched_wallets = list(self.wallet_tracker.watched_wallets)
+            async for event in self.realtime_client.pumpportal_client.subscribe_all_events(watched_wallets):
                 event_count += 1
                 if event_count <= 3:  # Log first few events
                     self.logger.info(f"Received PumpPortal event #{event_count}: {event.get('event_type', 'unknown')}")
@@ -309,13 +310,7 @@ class MemecoinTradingBot:
         try:
             # If Moralis is rate limited, skip this token entirely (safer approach)
             if self.moralis.rate_limited:
-                self.logger.debug(f"Moralis rate limited - skipping {mint_address[:8]}... (safety first)")
-                
-                # Send Discord notification if all keys are exhausted
-                await self.trading_engine.send_error_notification(
-                    "All Moralis API keys exhausted!",
-                    {"module": "moralis_client", "action": "skipping_token", "token": mint_address[:8]}
-                )
+                self.logger.debug(f"Moralis rate limited - skipping {mint_address[:8]}...")
                 return
                 
             metadata = await self.moralis.get_token_metadata(mint_address)
