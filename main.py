@@ -316,15 +316,17 @@ class MemecoinTradingBot:
         try:
             # If Moralis is rate limited, skip this token entirely (safer approach)
             if self.moralis.rate_limited:
-                self.logger.info(f"Moralis rate limited - skipping {mint_address[:8]}...")
+                self.logger.debug(f"Moralis rate limited - skipping {mint_address[:8]}...")
                 return
                 
             liquidity = await self.moralis.get_token_liquidity(mint_address)
             
             # Require liquidity data - this is essential for safety
             if not liquidity:
-                self.logger.info(f"No liquidity data for {mint_address[:8]}... - skipping")
+                self.logger.debug(f"No liquidity data for {mint_address[:8]}... - skipping")
                 return
+            
+            self.logger.info(f"Liquidity data for {mint_address[:8]}: {liquidity}")
             
             # Try to get metadata, but don't block on it for new tokens
             metadata = await self.moralis.get_token_metadata(mint_address)
