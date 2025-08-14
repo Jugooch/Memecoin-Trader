@@ -149,50 +149,50 @@ class MoralisClient:
     async def _make_request(self, url: str, params: Dict = None, cache_type: str = None) -> Dict:
         """Make HTTP request with intelligent caching, coalescing, and error handling"""
 
-        self.logger.info(f"Starting _make_request: url={url}, params={params}, cache_type={cache_type}")
+        self.logger.debug(f"Starting _make_request: url={url}, params={params}, cache_type={cache_type}")
 
         # Periodic cache cleanup
         self._cleanup_expired_cache()
 
         # Create request key for caching and coalescing
         cache_key = self._get_cache_key(url, params)
-        self.logger.info(f"Computed cache key: {cache_key}")
+        self.logger.debug(f"Computed cache key: {cache_key}")
 
         # Check cache first
         if cache_type:
             cache_entry = self.cache.get(cache_key)
             if cache_entry:
-                self.logger.info(f"Found cache entry for {cache_type}")
+                self.logger.debug(f"Found cache entry for {cache_type}")
             else:
-                self.logger.info(f"No cache entry for {cache_type}")
+                self.logger.debug(f"No cache entry for {cache_type}")
 
             if self._is_cache_valid(cache_entry, cache_type):
-                self.logger.info(f"Cache hit for {cache_type}, returning cached data")
+                self.logger.debug(f"Cache hit for {cache_type}, returning cached data")
                 return cache_entry['data']
 
         # In-flight coalescing - check if same request is already running
         if cache_key in self._inflight:
-            self.logger.info(f"Coalescing request: {url}")
+            self.logger.debug(f"Coalescing request: {url}")
             data = await self._inflight[cache_key]
-            self.logger.info(f"Coalesced request completed: data={data}")
+            self.logger.debug(f"Coalesced request completed: data={data}")
             return data
 
         # Create and track the actual HTTP request task
         async def _fetch():
             async with self._sem:  # Global concurrency cap
-                self.logger.info(f"Acquired semaphore for request: {url}")
+                self.logger.debug(f"Acquired semaphore for request: {url}")
 
                 session = await self._get_session()
                 if not session:
                     self.logger.warning("No available API keys — returning empty data")
                     return {}
 
-                self.logger.info(f"Using session {session} for request: {url}")
+                self.logger.debug(f"Using session {session} for request: {url}")
                 await self._rate_limit()
 
-                self.logger.info(f"Making HTTP request to {url} with params={params}")
+                self.logger.debug(f"Making HTTP request to {url} with params={params}")
                 data = await self._execute_request(session, url, params, cache_type, cache_key)
-                self.logger.info(f"HTTP request complete: {url}, received data={data}")
+                self.logger.debug(f"HTTP request complete: {url}, received data={data}")
                 return data
 
         # Store the task for coalescing
@@ -201,33 +201,33 @@ class MoralisClient:
 
         try:
             data = await task
-            self.logger.info(f"_make_request completed for {url} — returning data: {data}")
+            self.logger.debug(f"_make_request completed for {url} — returning data: {data}")
             return data
         finally:
             # Clean up after request completes
-            self.logger.info(f"Cleaning up inflight entry for {cache_key}")
+            self.logger.debug(f"Cleaning up inflight entry for {cache_key}")
             self._inflight.pop(cache_key, None)
 
     
     async def _execute_request(self, session, url, params, cache_type, cache_key):
        """Execute the actual HTTP request with retry logic"""
        current_key_index = getattr(session, '_current_key_index', 0)
-       self.logger.info(f"Starting _execute_request: url={url}, params={params}, key_index={current_key_index}")
+       self.logger.debug(f"Starting _execute_request: url={url}, params={params}, key_index={current_key_index}")
     
        max_retries = len(self.api_keys)  # Try all keys before giving up
        for attempt in range(max_retries):
-           self.logger.info(f"Attempt {attempt + 1}/{max_retries} with key #{current_key_index}")
+           self.logger.debug(f"Attempt {attempt + 1}/{max_retries} with key #{current_key_index}")
     
            try:
                async with session.get(url, params=params) as response:
-                   self.logger.info(f"HTTP status {response.status} for {url} (key #{current_key_index})")
+                   self.logger.debug(f"HTTP status {response.status} for {url} (key #{current_key_index})")
     
                    # Track usage for current key
                    self.key_stats[current_key_index]['calls_today'] += 1
     
                    if response.status == 200:
                        data = await response.json()
-                       self.logger.info(f"Received data from {url}: {data}")
+                       self.logger.debug(f"Received data from {url}: {data}")
     
                        # Cache successful response
                        if cache_type:
@@ -235,7 +235,7 @@ class MoralisClient:
                                'data': data,
                                'timestamp': time.time()
                            }
-                           self.logger.info(f"Cached response for cache_type={cache_type}, key={cache_key}")
+                           self.logger.debug(f"Cached response for cache_type={cache_type}, key={cache_key}")
     
                        return data
     
@@ -287,7 +287,7 @@ class MoralisClient:
                self.logger.error(f"Request failed (attempt {attempt + 1}): {e}")
     
                if attempt < max_retries - 1:
-                   self.logger.info("Rotating to next key due to request failure")
+                   self.logger.debug("Rotating to next key due to request failure")
                    self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
                    session = await self._get_session()
                    current_key_index = getattr(session, '_current_key_index', 0)
@@ -368,7 +368,7 @@ class MoralisClient:
             # Skip cache if fresh=True (for position monitoring)
             cache_type = None if fresh else 'price'
             data = await self._make_request(url, cache_type=cache_type)
-            self.logger.info(f"Current data for {mint_address}: {data}")
+            self.logger.debug(f"Current data for {mint_address}: {data}")
             return float(data.get('usdPrice', 0))
             
         except Exception as e:

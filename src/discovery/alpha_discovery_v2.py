@@ -507,12 +507,12 @@ class ProvenAlphaFinder:
     async def _validate_token_with_moralis(self, token_data: Dict) -> bool:
         """Validate a promising token with minimal Moralis calls"""
         mint = token_data['mint']
-        self.logger.info(f"Validating token {mint[:8]}... with Moralis")
+        self.logger.debug(f"Validating token {mint[:8]}... with Moralis")
         try:
             current_price = await self.moralis.get_current_price(mint, fresh=True)
             
             if current_price <= 0:
-                self.logger.warning(f"Token {mint[:8]}... has no price data (price={current_price}) - Moralis may be rate limited or token too new")
+                self.logger.debug(f"Token {mint[:8]}... has no price data (price={current_price}) - Moralis may be rate limited or token too new")
                 return False
 
             performance_multiplier = token_data.get('performance_multiplier', 1.0)
@@ -520,7 +520,7 @@ class ProvenAlphaFinder:
             success_tier = token_data.get('success_tier', None)
             success_threshold = self.success_thresholds['low']
 
-            self.logger.info(f"Token {mint[:8]}... validation check: price=${current_price:.8f}, perf={performance_multiplier:.2f}x, score={bitquery_score}, tier={success_tier}, threshold={success_threshold}")
+            self.logger.debug(f"Token {mint[:8]}... validation check: price=${current_price:.8f}, perf={performance_multiplier:.2f}x, score={bitquery_score}, tier={success_tier}, threshold={success_threshold}")
 
             token_data['current_price'] = current_price
             is_successful = (
@@ -530,9 +530,9 @@ class ProvenAlphaFinder:
             )
             
             if not is_successful:
-                self.logger.warning(f"Token {mint[:8]}... FAILED validation: tier_ok={success_tier is not None}, score_ok={bitquery_score >= 25}, perf_ok={performance_multiplier >= success_threshold}")
+                self.logger.debug(f"Token {mint[:8]}... FAILED validation: tier_ok={success_tier is not None}, score_ok={bitquery_score >= 25}, perf_ok={performance_multiplier >= success_threshold}")
             else:
-                self.logger.info(f"Token {mint[:8]}... PASSED validation: perf={performance_multiplier:.2f}x, score={bitquery_score}")
+                self.logger.debug(f"Token {mint[:8]}... PASSED validation: perf={performance_multiplier:.2f}x, score={bitquery_score}")
                 
             return is_successful
 
