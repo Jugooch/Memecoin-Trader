@@ -922,7 +922,7 @@ class MemecoinTradingBot:
                 self.last_trade_time = time.time()
                 
                 # Mark token as traded in cache
-                self._record_token_status(mint_address, 'traded', f'Invested ${usd_amount:.2f}')
+                self._record_token_status(mint_address, 'traded', f'Invested ${trade_amount:.2f}')
                 
                 # Start monitoring for exit conditions
                 asyncio.create_task(self.monitor_position(mint_address, result, metadata))

@@ -95,8 +95,8 @@ class WalletScorer:
             Posterior mean win rate (0.0 to 1.0)
         """
         if wallet not in self.wallet_stats:
-            # Return prior mean for unknown wallets
-            return self.prior_alpha / (self.prior_alpha + self.prior_beta)
+            # Fresh wallets from discovery get higher weight since they passed rigorous filters
+            return 0.65  # Give fresh wallets 65% confidence (vs 37.5% prior mean)
             
         stats = self.wallet_stats[wallet]
         
