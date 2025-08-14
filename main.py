@@ -116,9 +116,16 @@ class MemecoinTradingBot:
         self.execution_latencies = []  # Store recent latencies for monitoring
         self.latency_history_duration = 3600  # Keep 1 hour of latency data
         
-        # Token deduplication to avoid processing same token multiple times
-        self.processed_tokens = {}  # Now stores {token: timestamp} for cleanup
-        self.token_cache_duration = 600  # Remember processed tokens for 10 minutes (reduced from 30)
+        # Smart token cache with different TTLs based on processing outcome
+        self.processed_tokens = {}  # Now stores {token: {'timestamp': time, 'status': str, 'reason': str}}
+        self.token_cache_ttls = {
+            'traded': 600,           # Successfully traded: 10 minutes
+            'evaluated': 300,        # Fully evaluated but not traded: 5 minutes  
+            'no_alpha': 60,          # No alpha signal yet: 1 minute (quick retry)
+            'failed_filters': 180,   # Failed basic filters: 3 minutes
+            'rate_limited': 30,      # Rate limited during check: 30 seconds
+            'error': 120             # Error during processing: 2 minutes
+        }
         self.last_token_cleanup = time.time()
 
     def _load_config(self, config_path: str) -> TradingConfig:
@@ -256,7 +263,7 @@ class MemecoinTradingBot:
                     if event_type == 'token_launch':
                         # Process as new token
                         mint = event.get('mint', 'unknown')
-                        self.logger.info(f"Processing token launch: {mint[:8]}...")
+                        self.logger.debug(f"Processing token launch: {mint[:8]}...")
                         await self.process_new_token(event)
                         
                     elif event_type == 'trade':
@@ -316,12 +323,9 @@ class MemecoinTradingBot:
         # Clean up old processed tokens periodically
         self._cleanup_processed_tokens()
         
-        # Skip if we've already processed this token recently
-        if mint_address in self.processed_tokens:
+        # Check if token is in cache and if it should be skipped
+        if self._should_skip_token(mint_address):
             return
-        
-        # Add to processed dict with timestamp
-        self.processed_tokens[mint_address] = time.time()
         
         # Only log tokens we're seriously considering (reduces noise)
         self.logger.debug(f"New token detected: {mint_address}")
@@ -342,6 +346,7 @@ class MemecoinTradingBot:
         # If no alpha wallets are buying from real-time data, skip expensive Moralis calls
         if len(initial_alpha_buyers) == 0:
             self.logger.debug(f"No alpha activity detected for {mint_address[:8]}... in real-time cache, skipping Moralis checks")
+            self._record_token_status(mint_address, 'no_alpha', 'No initial alpha signal')
             return
         
         self.logger.info(f"Initial alpha signal: {len(initial_alpha_buyers)} wallets detected for {mint_address[:8]}... from real-time data")
@@ -360,6 +365,7 @@ class MemecoinTradingBot:
             # If Moralis is rate limited, skip this token entirely (safer approach)
             if self.moralis.rate_limited:
                 self.logger.debug(f"Moralis rate limited - skipping {mint_address[:8]}...")
+                self._record_token_status(mint_address, 'rate_limited', 'Moralis API rate limited')
                 return
                 
             liquidity = await self.moralis.get_token_liquidity(mint_address)
@@ -380,6 +386,7 @@ class MemecoinTradingBot:
             if not self._passes_filters_with_alpha(metadata, liquidity, deployer, len(initial_alpha_buyers)):
                 # Only log failures at debug level to reduce noise
                 self.logger.debug(f"Token {mint_address} failed filters despite alpha signal")
+                self._record_token_status(mint_address, 'failed_filters', 'Failed safety/liquidity filters')
                 return
             
             # Get wallet status for enhanced logging
@@ -395,8 +402,10 @@ class MemecoinTradingBot:
             # Only log 404s at debug level since they're common for new tokens
             if "404" in str(e) or "not found" in str(e).lower():
                 self.logger.debug(f"Token {mint_address} metadata not available (likely too new)")
+                self._record_token_status(mint_address, 'no_alpha', 'Metadata not ready')  # Allow quick retry
             else:
                 self.logger.error(f"Failed to get token data for {mint_address}: {e}")
+                self._record_token_status(mint_address, 'error', str(e))
             return
         
         # Track alpha wallet activity with enhanced analysis
@@ -464,6 +473,7 @@ class MemecoinTradingBot:
                 warnings = safety_check['warnings']
                 self.logger.warning(f"Token {mint_address[:8]} failed safety check: "
                                   f"Score: {rug_score}, Warnings: {warnings}")
+                self._record_token_status(mint_address, 'failed_filters', f'Safety score: {rug_score}')
                 return  # Skip this trade
             
             # ENHANCED: Comprehensive trade decision logging with Bayesian scores
@@ -504,6 +514,9 @@ class MemecoinTradingBot:
             # Record that we're following these wallets' trades
             self.wallet_tracker.record_trade_follow(alpha_wallets, mint_address, confidence_score)
             
+            # Mark as evaluated (will be upgraded to 'traded' if trade executes)
+            self._record_token_status(mint_address, 'evaluated', f'Confidence: {confidence_score:.1f}')
+            
             await self.execute_trade(mint_address, metadata, liquidity, 
                                    confidence_score, investment_multiplier, wallet_tiers)
         else:
@@ -519,6 +532,9 @@ class MemecoinTradingBot:
             self.logger.debug(f"TradeRejected: mint={mint_address[:8]}... reasons=[{', '.join(rejection_reasons)}] "
                             f"confidence={confidence_score:.1f} alpha_wallets={len(alpha_wallets)} "
                             f"distinct={distinct_wallets}")
+            
+            # Record as evaluated but not traded
+            self._record_token_status(mint_address, 'evaluated', f"Rejected: {', '.join(rejection_reasons)}")
 
     def _extract_liquidity_usd(self, liquidity: Dict) -> float:
         """Extract liquidity USD value from various possible field names"""
@@ -613,24 +629,33 @@ class MemecoinTradingBot:
         return True
 
     def _cleanup_processed_tokens(self):
-        """Remove old processed tokens to allow reprocessing and prevent memory bloat"""
+        """Remove old processed tokens based on their status-specific TTLs"""
         current_time = time.time()
         
-        # Only cleanup every 10 minutes to avoid overhead
-        if current_time - self.last_token_cleanup < 600:
+        # Only cleanup every 60 seconds to avoid overhead
+        if current_time - self.last_token_cleanup < 60:
             return
             
-        # Remove tokens older than cache duration
-        expired_tokens = [
-            token for token, timestamp in self.processed_tokens.items()
-            if current_time - timestamp > self.token_cache_duration
-        ]
-        
-        for token in expired_tokens:
-            del self.processed_tokens[token]
+        # Remove tokens based on their status-specific TTL
+        expired_tokens = []
+        for token, cache_data in list(self.processed_tokens.items()):
+            status = cache_data.get('status', 'error')
+            timestamp = cache_data.get('timestamp', 0)
+            ttl = self.token_cache_ttls.get(status, 300)  # Default 5 min
+            
+            if current_time - timestamp > ttl:
+                expired_tokens.append(token)
+                del self.processed_tokens[token]
             
         if expired_tokens:
-            self.logger.debug(f"Cleaned up {len(expired_tokens)} old processed tokens")
+            # Log summary by status
+            status_counts = {}
+            for token in expired_tokens:
+                if token in self.processed_tokens:
+                    status = self.processed_tokens[token].get('status', 'unknown')
+                    status_counts[status] = status_counts.get(status, 0) + 1
+            
+            self.logger.debug(f"Cleaned up {len(expired_tokens)} tokens: {status_counts}")
         
         # Check for inactive alpha wallets while we're doing cleanup
         newly_inactive = self.wallet_tracker.check_inactive_wallets()
@@ -638,6 +663,36 @@ class MemecoinTradingBot:
             self.logger.info(f"Marked {len(newly_inactive)} wallets as inactive: {[w[:8]+'...' for w in newly_inactive[:3]]}")
             
         self.last_token_cleanup = current_time
+    
+    def _should_skip_token(self, mint_address: str) -> bool:
+        """Check if token should be skipped based on smart cache"""
+        if mint_address not in self.processed_tokens:
+            return False
+            
+        cache_data = self.processed_tokens[mint_address]
+        status = cache_data.get('status', 'error')
+        timestamp = cache_data.get('timestamp', 0)
+        ttl = self.token_cache_ttls.get(status, 300)
+        
+        current_time = time.time()
+        if current_time - timestamp > ttl:
+            # Cache expired, allow reprocessing
+            del self.processed_tokens[mint_address]
+            return False
+            
+        # Still in cache, skip
+        time_left = ttl - (current_time - timestamp)
+        self.logger.debug(f"Token {mint_address[:8]}... in cache (status={status}, {time_left:.0f}s left)")
+        return True
+    
+    def _record_token_status(self, mint_address: str, status: str, reason: str = ''):
+        """Record token processing status for smart caching"""
+        self.processed_tokens[mint_address] = {
+            'timestamp': time.time(),
+            'status': status,
+            'reason': reason
+        }
+        self.logger.debug(f"Token {mint_address[:8]}... cached as {status}: {reason}")
     
     def _cleanup_old_trades(self):
         """Remove trades older than trade_history_duration from memory"""
@@ -845,6 +900,9 @@ class MemecoinTradingBot:
                 
                 self.trades_today += 1
                 self.last_trade_time = time.time()
+                
+                # Mark token as traded in cache
+                self._record_token_status(mint_address, 'traded', f'Invested ${usd_amount:.2f}')
                 
                 # Start monitoring for exit conditions
                 asyncio.create_task(self.monitor_position(mint_address, result, metadata))
