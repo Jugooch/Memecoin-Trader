@@ -200,10 +200,10 @@ class ProvenAlphaFinder:
     
     async def _get_historical_tokens(self) -> List[Dict]:
         """Get recent tokens with comprehensive metrics computation"""
-        # Use recent window where BitQuery has most data (2h-5min ago)
+        # Use window where both BitQuery has data AND Moralis has indexed prices (4h-1h ago)
         now = datetime.utcnow()
-        start_time = now - timedelta(hours=2)      # 2 hours ago UTC
-        end_time = now - timedelta(minutes=5)      # 5 minutes ago UTC
+        start_time = now - timedelta(hours=4)      # 4 hours ago UTC
+        end_time = now - timedelta(hours=1)        # 1 hour ago UTC
         
         self.logger.info(f"Analyzing recent tokens window: {start_time.isoformat()}Z -> {end_time.isoformat()}Z")
         
