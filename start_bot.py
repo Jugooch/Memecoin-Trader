@@ -76,31 +76,61 @@ class BotManager:
         print("Shutting down bot...")
         self.running = False
         
+        # Cancel all running tasks first
+        try:
+            tasks = [task for task in asyncio.all_tasks() if not task.done()]
+            print(f"Cancelling {len(tasks)} running tasks...")
+            
+            for task in tasks:
+                if task != asyncio.current_task():
+                    task.cancel()
+            
+            # Wait for tasks to finish cancelling (with timeout)
+            if tasks:
+                await asyncio.wait(tasks, timeout=5.0, return_when=asyncio.ALL_COMPLETED)
+                
+        except Exception as e:
+            print(f"Error cancelling tasks: {e}")
+        
         if self.bot:
-            await self.bot.stop()
-            
-            # Close all positions in paper mode
-            if self.bot.config.paper_mode:
-                print("Closing all paper positions...")
-                await self.bot.trading_engine.close_all_positions()
-            
-            # Generate final report
-            print("Generating final performance report...")
-            monitor = PerformanceMonitor(self.bot.database)
-            report = await monitor.generate_performance_report(7)
-            
-            print("\n" + "="*50)
-            print("FINAL PERFORMANCE REPORT")
-            print("="*50)
-            print(f"Total Trades: {report.get('total_trades', 0)}")
-            print(f"Profitable Trades: {report.get('profitable_trades', 0)}")
-            print(f"Win Rate: {report.get('win_rate', 0):.1f}%")
-            print(f"Total Profit: ${report.get('total_profit', 0):.2f}")
-            print(f"Max Drawdown: {report.get('max_drawdown', 0):.1f}%")
-            print("="*50)
-            
-            # Cleanup
-            await self.bot.trading_engine.cleanup()
+            try:
+                await self.bot.stop()
+                
+                # Close all positions in paper mode
+                if self.bot.config.paper_mode:
+                    print("Closing all paper positions...")
+                    await self.bot.trading_engine.close_all_positions()
+                
+                # Generate final report (with timeout)
+                print("Generating final performance report...")
+                try:
+                    monitor = PerformanceMonitor(self.bot.database)
+                    report = await asyncio.wait_for(monitor.generate_performance_report(7), timeout=10.0)
+                    
+                    print("\n" + "="*50)
+                    print("FINAL PERFORMANCE REPORT")
+                    print("="*50)
+                    print(f"Total Trades: {report.get('total_trades', 0)}")
+                    print(f"Profitable Trades: {report.get('profitable_trades', 0)}")
+                    print(f"Win Rate: {report.get('win_rate', 0):.1f}%")
+                    print(f"Total Profit: ${report.get('total_profit', 0):.2f}")
+                    print(f"Max Drawdown: {report.get('max_drawdown', 0):.1f}%")
+                    print("="*50)
+                except asyncio.TimeoutError:
+                    print("Report generation timed out - skipping")
+                except Exception as e:
+                    print(f"Report generation failed: {e}")
+                
+                # Cleanup
+                try:
+                    await asyncio.wait_for(self.bot.trading_engine.cleanup(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    print("Cleanup timed out - forcing shutdown")
+                except Exception as e:
+                    print(f"Cleanup error: {e}")
+                    
+            except Exception as e:
+                print(f"Error during bot shutdown: {e}")
             
         print("Bot shutdown complete")
         sys.exit(0)

@@ -1322,17 +1322,37 @@ class MemecoinTradingBot:
         self.wallet_rotation_manager.stop_rotation()
         
         # Close realtime client
-        await self.realtime_client.close()
+        try:
+            await self.realtime_client.close()
+        except Exception as e:
+            self.logger.error(f"Error closing realtime client: {e}")
+        
+        # Close Moralis client
+        try:
+            if self.moralis:
+                await self.moralis.close()
+        except Exception as e:
+            self.logger.error(f"Error closing Moralis client: {e}")
+        
+        # Close database
+        try:
+            if self.database:
+                await self.database.close()
+        except Exception as e:
+            self.logger.error(f"Error closing database: {e}")
         
         # Send shutdown notification to Discord
-        if self.trading_engine.notifier:
-            summary = self.trading_engine.pnl_store.get_summary()
-            await self.trading_engine.notifier.send_text(
-                f"🛑 **Memecoin Trading Bot Stopped**\n"
-                f"Final Equity: ${summary['equity']:.2f}\n"
-                f"Total Trades: {summary['total_trades']}\n"
-                f"Win Rate: {summary['win_rate']:.1f}%"
-            )
+        try:
+            if self.trading_engine.notifier:
+                summary = self.trading_engine.pnl_store.get_summary()
+                await self.trading_engine.notifier.send_text(
+                    f"🛑 **Memecoin Trading Bot Stopped**\n"
+                    f"Final Equity: ${summary['equity']:.2f}\n"
+                    f"Total Trades: {summary['total_trades']}\n"
+                    f"Win Rate: {summary['win_rate']:.1f}%"
+                )
+        except Exception as e:
+            self.logger.error(f"Error sending shutdown notification: {e}")
 
 
 async def main():

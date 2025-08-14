@@ -406,16 +406,20 @@ class PumpPortalClient:
     
     async def close(self):
         """Close the WebSocket connection"""
-        if self.websocket and not self.websocket.closed:
-            await self.websocket.close()
-            self.logger.info("Pump Portal WebSocket connection closed")
+        if self.websocket:
+            try:
+                await self.websocket.close()
+                self.logger.info("Pump Portal WebSocket connection closed")
+            except Exception as e:
+                self.logger.debug(f"Error closing WebSocket: {e}")
+        self.websocket = None
         self.connected = False
     
     def is_connected(self) -> bool:
         """Check if WebSocket is connected"""
-        is_conn = self.connected and self.websocket and not self.websocket.closed
+        is_conn = self.connected and self.websocket is not None
         if not is_conn and self.websocket:
-            self.logger.debug(f"Connection check: connected={self.connected}, websocket_exists={bool(self.websocket)}, websocket_closed={self.websocket.closed if self.websocket else 'N/A'}")
+            self.logger.debug(f"Connection check: connected={self.connected}, websocket_exists={bool(self.websocket)}")
         return is_conn
     
     async def get_connection_info(self) -> Dict:
