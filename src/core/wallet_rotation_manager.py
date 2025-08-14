@@ -99,10 +99,7 @@ class WalletRotationManager:
         wallets_to_remove = len(replace_wallets)
         
         # Calculate target: aim for max_wallets but ensure we have enough good ones
-        target_new_wallets = min(
-            wallets_to_remove + max(0, self.max_wallets - len(keep_wallets) - len(candidates)),
-            50  # Don't add more than 50 at once
-        )
+        target_new_wallets = wallets_to_remove + max(0, self.max_wallets - len(keep_wallets) - len(candidates))
         
         self.logger.info(f"Planning to discover {target_new_wallets} new wallets")
         
@@ -117,11 +114,14 @@ class WalletRotationManager:
                 if discovered_wallets:
                     # Filter out wallets we already have
                     existing_wallets = self.wallet_tracker.watched_wallets
-                    new_wallets = [w for w in discovered_wallets if w not in existing_wallets][:target_new_wallets]
+                    filtered_wallets = [w for w in discovered_wallets if w not in existing_wallets]
+                    new_wallets = filtered_wallets[:target_new_wallets]
                     
                     discovery_time = time.time() - discovery_start
                     self.logger.info(f"Discovery completed in {discovery_time:.1f}s: "
-                                   f"found {len(new_wallets)} new wallets")
+                                   f"discovered {len(discovered_wallets)} total, "
+                                   f"{len(filtered_wallets)} new, "
+                                   f"taking {len(new_wallets)} for rotation")
                 else:
                     self.logger.warning("Alpha discovery returned no new wallets")
                     
