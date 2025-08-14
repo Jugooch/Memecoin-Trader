@@ -323,7 +323,7 @@ class MemecoinTradingBot:
             
             # Require liquidity data - this is essential for safety
             if not liquidity:
-                self.logger.debug(f"No liquidity data for {mint_address[:8]}... - skipping")
+                self.logger.info(f"No liquidity data for {mint_address[:8]}... - skipping")
                 return
             
             # Try to get metadata, but don't block on it for new tokens
