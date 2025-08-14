@@ -509,7 +509,7 @@ class ProvenAlphaFinder:
         mint = token_data['mint']
         self.logger.info(f"Validating token {mint[:8]}... with Moralis")
         try:
-            current_price = await self.moralis.get_current_price(mint)
+            current_price = await self.moralis.get_current_price(mint, fresh=True)
             
             if current_price <= 0:
                 self.logger.warning(f"Token {mint[:8]}... has no price data (price={current_price}) - Moralis may be rate limited or token too new")
