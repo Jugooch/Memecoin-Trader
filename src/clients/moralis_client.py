@@ -331,6 +331,7 @@ class MoralisClient:
             # Skip cache if fresh=True (for position monitoring)
             cache_type = None if fresh else 'price'
             data = await self._make_request(url, cache_type=cache_type)
+            self.logger.debug(f"Current data for {mint_address}: {data}")
             return float(data.get('usdPrice', 0))
             
         except Exception as e:
