@@ -200,13 +200,22 @@ class MemecoinTradingBot:
         # Start monitoring tasks
         self.logger.info("Starting monitoring tasks...")
         
-        tasks = [
-            self.manage_active_positions(),
-            self.daily_reset_task(),
-            self.periodic_summary_task(),
-            self.heartbeat_task(),
-            self.wallet_rotation_manager.start_rotation_loop()
-        ]
+        tasks = []
+        
+        self.logger.info("Creating manage_active_positions task...")
+        tasks.append(self.manage_active_positions())
+        
+        self.logger.info("Creating daily_reset_task...")
+        tasks.append(self.daily_reset_task())
+        
+        self.logger.info("Creating periodic_summary_task...")
+        tasks.append(self.periodic_summary_task())
+        
+        self.logger.info("Creating heartbeat_task...")
+        tasks.append(self.heartbeat_task())
+        
+        self.logger.info("Creating wallet_rotation_manager task...")
+        tasks.append(self.wallet_rotation_manager.start_rotation_loop())
         
         # Use unified stream for PumpPortal or separate for Bitquery
         if self.config.realtime_source == 'pumpportal':
@@ -216,7 +225,7 @@ class MemecoinTradingBot:
             self.logger.info("Adding Bitquery token monitoring task")
             tasks.append(self.monitor_new_tokens())
         
-        self.logger.info(f"Starting {len(tasks)} tasks...")
+        self.logger.info(f"All {len(tasks)} tasks created, starting with asyncio.gather...")
         await asyncio.gather(*tasks)
 
     async def monitor_new_tokens(self):
