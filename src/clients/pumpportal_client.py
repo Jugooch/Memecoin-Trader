@@ -55,6 +55,77 @@ class PumpPortalClient:
             self.logger.error(f"Connection details: endpoint={self.ws_endpoint}, headers={headers}")
             raise
     
+    async def subscribe_all_events(self) -> AsyncGenerator[Dict, None]:
+        """Subscribe to both token launches and trades in a single stream"""
+        if not self.connected or not self.websocket:
+            await self.initialize()
+        
+        try:
+            # Subscribe to both new tokens and trades
+            subscriptions = [
+                {"method": "subscribeNewToken"},
+                {"method": "subscribeTokenTrade"},
+            ]
+            
+            for sub_msg in subscriptions:
+                try:
+                    await self.websocket.send(json.dumps(sub_msg))
+                    self.logger.info(f"Sent subscription: {sub_msg}")
+                    await asyncio.sleep(0.1)
+                except Exception as e:
+                    self.logger.warning(f"Failed to send subscription: {e}")
+            
+            self.logger.info("Subscribed to both token launches and trades")
+            
+            # Process all messages from the single WebSocket
+            async for message in self.websocket:
+                try:
+                    data = json.loads(message)
+                    
+                    # Determine message type and parse accordingly
+                    if 'txType' in data:
+                        tx_type = data.get('txType', '').lower()
+                        
+                        if tx_type == 'create':
+                            # Token creation event
+                            token_data = self._parse_pump_portal_message(data)
+                            if token_data:
+                                token_data['event_type'] = 'token_launch'
+                                self.logger.debug(f"Token launch: {token_data.get('symbol')} ({token_data.get('mint', '')[:8]}...)")
+                                yield token_data
+                                
+                        elif tx_type in ['buy', 'sell']:
+                            # Trade event
+                            trade_data = self._parse_pump_portal_trade(data)
+                            if trade_data:
+                                trade_data['event_type'] = 'trade'
+                                yield trade_data
+                    else:
+                        # Try to parse as either type
+                        token_data = self._parse_pump_portal_message(data)
+                        if token_data:
+                            token_data['event_type'] = 'token_launch'
+                            yield token_data
+                        else:
+                            trade_data = self._parse_pump_portal_trade(data)
+                            if trade_data:
+                                trade_data['event_type'] = 'trade'
+                                yield trade_data
+                                
+                except json.JSONDecodeError as e:
+                    self.logger.warning(f"Failed to parse message: {e}")
+                except Exception as e:
+                    self.logger.error(f"Error processing message: {e}")
+                    
+        except websockets.exceptions.ConnectionClosed:
+            self.logger.warning("Pump Portal WebSocket connection closed")
+            self.connected = False
+            raise
+        except Exception as e:
+            self.logger.error(f"Pump Portal WebSocket error: {e}")
+            self.connected = False
+            raise
+    
     async def subscribe_token_launches(self) -> AsyncGenerator[Dict, None]:
         """Subscribe to new Pump.fun token creation events - matches Bitquery interface"""
         if not self.connected or not self.websocket:
@@ -155,20 +226,28 @@ class PumpPortalClient:
             await self.initialize()
         
         try:
+            # Try multiple subscription formats for trades
             if mint_address:
-                # Subscribe to specific token trades
-                subscription_message = {
-                    "method": "subscribeTokenTrade",
-                    "keys": [mint_address]
-                }
+                subscription_messages = [
+                    {"method": "subscribeTokenTrade", "keys": [mint_address]},
+                    {"method": "subscribeAccountTrade"},  # Maybe this gets all trades?
+                ]
             else:
-                # Subscribe to all token trades
-                subscription_message = {
-                    "method": "subscribeTokenTrade"
-                }
+                # Subscribe to all token trades - try different formats
+                subscription_messages = [
+                    {"method": "subscribeTokenTrade"},
+                    {"method": "subscribeAccountTrade"},
+                    {"method": "subscribeAllTrades"},  # Guessing this might work
+                ]
             
-            await self.websocket.send(json.dumps(subscription_message))
-            self.logger.info(f"Subscribed to token trades{f' for {mint_address[:8]}...' if mint_address else ''}")
+            # Send all subscription attempts
+            for msg in subscription_messages:
+                try:
+                    await self.websocket.send(json.dumps(msg))
+                    self.logger.info(f"Sent trade subscription: {msg}")
+                    await asyncio.sleep(0.1)
+                except Exception as e:
+                    self.logger.warning(f"Failed to send trade subscription: {e}")
             
             async for message in self.websocket:
                 try:
@@ -274,13 +353,18 @@ class PumpPortalClient:
             else:
                 timestamp = datetime.utcnow().isoformat() + "Z"
             
-            # Determine if this is a buy or sell
-            # Adjust these fields based on actual Pump Portal format
-            trade_type = data.get('tradeType', 'buy').lower()
-            is_buy = trade_type == 'buy'
+            # Determine if this is a buy or sell based on PumpPortal format
+            # PumpPortal uses 'txType' field with values like 'buy', 'sell'
+            tx_type = data.get('txType', '').lower()
+            trade_type = data.get('tradeType', tx_type).lower()
             
-            amount = data.get('tokenAmount', 0)
-            sol_amount = data.get('solAmount', 0)
+            # Check multiple fields to determine if it's a buy
+            is_buy = (trade_type == 'buy' or tx_type == 'buy' or 
+                     'buy' in trade_type or 'buy' in tx_type)
+            
+            # Get amounts - PumpPortal may use different field names
+            amount = data.get('tokenAmount') or data.get('vTokensInBondingCurve', 0)
+            sol_amount = data.get('solAmount') or data.get('vSolInBondingCurve', 0)
             
             return {
                 'mint': mint,

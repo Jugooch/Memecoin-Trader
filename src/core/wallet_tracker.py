@@ -53,6 +53,10 @@ class WalletTracker:
         self.alpha_detection_cache = {}  # {"token:wallet": timestamp}
         self.dedup_cache_ttl = 75  # 75 seconds TTL for deduplication - FIXED: was 900
         self.dedupe_stats = {'total_checks': 0, 'deduped_checks': 0}  # Statistics
+        
+        # Real-time trade cache for PumpPortal trades
+        self.realtime_trades_cache = {}  # {mint: [(wallet, timestamp), ...]}
+        self.realtime_cache_ttl = 120  # Keep trades for 2 minutes
 
     async def check_alpha_activity(self, mint_address: str, time_window_sec: int, threshold_buys: int, moralis_client=None) -> bool:
         """
@@ -138,7 +142,11 @@ class WalletTracker:
         self.logger.debug(f"Checking detailed alpha activity for {mint_address}")
         
         start_time = time.time()
-        alpha_buyers = set()
+        
+        # FIRST: Check real-time cache for immediate alpha buyers (PumpPortal trades)
+        alpha_buyers = self.get_realtime_alpha_buyers(mint_address, time_window_sec)
+        if alpha_buyers:
+            self.logger.info(f"Found {len(alpha_buyers)} alpha buyers from real-time cache for {mint_address[:8]}...")
         
         if not moralis_client:
             self.logger.error("Moralis client not provided")
@@ -687,6 +695,56 @@ class WalletTracker:
             
         if expired_keys:
             self.logger.debug(f"Cleaned up {len(expired_keys)} expired deduplication entries")
+    
+    def record_realtime_alpha_buy(self, wallet: str, mint: str, timestamp: str):
+        """Record a real-time alpha wallet buy from PumpPortal"""
+        import time
+        
+        # Clean up old cache entries
+        self._cleanup_realtime_cache()
+        
+        # Initialize list for this mint if needed
+        if mint not in self.realtime_trades_cache:
+            self.realtime_trades_cache[mint] = []
+        
+        # Add the trade
+        trade_time = self._parse_timestamp(timestamp) if isinstance(timestamp, str) else timestamp
+        self.realtime_trades_cache[mint].append((wallet, trade_time))
+        
+        # Update wallet activity
+        self.update_wallet_activity(wallet)
+        self.performance_tracker.record_wallet_activity(wallet)
+        
+        self.logger.debug(f"Recorded realtime alpha buy: {wallet[:8]}... -> {mint[:8]}...")
+    
+    def _cleanup_realtime_cache(self):
+        """Remove old entries from real-time trades cache"""
+        current_time = time.time()
+        
+        # Clean up trades older than TTL
+        for mint in list(self.realtime_trades_cache.keys()):
+            trades = self.realtime_trades_cache[mint]
+            # Keep only recent trades
+            recent_trades = [(w, t) for w, t in trades if current_time - t < self.realtime_cache_ttl]
+            
+            if recent_trades:
+                self.realtime_trades_cache[mint] = recent_trades
+            else:
+                del self.realtime_trades_cache[mint]
+    
+    def get_realtime_alpha_buyers(self, mint: str, time_window_sec: int) -> set:
+        """Get alpha wallet buyers from real-time cache"""
+        import time
+        current_time = time.time()
+        alpha_buyers = set()
+        
+        if mint in self.realtime_trades_cache:
+            for wallet, trade_time in self.realtime_trades_cache[mint]:
+                if current_time - trade_time <= time_window_sec:
+                    if wallet in self.watched_wallets:
+                        alpha_buyers.add(wallet)
+        
+        return alpha_buyers
     
     def get_deduplication_stats(self) -> Dict:
         """Get deduplication statistics"""
