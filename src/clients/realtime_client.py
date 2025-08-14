@@ -63,6 +63,7 @@ class RealtimeClient:
         if self.bitquery_client and self.source != 'bitquery':
             try:
                 await self.bitquery_client.initialize()
+                self.logger.info("Bitquery client initialized for alpha discovery")
             except Exception as e:
                 self.logger.warning(f"Failed to initialize Bitquery client for alpha discovery: {e}")
     

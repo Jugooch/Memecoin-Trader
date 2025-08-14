@@ -102,18 +102,12 @@ class BitqueryClient:
         )
         self.client = Client(transport=http_transport)
         
-        # WebSocket transport for subscriptions (using EAP endpoint for Solana)
-        # Note: Token MUST be in URL, not headers per Bitquery docs
-        ws_url = f"wss://streaming.bitquery.io/eap?token={api_token}"
-        ws_transport = WebsocketsTransport(
-            url=ws_url,
-            headers={
-                "Sec-WebSocket-Protocol": "graphql-ws",
-                "Content-Type": "application/json"
-            }
-        )
-        self.ws_client = Client(transport=ws_transport)
+        # Skip WebSocket client initialization - it's not needed for historical queries
+        # and it causes hangs during startup. We'll initialize it on-demand if needed.
+        self.ws_client = None
         self.current_client_token_index = token_index
+        
+        self.logger.info(f"Bitquery HTTP client initialized successfully (WebSocket skipped)")
 
     async def subscribe_token_launches(self) -> AsyncGenerator[Dict, None]:
         """Subscribe to new Pump.fun token creation events"""
