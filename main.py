@@ -237,15 +237,29 @@ class MemecoinTradingBot:
         # Use unified stream for PumpPortal or separate for Bitquery
         if self.config.realtime_source == 'pumpportal':
             self.logger.info("Adding PumpPortal event monitoring task")
-            pump_coro = self.monitor_pumpportal_events()
-            self.logger.info(f"PumpPortal coroutine created: {pump_coro}")
-            tasks.append(pump_coro)
+            try:
+                self.logger.info("About to create PumpPortal monitoring coroutine...")
+                pump_coro = self.monitor_pumpportal_events()
+                self.logger.info(f"PumpPortal coroutine created: {pump_coro}")
+                tasks.append(pump_coro)
+                self.logger.info("PumpPortal task added to tasks list")
+            except Exception as e:
+                self.logger.error(f"Error creating PumpPortal coroutine: {e}")
+                import traceback
+                self.logger.error(traceback.format_exc())
         else:
             self.logger.info("Adding Bitquery token monitoring task")
             tasks.append(self.monitor_new_tokens())
         
         self.logger.info(f"All {len(tasks)} tasks created, starting with asyncio.gather...")
-        await asyncio.gather(*tasks)
+        
+        try:
+            self.logger.info("About to call asyncio.gather...")
+            await asyncio.gather(*tasks)
+        except Exception as e:
+            self.logger.error(f"Error in asyncio.gather: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
 
     async def monitor_new_tokens(self):
         """Monitor for new token launches via Bitquery"""

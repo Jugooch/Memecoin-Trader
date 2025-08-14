@@ -39,19 +39,33 @@ class WalletRotationManager:
     
     async def start_rotation_loop(self):
         """Start the 2-hour rotation loop"""
+        self.logger.info("start_rotation_loop() called")
         self.running = True
         self.logger.info("Starting wallet rotation manager (2-hour intervals)")
         
+        # Perform initial rotation immediately
+        try:
+            self.logger.info("Performing initial wallet rotation...")
+            await self.perform_rotation()
+            self.last_rotation = time.time()
+            self.logger.info("Initial wallet rotation completed")
+        except Exception as e:
+            self.logger.error(f"Error in initial rotation: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+        
+        self.logger.info("Entering rotation loop...")
         while self.running:
             try:
+                # Wait before checking for rotation
+                await asyncio.sleep(600)  # Check every 10 minutes
+                
                 # Check if it's time for rotation
                 current_time = time.time()
                 if current_time - self.last_rotation >= self.rotation_interval:
+                    self.logger.info("Time for scheduled rotation")
                     await self.perform_rotation()
                     self.last_rotation = current_time
-                
-                # Check every 10 minutes
-                await asyncio.sleep(600)
                 
             except Exception as e:
                 self.logger.error(f"Error in rotation loop: {e}")
