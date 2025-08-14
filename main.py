@@ -236,22 +236,24 @@ class MemecoinTradingBot:
                 self.logger.error(f"Error processing token {token_event.get('mint', 'unknown')}: {e}")
 
     async def monitor_pumpportal_events(self):
-        """Monitor unified PumpPortal stream for both token launches and trades"""
+        """Monitor unified PumpPortal stream for both token launches and trades with auto-reconnect"""
         self.logger.info("Starting unified PumpPortal monitoring (tokens + trades)")
         
-        try:
-            # Check if PumpPortal client exists
-            if not self.realtime_client.pumpportal_client:
-                self.logger.error("PumpPortal client not available!")
-                return
-            
-            self.logger.info("Subscribing to PumpPortal all events stream...")
-            
-            event_count = 0
-            # Use the unified stream from PumpPortal, passing our watched wallets
-            watched_wallets = list(self.wallet_tracker.watched_wallets)
-            async for event in self.realtime_client.pumpportal_client.subscribe_all_events(watched_wallets):
-                event_count += 1
+        while self.running:  # Add reconnection loop
+            try:
+                # Check if PumpPortal client exists
+                if not self.realtime_client.pumpportal_client:
+                    self.logger.error("PumpPortal client not available!")
+                    await asyncio.sleep(60)  # Wait before retry
+                    continue
+                
+                self.logger.info("Subscribing to PumpPortal all events stream...")
+                
+                event_count = 0
+                # Use the unified stream from PumpPortal, passing our watched wallets
+                watched_wallets = list(self.wallet_tracker.watched_wallets)
+                async for event in self.realtime_client.pumpportal_client.subscribe_all_events(watched_wallets):
+                    event_count += 1
                 if event_count <= 3:  # Log first few events
                     self.logger.info(f"Received PumpPortal event #{event_count}: {event.get('event_type', 'unknown')}")
                 if not self.running:
@@ -307,10 +309,13 @@ class MemecoinTradingBot:
                 except Exception as e:
                     self.logger.error(f"Error processing PumpPortal event: {e}")
                     
-        except Exception as e:
-            self.logger.error(f"Error in PumpPortal monitoring: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
+            except (ConnectionError, OSError, Exception) as e:
+                self.logger.error(f"PumpPortal connection error: {e}")
+                self.logger.info("Will attempt to reconnect in 30 seconds...")
+                await asyncio.sleep(30)  # Wait before reconnection attempt
+                continue
+                
+        self.logger.info("PumpPortal monitoring stopped")
 
     async def process_new_token(self, token_event: Dict):
         """Process a newly launched token"""
