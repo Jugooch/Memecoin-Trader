@@ -235,10 +235,32 @@ class MemecoinTradingBot:
             self.logger.error(traceback.format_exc())
         
         self.logger.info("Finished wallet rotation task setup")
-        self.logger.info(f"Current realtime_source: {self.config.realtime_source}")
+        
+        print("DEBUG: About to check config...")
+        print(f"DEBUG: Config object exists: {self.config is not None}")
+        print(f"DEBUG: Config type: {type(self.config)}")
+        
+        try:
+            self.logger.info("Checking if config has realtime_source attribute...")
+            has_attr = hasattr(self.config, 'realtime_source')
+            self.logger.info(f"Has realtime_source: {has_attr}")
+            
+            if has_attr:
+                self.logger.info("Getting realtime_source value...")
+                realtime_source = self.config.realtime_source
+                self.logger.info(f"Got realtime_source: {realtime_source}")
+            else:
+                self.logger.info("No realtime_source attribute, using default")
+                realtime_source = 'pumpportal'
+                
+        except Exception as e:
+            self.logger.error(f"Error getting realtime_source: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            realtime_source = 'pumpportal'
         
         # Use unified stream for PumpPortal or separate for Bitquery
-        if self.config.realtime_source == 'pumpportal':
+        if realtime_source == 'pumpportal':
             self.logger.info("Adding PumpPortal event monitoring task")
             try:
                 self.logger.info("About to create PumpPortal monitoring coroutine...")
