@@ -272,6 +272,26 @@ class MemecoinTradingBot:
                                 # Record this alpha wallet buy for real-time detection
                                 self.wallet_tracker.record_realtime_alpha_buy(trader, mint, timestamp)
                                 self.logger.info(f"REALTIME ALPHA: {trader[:8]}... bought {mint[:8]}... (via PumpPortal)")
+                                
+                                # Check if we have enough alpha signals to process this token
+                                current_alpha_buyers = self.wallet_tracker.get_realtime_alpha_buyers(
+                                    mint, 
+                                    self.config.time_window_sec
+                                )
+                                
+                                # If we hit threshold from real-time data alone, process the token
+                                if len(current_alpha_buyers) >= self.config.threshold_alpha_buys:
+                                    if mint not in self.processed_tokens:
+                                        self.logger.info(f"Alpha threshold reached for {mint[:8]}... from real-time data, processing token")
+                                        # Create a token event for processing
+                                        token_event = {
+                                            'mint': mint,
+                                            'deployer': event.get('deployer', 'unknown'),
+                                            'name': event.get('name', ''),
+                                            'symbol': event.get('symbol', ''),
+                                            'timestamp': timestamp
+                                        }
+                                        await self.process_new_token(token_event)
                             else:
                                 # Log non-alpha trades for debugging (limited)
                                 if event_count <= 10:
@@ -312,7 +332,30 @@ class MemecoinTradingBot:
             self.logger.debug("Trading limits reached, skipping")
             return
         
-        # Get token liquidity from Moralis (required) and metadata (optional for new tokens)
+        # NEW STRATEGY: Check alpha activity FIRST from real-time cache
+        # This avoids calling Moralis for every token
+        initial_alpha_buyers = self.wallet_tracker.get_realtime_alpha_buyers(
+            mint_address, 
+            self.config.time_window_sec
+        )
+        
+        # If no alpha wallets are buying from real-time data, skip expensive Moralis calls
+        if len(initial_alpha_buyers) == 0:
+            self.logger.debug(f"No alpha activity detected for {mint_address[:8]}... in real-time cache, skipping Moralis checks")
+            return
+        
+        self.logger.info(f"Initial alpha signal: {len(initial_alpha_buyers)} wallets detected for {mint_address[:8]}... from real-time data")
+        
+        # Token maturity check - wait a bit for Moralis to index the token
+        token_age = time.time() - token_detected_time
+        min_token_age = getattr(self.config, 'min_token_age_seconds', 10)  # Default 10 seconds
+        
+        if token_age < min_token_age:
+            wait_time = min_token_age - token_age
+            self.logger.info(f"Token {mint_address[:8]}... is too new ({token_age:.1f}s), waiting {wait_time:.1f}s for Moralis indexing")
+            await asyncio.sleep(wait_time)
+        
+        # Now check Moralis, but be more lenient with liquidity for alpha-signaled tokens
         try:
             # If Moralis is rate limited, skip this token entirely (safer approach)
             if self.moralis.rate_limited:
@@ -321,29 +364,32 @@ class MemecoinTradingBot:
                 
             liquidity = await self.moralis.get_token_liquidity(mint_address)
             
-            # Require liquidity data - this is essential for safety
+            # For alpha-signaled tokens, we can accept zero liquidity (new tokens)
+            # The alpha signal is our primary filter now
             if not liquidity:
-                self.logger.debug(f"No liquidity data for {mint_address[:8]}... - skipping")
-                return
+                self.logger.info(f"No liquidity data yet for alpha-signaled token {mint_address[:8]}... - proceeding with alpha signal alone")
+                liquidity = {'total_liquidity_usd': 0, 'pools': [], 'pool_count': 0}
             
             # Try to get metadata, but don't block on it for new tokens
             metadata = await self.moralis.get_token_metadata(mint_address)
             if not metadata:
-                self.logger.debug(f"No metadata yet for {mint_address[:8]}... (proceeding with liquidity-only checks)")
+                self.logger.debug(f"No metadata yet for {mint_address[:8]}... (proceeding with alpha signal)")
                 metadata = {}  # Empty dict for safe access
             
-            if not self._passes_filters(metadata, liquidity, deployer):
+            # Modified filter check - more lenient for alpha-signaled tokens
+            if not self._passes_filters_with_alpha(metadata, liquidity, deployer, len(initial_alpha_buyers)):
                 # Only log failures at debug level to reduce noise
-                self.logger.debug(f"Token {mint_address} failed filters")
+                self.logger.debug(f"Token {mint_address} failed filters despite alpha signal")
                 return
             
             # Get wallet status for enhanced logging
             active_wallets = self.wallet_tracker.get_active_wallets()
             total_wallets = len(self.wallet_tracker.watched_wallets)
             
-            # If we get here, token passed basic filters - now it's worth logging
+            # If we get here, token has alpha signal - now it's worth detailed checking
             metadata_status = "with metadata" if metadata else "metadata-pending"
-            self.logger.info(f"Token {mint_address[:8]}... passed initial filters ({metadata_status}) - checking alpha activity (watching {len(active_wallets)}/{total_wallets} active wallets)")
+            liquidity_status = f"${liquidity.get('total_liquidity_usd', 0):,.0f}" if liquidity.get('total_liquidity_usd', 0) > 0 else "pending"
+            self.logger.info(f"Alpha-signaled token {mint_address[:8]}... proceeding to detailed check (liquidity: {liquidity_status}, {metadata_status})"
                 
         except Exception as e:
             # Only log 404s at debug level since they're common for new tokens
@@ -522,6 +568,36 @@ class MemecoinTradingBot:
         # Check liquidity requirement (use unified extraction method)
         liquidity_usd = self._extract_liquidity_usd(liquidity)
         if liquidity_usd < self.config.min_liquidity_usd:
+            return False
+            
+        # Skip tokens with suspicious names (basic spam filter) - only if metadata available
+        if metadata:  # Only check spam filter if we have metadata
+            name = metadata.get('name', '').lower()
+            symbol = metadata.get('symbol', '').lower()
+            spam_keywords = ['test', 'fake', 'scam', 'rugpull', 'honeypot']
+            if any(keyword in name or keyword in symbol for keyword in spam_keywords):
+                return False
+        
+        # Add deployer blacklist check here if needed
+        
+        return True
+    
+    def _passes_filters_with_alpha(self, metadata: Dict, liquidity: Dict, deployer: str, alpha_count: int) -> bool:
+        """Apply token filters with alpha signal consideration"""
+        liquidity_usd = self._extract_liquidity_usd(liquidity)
+        
+        # For strong alpha signals (3+ wallets), be more lenient with liquidity
+        if alpha_count >= 3:
+            # Accept zero liquidity for very new tokens with strong alpha signal
+            min_liquidity_override = 0
+        elif alpha_count >= 2:
+            # Reduce liquidity requirement by 50% for moderate alpha signal
+            min_liquidity_override = self.config.min_liquidity_usd * 0.5
+        else:
+            # Use normal liquidity requirement
+            min_liquidity_override = self.config.min_liquidity_usd
+        
+        if liquidity_usd < min_liquidity_override:
             return False
             
         # Skip tokens with suspicious names (basic spam filter) - only if metadata available

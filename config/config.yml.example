@@ -58,6 +58,10 @@ tp_multiplier: 1.25           # Take profit multiplier (1.25x - more realistic)
 stop_loss_pct: 0.92           # Stop loss percentage (8% loss - tighter stop)
 max_hold_seconds: 900         # Maximum time to hold position (15 minutes)
 
+# Token processing optimization (reduces Moralis API calls)
+min_token_age_seconds: 10     # Wait time before checking Moralis (allows indexing)
+alpha_first_strategy: true    # Check alpha activity before calling Moralis APIs
+
 # Trading execution mode
 trading_mode: "simulation"    # Options: "simulation", "alerts", "auto"
 # simulation = Paper trading only
