@@ -78,7 +78,7 @@ class MemecoinTradingBot:
             'beta_prior_alpha': getattr(self.config, 'beta_prior_alpha', 3),
             'beta_prior_beta': getattr(self.config, 'beta_prior_beta', 5),
             'alpha_weight_min': getattr(self.config, 'alpha_weight_min', 2.5),
-            'require_one_wallet_pge_55': getattr(self.config, 'require_one_wallet_pge_55', True)
+            'require_one_wallet_pge_55': getattr(self.config, 'require_one_wallet_pge_55', False)
         }
         self.wallet_tracker = WalletTracker(self.config.watched_wallets, config=wallet_config)
         self.trading_engine = TradingEngine(self.config, moralis_client=self.moralis)
