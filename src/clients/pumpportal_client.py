@@ -57,7 +57,10 @@ class PumpPortalClient:
     
     async def subscribe_all_events(self) -> AsyncGenerator[Dict, None]:
         """Subscribe to both token launches and trades in a single stream"""
+        self.logger.info("subscribe_all_events called")
+        
         if not self.connected or not self.websocket:
+            self.logger.info("WebSocket not connected, initializing...")
             await self.initialize()
         
         try:
@@ -67,6 +70,8 @@ class PumpPortalClient:
                 {"method": "subscribeTokenTrade"},
             ]
             
+            self.logger.info(f"Sending {len(subscriptions)} subscription messages...")
+            
             for sub_msg in subscriptions:
                 try:
                     await self.websocket.send(json.dumps(sub_msg))
@@ -75,7 +80,7 @@ class PumpPortalClient:
                 except Exception as e:
                     self.logger.warning(f"Failed to send subscription: {e}")
             
-            self.logger.info("Subscribed to both token launches and trades")
+            self.logger.info("Subscribed to both token launches and trades, waiting for messages...")
             
             # Process all messages from the single WebSocket
             async for message in self.websocket:

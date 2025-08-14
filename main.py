@@ -198,6 +198,8 @@ class MemecoinTradingBot:
         self.logger.info(f"Realtime client initialized with source: {self.realtime_client.get_source()}")
         
         # Start monitoring tasks
+        self.logger.info("Starting monitoring tasks...")
+        
         tasks = [
             self.manage_active_positions(),
             self.daily_reset_task(),
@@ -208,10 +210,13 @@ class MemecoinTradingBot:
         
         # Use unified stream for PumpPortal or separate for Bitquery
         if self.config.realtime_source == 'pumpportal':
+            self.logger.info("Adding PumpPortal event monitoring task")
             tasks.append(self.monitor_pumpportal_events())
         else:
+            self.logger.info("Adding Bitquery token monitoring task")
             tasks.append(self.monitor_new_tokens())
         
+        self.logger.info(f"Starting {len(tasks)} tasks...")
         await asyncio.gather(*tasks)
 
     async def monitor_new_tokens(self):
@@ -231,34 +236,47 @@ class MemecoinTradingBot:
         """Monitor unified PumpPortal stream for both token launches and trades"""
         self.logger.info("Starting unified PumpPortal monitoring (tokens + trades)")
         
-        # Use the unified stream from PumpPortal
-        async for event in self.realtime_client.pumpportal_client.subscribe_all_events():
-            if not self.running:
-                break
-                
-            try:
-                event_type = event.get('event_type')
-                
-                if event_type == 'token_launch':
-                    # Process as new token
-                    await self.process_new_token(event)
+        try:
+            # Check if PumpPortal client exists
+            if not self.realtime_client.pumpportal_client:
+                self.logger.error("PumpPortal client not available!")
+                return
+            
+            self.logger.info("Subscribing to PumpPortal all events stream...")
+            
+            # Use the unified stream from PumpPortal
+            async for event in self.realtime_client.pumpportal_client.subscribe_all_events():
+                if not self.running:
+                    break
                     
-                elif event_type == 'trade':
-                    # Process as trade for alpha detection
-                    mint = event.get('mint')
-                    trader = event.get('buyer') or event.get('seller')
-                    is_buy = event.get('buyer') is not None
-                    timestamp = event.get('timestamp')
+                try:
+                    event_type = event.get('event_type')
                     
-                    if mint and trader and is_buy:
-                        # Check if this is from an alpha wallet
-                        if trader in self.wallet_tracker.watched_wallets:
-                            # Record this alpha wallet buy for real-time detection
-                            self.wallet_tracker.record_realtime_alpha_buy(trader, mint, timestamp)
-                            self.logger.debug(f"REALTIME ALPHA: {trader[:8]}... bought {mint[:8]}... (via PumpPortal)")
+                    if event_type == 'token_launch':
+                        # Process as new token
+                        await self.process_new_token(event)
+                        
+                    elif event_type == 'trade':
+                        # Process as trade for alpha detection
+                        mint = event.get('mint')
+                        trader = event.get('buyer') or event.get('seller')
+                        is_buy = event.get('buyer') is not None
+                        timestamp = event.get('timestamp')
+                        
+                        if mint and trader and is_buy:
+                            # Check if this is from an alpha wallet
+                            if trader in self.wallet_tracker.watched_wallets:
+                                # Record this alpha wallet buy for real-time detection
+                                self.wallet_tracker.record_realtime_alpha_buy(trader, mint, timestamp)
+                                self.logger.debug(f"REALTIME ALPHA: {trader[:8]}... bought {mint[:8]}... (via PumpPortal)")
+                        
+                except Exception as e:
+                    self.logger.error(f"Error processing PumpPortal event: {e}")
                     
-            except Exception as e:
-                self.logger.error(f"Error processing PumpPortal event: {e}")
+        except Exception as e:
+            self.logger.error(f"Error in PumpPortal monitoring: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
 
     async def process_new_token(self, token_event: Dict):
         """Process a newly launched token"""
