@@ -235,7 +235,7 @@ class WalletRotationManager:
             
             # Use safe atomic update
             updates = {'watched_wallets': wallet_list}
-            safe_update_config(updates, self.config_path)
+            safe_update_config(updates)
             
             self.logger.info(f"Updated config file with {len(wallet_list)} wallets (safe atomic write)")
             
