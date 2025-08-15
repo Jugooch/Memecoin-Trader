@@ -1015,16 +1015,38 @@ class ProvenAlphaFinder:
                 avg_risk_adjusted_return = 0.0
                 avg_recency = 0.0
             
-            # Calculate tier-weighted final score with risk adjustment
+            # NEW: Layer 2 - Analyze exit timing quality
+            avg_exit_quality = await self._analyze_exit_timing(wallet, token_list)
+            
+            # NEW: Layer 3 - Check performance consistency
+            consistency_score = self._calculate_consistency(performance_multipliers, recency_weights)
+            
+            # NEW: Layer 4 - Apply quality filters
+            min_exit_quality = self.config.get('discovery_quality_checks', {}).get('min_exit_quality', 0.3)
+            min_consistency = self.config.get('discovery_quality_checks', {}).get('min_consistency', 0.2)
+            
+            if avg_exit_quality < min_exit_quality or consistency_score < min_consistency:
+                # Skip wallets that fail quality checks
+                self.logger.debug(f"Wallet {wallet[:8]}... failed quality check: "
+                               f"exit={avg_exit_quality:.2f}, consistency={consistency_score:.2f}")
+                continue
+            
+            # Calculate enhanced tier-weighted final score with quality layers
             tier_base_score = base_score * 100  # Base score from tier multiplier
             
-            # Performance and success bonuses (now includes risk adjustment)
+            # Performance and success bonuses (existing logic)
             performance_bonus = avg_performance * 25
             success_bonus = success_rate * 40
             volume_bonus = len(token_list) * 10
             risk_adjusted_bonus = avg_risk_adjusted_return * 15  # Bonus for skill vs capital
             
-            final_score = (tier_base_score + performance_bonus + success_bonus + volume_bonus + risk_adjusted_bonus) * avg_recency
+            # NEW: Quality bonuses
+            exit_timing_bonus = avg_exit_quality * 30  # Reward good exit timing
+            consistency_bonus = consistency_score * 20  # Reward consistency
+            
+            final_score = (tier_base_score + performance_bonus + success_bonus + 
+                          volume_bonus + risk_adjusted_bonus + exit_timing_bonus + 
+                          consistency_bonus) * avg_recency
             
             scored_wallets.append({
                 'wallet': wallet,
@@ -1036,6 +1058,8 @@ class ProvenAlphaFinder:
                 'success_rate': success_rate,
                 'avg_risk_adjusted_return': avg_risk_adjusted_return,
                 'avg_recency': avg_recency,
+                'avg_exit_quality': avg_exit_quality,  # NEW: Store exit quality
+                'consistency_score': consistency_score,  # NEW: Store consistency
                 'tokens': token_list
             })
         
@@ -1060,7 +1084,9 @@ class ProvenAlphaFinder:
                            f"Score: {w['score']:.1f} | "
                            f"Counts: {w.get('tier_counts', 'N/A')} | "
                            f"Perf: {w['avg_performance']:.1f}x | "
-                           f"Success: {w['success_rate']:.1%}")
+                           f"Success: {w['success_rate']:.1%} | "
+                           f"Exit: {w.get('avg_exit_quality', 0):.2f} | "
+                           f"Consistency: {w.get('consistency_score', 0):.2f}")
         
         # Return more wallets but with tier diversity (up to 100 total)
         max_wallets = min(100, len(scored_wallets))
@@ -1177,6 +1203,95 @@ class ProvenAlphaFinder:
             
         except Exception as e:
             self.logger.error(f"Error updating bot config: {e}")
+
+    async def _analyze_exit_timing(self, wallet: str, token_list: List[Dict]) -> float:
+        """
+        Analyze if wallet sold near peaks vs held through dumps
+        Returns 0.0-1.0 score where 1.0 = perfect exit timing
+        """
+        exit_scores = []
+        
+        for token_entry in token_list:
+            token_data = token_entry["token"]
+            mint = token_data['mint']
+            launch_time = token_data.get('launch_time')
+            
+            if not launch_time:
+                continue
+                
+            try:
+                # Get wallet's transactions for this token
+                swaps = await self.moralis.get_token_swaps(mint, limit=100)
+                
+                # Find wallet's buy and sell transactions
+                wallet_buys = []
+                wallet_sells = []
+                
+                for swap in swaps:
+                    if swap.get('wallet') == wallet:
+                        swap_time = self._parse_iso_timestamp(swap.get('timestamp', ''))
+                        if swap.get('side') == 'buy':
+                            wallet_buys.append((swap_time, swap.get('price', 0)))
+                        elif swap.get('side') == 'sell':
+                            wallet_sells.append((swap_time, swap.get('price', 0)))
+                
+                if not wallet_buys or not wallet_sells:
+                    continue  # No complete buy-sell cycle
+                    
+                # Calculate exit quality for each buy-sell pair
+                for buy_time, buy_price in wallet_buys:
+                    # Find sells after this buy
+                    relevant_sells = [(t, p) for t, p in wallet_sells if t > buy_time]
+                    if not relevant_sells:
+                        continue
+                        
+                    # Get peak price in the period after buy
+                    all_prices_after_buy = [p for t, p in [(self._parse_iso_timestamp(swap.get('timestamp', '')), swap.get('price', 0)) 
+                                           for swap in swaps 
+                                           if self._parse_iso_timestamp(swap.get('timestamp', '')) > buy_time]]
+                    
+                    if not all_prices_after_buy:
+                        continue
+                        
+                    peak_price = max(all_prices_after_buy)
+                    
+                    # Calculate exit efficiency for each sell
+                    for sell_time, sell_price in relevant_sells:
+                        if buy_price > 0 and peak_price > buy_price:
+                            # Exit efficiency = how close to peak they sold
+                            potential_gain = (peak_price - buy_price) / buy_price
+                            actual_gain = (sell_price - buy_price) / buy_price
+                            exit_efficiency = actual_gain / potential_gain if potential_gain > 0 else 0
+                            exit_efficiency = max(0, min(1, exit_efficiency))  # Clamp 0-1
+                            exit_scores.append(exit_efficiency)
+                            
+            except Exception as e:
+                self.logger.debug(f"Error analyzing exit timing for {wallet[:8]}...: {e}")
+                continue
+        
+        return sum(exit_scores) / len(exit_scores) if exit_scores else 0.5  # Default neutral
+
+    def _calculate_consistency(self, performance_multipliers: List[float], recency_weights: List[float]) -> float:
+        """
+        Check if wallet is consistently good vs got lucky on a few tokens
+        Returns 0.0-1.0 where 1.0 = very consistent
+        """
+        if len(performance_multipliers) < 2:
+            return 0.5  # Not enough data
+        
+        # Calculate variance in performance (lower = more consistent)
+        import statistics
+        try:
+            variance = statistics.variance(performance_multipliers)
+            
+            # Convert variance to consistency score (lower variance = higher consistency)
+            # Typical variance for good wallets is 0.1-0.5, bad wallets 1.0+
+            consistency = max(0, 1.0 - (variance / 1.0))  # Scale so variance of 1.0 = 0 consistency
+            
+            return consistency
+        except Exception as e:
+            self.logger.debug(f"Error calculating consistency: {e}")
+            return 0.5  # Default neutral
 
 
 async def main():

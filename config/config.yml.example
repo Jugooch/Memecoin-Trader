@@ -62,6 +62,8 @@ discovery_quality_checks:
   min_tokens_for_check: 3     # Only check wallets with 3+ tokens for wash trading
   enable_wash_trading_detection: true  # Enable wash trading pattern detection
   enable_risk_adjusted_scoring: true   # Enable risk-adjusted performance scoring
+  min_exit_quality: 0.3       # Minimum exit timing quality (0.0-1.0, 0.3 = 30th percentile)
+  min_consistency: 0.2        # Minimum performance consistency (0.0-1.0, 0.2 = low variance)
 min_liquidity_usd: 25000      # Minimum liquidity required (raised to avoid slippage)
 time_window_sec: 300          # Time window to wait for alpha activity (5 minutes for better signals)
 max_trade_pct: 0.05           # Max % of capital per trade (5%)
