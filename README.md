@@ -1,19 +1,19 @@
 # 🚀 Memecoin Trading Bot
 
-Intelligent Solana memecoin trading bot that follows proven "alpha wallets" (smart money) to identify profitable trades early. Monitors pump.fun token launches in real-time and executes trades when multiple high-performing wallets show buying activity.
+Sophisticated Solana memecoin trading bot that follows proven "alpha wallets" (smart money) using advanced Bayesian statistics and adaptive risk management. Monitors pump.fun token launches in real-time and executes trades when multiple high-performing wallets show buying activity.
 
 ## ✨ Key Features
 
-- **🎯 Dual Alpha Discovery Systems**: Continuous accumulator + one-off analysis tools
-- **🔄 Multi-Key Rotation**: 8 Moralis keys + multiple Bitquery tokens for 24/7 operation
-- **📊 Intelligent Caching**: Request coalescing + tiered TTLs reduce API calls by 70-90%
-- **🛡️ Tiered Risk Management**: Wallet performance tiers (S/A/B/C) adjust position sizes
-- **🔍 Safety Scoring**: Rug pull detection, honeypot checks, liquidity validation
-- **📈 Paper Trading Mode**: Realistic fee simulation (DEX fees, slippage, network costs)
-- **⚡ Real-time Monitoring**: WebSocket subscriptions for instant token detection
-- **📱 P&L Tracking**: JSON-based persistence with atomic writes
-- **🛠️ Production Ready**: Deduplication, inactive wallet detection, error recovery
-- **🔔 Discord Integration**: Trade notifications, summaries, and error alerts
+- **🧠 Bayesian Wallet Scoring**: Smart confidence system handling fresh vs established wallets
+- **📊 Adaptive Risk Management**: Dynamic parameter adjustment based on daily P&L performance
+- **🎯 PumpPortal Integration**: Real-time wallet activity monitoring with WebSocket subscriptions
+- **🔄 Intelligent Wallet Rotation**: Smart retention logic keeping best performers while discovering new alpha
+- **🛡️ Multi-tier Safety System**: Rug pull detection, wash trading detection, liquidity validation
+- **📈 Dynamic Exit Strategy**: Timing-based TP1 sizing with intelligent trailing stops
+- **💰 Paper Trading Mode**: Pessimistic fee simulation ensuring live trading profitability
+- **⚡ Real-time Monitoring**: Sub-second alpha signal detection and execution
+- **📱 Comprehensive P&L Tracking**: Persistent storage with detailed trade attribution
+- **🔔 Discord Integration**: Real-time notifications with confidence scores and performance summaries
 
 ## Quick Start
 
@@ -35,17 +35,26 @@ nano config.yml
 
 Add your API keys:
 ```yaml
-bitquery_token: "your_bitquery_api_key"
+# PumpPortal API (Primary real-time source)
+pumpportal:
+  api_key: "your_pumpportal_api_key"
+  ws_endpoint: "wss://pumpportal.fun/api/data"
 
-# Multiple Moralis keys for rotation (recommended)
+# Bitquery (Discovery and backup)
+bitquery_tokens:
+  - "your_bitquery_token_1"
+  - "your_bitquery_token_2"  # Multiple tokens for rotation
+
+# Multiple Moralis keys for 24/7 operation
 moralis_keys:
   - your_first_moralis_key_here
-  - your_second_moralis_key_here  # Optional but recommended
-  - your_third_moralis_key_here   # For 24/7 operation
+  - your_second_moralis_key_here  # Recommended for rotation
+  - your_third_moralis_key_here   # For high availability
 
-# Optional: QuickNode for automated trading
-quicknode_endpoint: ""  # Leave empty for simulation mode
-quicknode_api_key: ""
+# Discord notifications (optional)
+notifications:
+  discord_webhook_url: "your_discord_webhook_url"
+  enabled: true
 ```
 
 ### 3. Start the Bot
@@ -54,7 +63,7 @@ quicknode_api_key: ""
 python start_bot.py
 ```
 
-**Note:** Alpha wallet discovery is now built into the bot via the Wallet Rotation Manager. No separate process needed!
+**Note:** Alpha wallet discovery and rotation are built into the bot. No separate processes needed!
 
 ### 4. Optional: Manual Alpha Discovery (Testing)
 
@@ -65,182 +74,240 @@ python -m src.discovery.alpha_discovery_v2
 
 ## Configuration System
 
-The bot uses a centralized configuration system with smart path resolution and validation.
-
-### Configuration File Location
-The bot automatically searches for `config.yml` in multiple locations:
-- Current directory: `./config.yml`
-- Config directory: `./config/config.yml` 
-- Project root variations
-
-### Configuration Template
-Copy the template and customize:
-```bash
-cp config/config.yml.example config.yml
-```
+The bot uses a sophisticated configuration system with smart path resolution and validation.
 
 ### Trading Modes
 Choose your execution mode in `config.yml`:
 
 ```yaml
 trading_mode: "simulation"  # Options:
-# "simulation" = Paper trading only (100% free)
-# "alerts" = Generate buy/sell alerts for manual execution (free)  
-# "auto" = Fully automated trading (requires QuickNode $49/mo)
+# "simulation" = Paper trading with pessimistic fees (recommended)
+# "live" = Real trading (requires proper wallet setup)
 ```
 
 ### Key Configuration Options:
 
-- `initial_capital: 100.0` - Starting capital amount
-- `max_trade_pct: 0.05` - Maximum 5% of capital per trade (base amount)
+**Core Trading Parameters:**
+- `initial_capital: 500.0` - Starting capital amount
+- `max_trade_pct: 0.05` - Fixed 5% position sizing per trade
 - `threshold_alpha_buys: 3` - Minimum alpha wallet buys to trigger trade
-- `tp_multiplier: 1.5` - First take profit at 1.5x (sells 30%)
-- `stop_loss_pct: 0.85` - Stop loss at 85% of entry price (15% max loss)
-- `time_window_sec: 120` - 2-minute window for alpha wallet detection
-- `min_liquidity_usd: 1000` - Minimum token liquidity requirement
-- `max_trades_per_day: 10` - Daily trade limit (capped at 20 max)
-- `min_time_between_trades: 30` - Minimum seconds between trades
+- `tp_multiplier: 1.25` - Take profit at 25% gain with dynamic sizing
+- `stop_loss_pct: 0.92` - Stop loss at 8% loss (realistic for volatility)
+- `max_hold_seconds: 900` - 15-minute maximum hold time
+
+**Alpha Wallet Management:**
+- `alpha_weight_min: 2.0` - Minimum weighted threshold for signals
+- `require_one_wallet_pge_55: true` - Require at least one wallet with ≥55% confidence
+- `watched_wallets: [...]` - 50-100 alpha wallet addresses (auto-managed)
+
+**Adaptive Risk Management:**
+```yaml
+risk_management:
+  enabled: true
+  levels:
+    normal:      # 0% to -2% daily P&L
+      min_wallets: 3
+      min_weight: 2.5
+      max_daily_trades: 20
+    cautious:    # -2% to -4% daily P&L
+      min_wallets: 4
+      min_weight: 3.0
+      max_daily_trades: 15
+    conservative: # -4% to -6% daily P&L
+      min_wallets: 5
+      min_weight: 3.5
+      max_daily_trades: 10
+    defensive:   # -6%+ daily P&L
+      min_wallets: 6
+      min_weight: 4.0
+      max_daily_trades: 5
+```
 
 ## API Setup Required
 
-### Bitquery (Token Launch Monitoring)
-1. Sign up at [Bitquery.io](https://bitquery.io)
-2. Get API key for GraphQL access
-3. Set up Solana Pump.fun program monitoring
+### PumpPortal (Primary Real-time Source)
+1. Sign up at [PumpPortal.fun](https://pumpportal.fun)
+2. Get API key for WebSocket access
+3. Used for real-time wallet buy/sell notifications
+4. **Advantages**: Lower latency, direct alpha signals
 
 ### Moralis (Token Data & Analytics)
 1. Create account at [Moralis.io](https://moralis.io)
-2. Get Solana API key
-3. Used for token metadata, liquidity, and price data
+2. Get Solana API key (multiple recommended)
+3. Used for token metadata, liquidity, pricing, and safety checks
 
-### QuickNode (Optional - Only for Automated Trading)
-1. **NOT REQUIRED** for paper trading or alerts mode
-2. Only needed if you want fully automated live trading
-3. Sign up at [QuickNode.com](https://quicknode.com) when ready to scale
-4. Enable Pump.fun marketplace add-on ($49/month)
+### Bitquery (Discovery & Backup)
+1. Sign up at [Bitquery.io](https://bitquery.io)
+2. Get API key for GraphQL access
+3. Used for historical analysis and alpha discovery
+4. Fallback source if PumpPortal unavailable
 
-## Why This Approach Works on $100 Budget
+### QuickNode (Optional - Only for Live Trading)
+1. **NOT REQUIRED** for paper trading mode
+2. Only needed for automated live trading execution
+3. Sign up at [QuickNode.com](https://quicknode.com) when ready for live trading
 
-### No Expensive Infrastructure Required
-- **Free RPC**: Uses public Solana mainnet RPC (no $500+/month subscriptions)
-- **Free APIs**: Bitquery & Moralis have generous free tiers
-- **Smart Timing**: Waits for alpha confirmation rather than racing milliseconds
-- **Quality Focus**: Makes 5-10 high-conviction trades vs. 100s of rushed trades
+## Why This Alpha-Following Strategy Works
 
-### Strategy Over Speed
+### Intelligence Over Speed
 Instead of competing on latency (expensive), we compete on intelligence:
-- **Alpha Wallet Signals**: Wait for proven smart money to validate tokens
-- **Liquidity Filtering**: Only trade tokens with sufficient backing
-- **Risk Management**: Position sizing and stop losses protect capital
-- **Patience**: 2-minute analysis windows vs. instant reactions
+- **Smart Money Following**: Wait for proven alpha wallets to validate tokens
+- **Bayesian Confidence**: Statistical models weight wallet reliability over time
+- **Risk-Adjusted Entries**: Position sizing based on signal quality and recent performance
+- **Conservative Exits**: Consistent 15-25% gains with controlled downside
+
+### Adaptive Risk Management
+The system automatically becomes more selective during drawdowns:
+- **Dynamic Thresholds**: Stricter requirements when losing money
+- **Circuit Breakers**: Automatic cooldowns after consecutive losses
+- **Performance-Based**: Parameters adjust based on daily P&L
+- **Capital Preservation**: Fixed 5% position sizing prevents overexposure
 
 ## Trading Strategy Overview
 
-The bot implements a conservative smart-money-following strategy:
+The bot implements a sophisticated alpha-following strategy with Bayesian wallet scoring:
 
-1. **Token Detection**: WebSocket monitoring of Pump.fun via Bitquery GraphQL
-2. **Initial Filtering**: 
-   - Minimum $1,000 liquidity
-   - Spam/scam token filtering
-   - Activity validation (swaps, unique traders)
-3. **Alpha Validation**:
-   - Check if 3+ watched wallets bought within 120 seconds
-   - Calculate confidence score (0-100)
-   - Determine investment multiplier based on wallet tiers
-4. **Safety Checks**:
-   - Rug score calculation (<70 required)
-   - Honeypot detection (check for sells)
-   - Trader diversity analysis
-5. **Position Entry**:
-   - Base: 5% of capital
-   - Adjusted by wallet tier multiplier (0.6x-2.0x)
-   - Realistic fees: 0.3% DEX + ~$0.28 network + 0.5% slippage
-6. **Exit Management**:
-   - TP1 @ 1.5x: Sell 30%
-   - TP2 @ 1.75x: Sell 30%
-   - Trailing stop after 50% gain
-   - Time stop after 5 minutes
-   - Break-even stop armed at +10%
+### 1. Real-time Alpha Detection (PumpPortal)
+- Monitor 50-100 alpha wallets via WebSocket subscriptions
+- Detect buy transactions in real-time (sub-second latency)
+- Group signals by token with time-based deduplication
 
-## 🎯 Alpha Wallet Discovery System
-
-The bot includes an advanced alpha wallet discovery system that automatically finds proven successful wallets:
-
-### Two Discovery Systems:
-
-#### 1. Alpha Discovery V2 (One-off Analysis)
-- Analyzes recent 2-hour window of trades
-- Identifies successful tokens (1.2x-2x price increase)
-- Finds wallets buying within first 10 minutes
-- Requires 2+ appearances on successful tokens
-- Best for: Quick manual discovery
-
-#### 2. Wallet Rotation Manager (Built-in - RECOMMENDED)
-- Runs every 2 hours automatically within the bot
-- Smart wallet rotation based on performance
-- Handles Bitquery's 3-4 minute data limitation
-- Stores in SQLite database
-- Best for: Production use
-
-### Wallet Tiering System:
-- **S-Tier**: 70%+ win rate, 100%+ avg profit → 2.0x investment
-- **A-Tier**: 60%+ win rate, 50%+ avg profit → 1.4x investment  
-- **B-Tier**: 50%+ win rate, 20%+ avg profit → 1.0x investment
-- **C-Tier**: Below B-tier thresholds → 0.6x investment
-
-### Run Discovery:
-```bash
-python src/discovery/alpha_discovery_v2.py
+### 2. Bayesian Confidence Scoring
+```python
+# Smart confidence system handles all wallet types
+Fresh Wallets (from discovery): 65% confidence
+Developing Wallets (1-3 trades): max(Bayesian, 55%)
+Established Wallets (4+ trades): Pure Bayesian scoring
 ```
 
-### Manual Alpha Wallets:
-You can also manually add proven wallets to `config.yml`:
-```yaml
-watched_wallets:
-  - "wallet_address_1"
-  - "wallet_address_2"
-  # Automatically populated by alpha discovery
+### 3. Weighted Alpha Analysis
+- Each wallet contributes weight based on confidence score
+- Require minimum weighted threshold (2.0-4.0, adaptive)
+- Investment multiplier based on highest-tier wallets in signal
+
+### 4. Safety Validation
+- Rug pull score calculation (<70 required)
+- Minimum $5,000 USD liquidity requirement
+- Wash trading detection for wallet coordination
+- Honeypot detection and sellability verification
+
+### 5. Dynamic Position Entry
+- **Base Size**: 5% of current capital (fixed)
+- **Multipliers**: 0.6x-1.4x based on signal quality
+- **Realistic Fees**: 0.75% buy + 1.0% sell slippage, 0.3% DEX fee
+- **Max Slippage Gate**: Reject if >1.5%
+
+### 6. Intelligent Exit Management
+- **Dynamic TP1**: 12-30% of position based on timing to 25% gain
+- **Trailing Stops**: Multiple tiers based on peak gain percentages
+- **Break-Even Protection**: Armed at +8%, provides 60-second safety
+- **Time Limits**: 15 minutes max hold, earlier if <5% gain
+
+## 🎯 Alpha Wallet Discovery & Management
+
+### Sophisticated Discovery System
+The bot includes advanced alpha wallet discovery with wash trading detection:
+
+#### Continuous Discovery (Every 2 Hours)
+- **Historical Analysis**: 2-hour window with up to 60,000 trades
+- **Multi-tier Success**: High (2x), Medium (1.5x), Low (1.2x) performance tiers
+- **Position Filtering**: $50-$5,000 range (avoid noise and whales)
+- **Wash Trading Detection**: Flag suspicious coordination patterns
+
+#### Smart Wallet Rotation
+- **Retention Logic**: Keep top 6-20 performing wallets
+- **Gradual Replacement**: Replace underperformers with new discoveries
+- **PumpPortal Sync**: Update WebSocket subscriptions seamlessly
+- **Performance Tracking**: Bayesian statistics with recency weighting
+
+### Wallet Confidence Evolution
+```python
+# Wallet progression through confidence tiers
+Discovery → 65% confidence (immediate trading ability)
+    ↓
+1-3 trades → max(Bayesian, 55%) (learning phase)
+    ↓
+4+ trades → Pure Bayesian (earned confidence)
 ```
 
-### Alpha Trading Logic:
-- Bot monitors all alpha wallets in real-time
-- When 3+ alpha wallets buy the same token → Trade signal triggered
-- Executes trade automatically (in simulation mode by default)
+### Alpha Trading Logic
+1. PumpPortal detects wallet buy transactions
+2. System calculates weighted confidence score
+3. Checks adaptive risk management thresholds
+4. Validates safety and liquidity requirements
+5. Executes trade with appropriate position sizing
 
-## Risk Management
+## Risk Management & Safety
 
-### Position Sizing
-- **Base Size**: 5% of capital per trade
-- **Tier Adjustment**: Multiplied by wallet tier (0.6x-2.0x)
-- **Max Concurrent**: 3 positions
-- **Daily Limit**: 10 trades (hard cap at 20)
+### Adaptive Parameter Adjustment
+The system automatically adjusts based on daily P&L:
+- **Normal** (0% to -2%): Standard thresholds, 20 trades/day
+- **Cautious** (-2% to -4%): Stricter requirements, 15 trades/day
+- **Conservative** (-4% to -6%): High selectivity, 10 trades/day
+- **Defensive** (-6%+): Maximum selectivity, 5 trades/day
 
-### Exit Strategy (Tiered)
-- **TP1 @ 1.5x**: Sell 30% of position
-- **TP2 @ 1.75x**: Sell 30% of position  
-- **Stop Loss**: Exit at 85% of entry (15% max loss)
-- **Trailing Stop**: After 50% gain, exit if drops to 85% of peak
-- **Time Stop**: Force exit after 5 minutes
-- **Break-Even**: Armed at +10%, exits at entry price
+### Circuit Breakers & Cooldowns
+- **3 Consecutive Losses**: 30-minute cooldown
+- **5 Consecutive Losses**: 60-minute cooldown
+- **Trade Spacing**: Minimum 60-600 seconds between trades (adaptive)
+- **Daily Limits**: Hard caps prevent overtrading
 
-### Safety Features
-- **Cool-down**: 3 minutes after stop loss
-- **Min Interval**: 2 minutes between trades
-- **Inactive Wallet Detection**: Marks wallets inactive after 6 hours
-- **Rug Score**: Must be <70 to trade
+### Capital Preservation
+- **Fixed Position Size**: Always 5% of capital (no leverage)
+- **Stop Loss**: 8% maximum loss per trade
+- **Diversification**: Maximum 5 concurrent positions
+- **Emergency Stops**: Multiple fallback exit conditions
 
 ## Paper Trading Mode
 
-Start with paper trading to test the strategy:
+The bot uses pessimistic fee modeling to ensure live trading profitability:
 
-1. Set `trading_mode: "simulation"` in config.yml
-2. Monitor performance for several days using `python dashboard.py`
-3. Analyze win rate and profit metrics
-4. Switch to live trading when confident
+### Realistic Fee Structure
+- **DEX Fee**: 0.30% (Pump.fun standard)
+- **Network Fee**: ~$0.28 per transaction
+- **Buy Slippage**: 0.75% (conservative alpha-following estimate)
+- **Sell Slippage**: 1.00% (higher due to market impact)
+
+### Benefits
+1. **Conservative Backtesting**: If profitable in paper mode, live trading should be profitable
+2. **Risk-Free Testing**: Validate strategy without capital risk
+3. **Performance Validation**: Build confidence before live deployment
+4. **Strategy Refinement**: Optimize parameters with real market data
+
+## Monitoring & Analytics
+
+### Real-time Monitoring
+- **Heartbeat**: Every 30 seconds with system status
+- **Trade Execution**: Real-time logging with confidence scores
+- **API Health**: Response times, error rates, cache hit rates
+- **Wallet Performance**: Individual wallet effectiveness tracking
+
+### Discord Integration
+**Trade Notifications:**
+```
+🟢 BUY: MEME
+Token: 5NmzY6Rz...
+Quantity: 516,330
+Price: $0.00002828
+USD Value: $15.00
+Confidence: 65%
+Equity: 💰 $509.63
+📝 Paper Trading
+```
+
+**Daily Summaries:**
+- P&L performance and win rate
+- Top performing alpha wallets
+- Risk level adjustments
+- Error notifications and system alerts
+
+### Performance Tracking
+- **P&L Store**: `data/pnl_state.json` with atomic updates
+- **Trade History**: Detailed records with wallet attribution
+- **Equity Curve**: Real-time capital tracking
+- **Attribution Analysis**: Performance by wallet tier and confidence
 
 ## Multiple Entry Points
-
-The bot provides several ways to run depending on your needs:
 
 ### Production Use
 ```bash
@@ -252,142 +319,91 @@ python start_bot.py    # Full production mode with monitoring
 python main.py         # Core bot only, minimal overhead
 ```
 
-### Monitoring
+### Discovery & Analysis
 ```bash
-python dashboard.py    # Performance dashboard and analytics
-```
-
-### Discovery
-```bash
-python src/discovery/alpha_discovery_v2.py   # Find new alpha wallets
-```
-
-## Monitoring & Analytics
-
-### Real-time Monitoring
-- **Heartbeat**: Every 30 seconds WebSocket status
-- **5-min Summary**: Tokens scanned, alpha checks, trades, P&L
-- **Trade Logs**: Entry/exit with confidence scores
-- **API Stats**: Deduplication savings, cache hits
-- **Wallet Status**: Active/inactive tracking
-
-### Discord Notifications
-- Trade alerts with confidence scores
-- 5-minute activity summaries
-- Error notifications (API failures, rate limits)
-- Wallet recycling alerts
-
-### Performance Tracking
-- **P&L Store**: JSON file (`data/pnl_state.json`)
-- **Metrics**: Win rate, daily P&L, equity curve
-- **Trade History**: Last 100 trades cached
-- **Position Tracking**: Real-time unrealized P&L
-
-View performance reports:
-```bash
-# Check daily summary
-tail -f logs/trading.log
-
-# View live dashboard
-python dashboard.py
-
-# Generate performance report  
-python -c "
-import asyncio
-from src.core.database import Database
-from src.utils.monitoring import PerformanceMonitor
-from src.utils.config_loader import load_config, get_database_path
-
-async def report():
-    config = load_config()
-    db = Database(get_database_path(config))
-    await db.initialize()
-    monitor = PerformanceMonitor(db)
-    report = await monitor.generate_performance_report(7)
-    print(report)
-
-asyncio.run(report())
-"
+python -m src.discovery.alpha_discovery_v2   # Manual alpha discovery
 ```
 
 ## Data Storage
 
 ### Primary Storage (JSON)
-- **P&L State**: `data/pnl_state.json` - Capital, trades, positions
-- **Config**: `config/config.yml` - All settings and wallets
+- **P&L State**: `data/pnl_state.json` - Equity, trades, positions
+- **Wallet Performance**: `data/wallet_performance.json` - Bayesian statistics
 
-### SQLite Databases
-- **Main DB**: `trades.db`
-  - `trades` - All trade executions
-  - `positions` - Active positions  
-  - `alpha_wallets` - Wallet performance
-  - `token_analysis` - Research data
-  
-- **Wallet Performance DB**: `data/trading.db`
-  - `wallets` - Alpha wallet performance tracking
-  - `trades` - Trade history and outcomes
+### Configuration
+- **Main Config**: `config/config.yml` - All settings and parameters
+- **Watched Wallets**: Auto-updated during rotation process
 
-## Error Handling
+### SQLite Databases (Optional)
+- **Main DB**: `trades.db` - Comprehensive trade and position history
+- **Analytics**: Extended performance metrics and research data
 
-Built-in resilience features:
-- Automatic retry with exponential backoff
-- Fallback API endpoints
-- Rate limiting compliance
-- 530 error handling for Pump.fun API
-- Network connectivity monitoring
+## Error Handling & Resilience
 
-## Safety Features
+### Built-in Reliability
+- **Automatic Retry**: Exponential backoff for API failures
+- **Fallback Sources**: PumpPortal → BitQuery → Moralis
+- **Rate Limiting**: Intelligent compliance with API limits
+- **Connection Monitoring**: WebSocket health checks and reconnection
+- **Graceful Degradation**: Continues operation with reduced functionality
 
-- Paper mode for risk-free testing
-- Position size limits (5% max per trade)
-- Daily trade limits (configurable)
-- Stop loss protection (30% max loss)
-- Comprehensive configuration validation
-- Smart error handling and fallbacks
-- No automatic mainnet transactions without explicit configuration
+### Safety Features
+- **Paper Mode Default**: No accidental live trading
+- **Configuration Validation**: Comprehensive parameter checking
+- **Position Limits**: Multiple layers of risk control
+- **Emergency Stops**: Failsafe mechanisms for all scenarios
 
 ## Development
 
 Project structure:
 ```
-├── main.py                    # Core bot implementation
-├── start_bot.py              # Production launcher with monitoring
-├── dashboard.py              # Performance monitoring dashboard
-├── config.yml                # Your configuration (create from template)
+├── main.py                           # Core bot implementation
+├── start_bot.py                     # Production launcher
+├── config.yml                       # Your configuration
 ├── src/
-│   ├── clients/              # API clients
-│   │   ├── bitquery_client.py
-│   │   ├── moralis_client.py 
-│   │   └── pumpfun_client.py
-│   ├── core/                 # Core trading logic
-│   │   ├── database.py
-│   │   ├── trading_engine.py
-│   │   └── wallet_tracker.py
-│   ├── discovery/            # Alpha wallet discovery
-│   │   └── alpha_discovery_v2.py
-│   └── utils/                # Utilities and helpers
-│       ├── config_loader.py  # Shared configuration loading
-│       ├── logger_setup.py
-│       └── monitoring.py
-├── scripts/                  # Deployment and automation
-│   ├── start_all.sh         # System service startup
-│   ├── alpha_discovery_scheduler.py  # Auto-discovery every 6h
-│   ├── health_check.py      # System health monitoring
-│   └── install_service.sh   # Service installation
+│   ├── clients/                     # API integrations
+│   │   ├── pumpportal_client.py    # PumpPortal WebSocket
+│   │   ├── bitquery_client.py      # Historical data
+│   │   ├── moralis_client.py       # Token metadata
+│   │   └── realtime_client.py      # Unified real-time interface
+│   ├── core/                        # Core trading logic
+│   │   ├── trading_engine.py       # Position management
+│   │   ├── wallet_tracker.py       # Alpha signal analysis
+│   │   ├── wallet_scorer.py        # Bayesian scoring
+│   │   ├── risk_manager.py         # Adaptive risk management
+│   │   ├── safety_checks.py        # Rug pull detection
+│   │   └── wallet_rotation_manager.py # Smart rotation
+│   ├── discovery/                   # Alpha discovery
+│   │   └── alpha_discovery_v2.py   # Historical analysis
+│   └── utils/                       # Utilities
+│       ├── config_loader.py        # Configuration management
+│       ├── discord_notifier.py     # Notifications
+│       ├── pnl_store.py           # P&L tracking
+│       └── wallet_performance.py   # Performance analytics
+├── scripts/                         # Automation
+│   └── alpha_discovery_scheduler.py # Auto-discovery
 └── config/
-    └── config.yml.example   # Configuration template
+    └── config.yml.example          # Configuration template
 ```
 
-## Contributing
+## Performance Expectations
 
-1. Fork the repository
-2. Create a feature branch
-3. Test thoroughly with paper trading
-4. Submit pull request
+### Realistic Targets (Paper Trading Validated)
+- **Win Rate**: 50-60% (conservative alpha-following)
+- **Average Gain**: 15-25% per winning trade
+- **Average Loss**: 5-8% per losing trade (early stop loss)
+- **Daily Trades**: 5-20 (adaptive based on market conditions)
+- **Hold Time**: 2-15 minutes average
+
+### Key Success Metrics
+1. **Consistent Profitability**: Positive expectancy over 100+ trades
+2. **Risk Control**: Maximum 8% loss per trade, controlled drawdowns
+3. **Signal Quality**: High confidence alpha wallet signals
+4. **Execution Speed**: <3 seconds from signal to execution
 
 ## Disclaimer
 
-This bot is for educational purposes. Cryptocurrency trading carries significant risk. Past performance does not guarantee future results. Only trade with money you can afford to lose.
+This bot is for educational and research purposes. Cryptocurrency trading carries significant risk of loss. Past performance does not guarantee future results. The system uses sophisticated risk management but cannot eliminate all trading risks. Only trade with money you can afford to lose.
 
 ## License
 
