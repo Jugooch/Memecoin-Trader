@@ -49,6 +49,12 @@ class WalletTracker:
         self.inactive_threshold_hours = 6  # Mark as inactive after 6 hours of no activity
         self.inactive_wallets = set()  # Wallets that haven't traded recently
         
+        # NEW: Correlation tracking for independence penalties
+        self.wallet_correlation_cache = {}  # {(wallet1, wallet2): co_buy_count}
+        self.shared_funder_cache = {}       # {wallet: funder_signature}
+        self.correlation_update_interval = 3600  # Update hourly
+        self.last_correlation_update = 0
+        
         # Deduplication cache for alpha detections
         self.alpha_detection_cache = {}  # {"token:wallet": timestamp}
         self.dedup_cache_ttl = 75  # 75 seconds TTL for deduplication - FIXED: was 900
@@ -251,6 +257,31 @@ class WalletTracker:
                 self.logger.error(f"Error checking alpha activity: {e}")
                 await asyncio.sleep(2)
         
+        # NEW: Filter out wallets that exit early (copy-trade bait detection)
+        hold_through_check = self.config.get('safety', {}).get('hold_through_entry_check', True)
+        if hold_through_check and alpha_buyers:
+            signal_time = time.time()
+            window_seconds = self.config.get('safety', {}).get('hold_through_window_seconds', 20)
+            filtered_alpha_buyers = set()
+            
+            self.logger.debug(f"Checking {len(alpha_buyers)} alpha wallets for early exits...")
+            
+            for wallet in alpha_buyers:
+                exits_early = await self._wallet_exits_early(wallet, mint_address, signal_time, moralis, window_seconds)
+                if not exits_early:
+                    filtered_alpha_buyers.add(wallet)
+                else:
+                    self.logger.info(f"Removed copy-trade bait: {wallet[:8]}... exits within {window_seconds}s")
+            
+            # Update alpha_buyers with filtered set
+            original_count = len(alpha_buyers)
+            alpha_buyers = filtered_alpha_buyers
+            filtered_count = len(alpha_buyers)
+            
+            if filtered_count < original_count:
+                self.logger.info(f"Hold-through filter: {original_count} -> {filtered_count} wallets "
+                               f"({original_count - filtered_count} removed as copy-trade bait)")
+        
         # Calculate weighted voting score using Bayesian scorer
         wallet_tiers = {}
         wallet_weights = {}
@@ -313,6 +344,39 @@ class WalletTracker:
                    'confidence_score': total_weight * 10, 'investment_multiplier': 0.6, 
                    'total_weight': total_weight, 'meets_threshold': False}
         
+        # NEW: Apply independence penalties
+        independence_penalties = self.calculate_independence_penalty(list(alpha_buyers))
+        independent_wallet_count = self.get_independent_wallet_count(list(alpha_buyers))
+        
+        # Apply penalties to wallet weights
+        adjusted_weights = {}
+        total_adjusted_weight = 0.0
+        
+        for wallet in alpha_buyers:
+            base_weight = wallet_weights.get(wallet, 1.0)
+            penalty = independence_penalties.get(wallet, 1.0)
+            adjusted_weight = base_weight * penalty
+            
+            adjusted_weights[wallet] = adjusted_weight
+            total_adjusted_weight += adjusted_weight
+            
+            if penalty < 1.0:
+                self.logger.debug(f"Applied correlation penalty to {wallet[:8]}...: "
+                                f"{base_weight:.2f} -> {adjusted_weight:.2f}")
+        
+        # Check independence requirements
+        min_independent_wallets = self.config.get('alpha_enhanced', {}).get('min_independent_wallets', 2)
+        
+        if independent_wallet_count < min_independent_wallets:
+            self.logger.info(f"Insufficient independent wallets: {independent_wallet_count}/{min_independent_wallets}")
+            return {'alpha_wallets': set(), 'wallet_tiers': {}, 'confidence_score': 0, 
+                   'investment_multiplier': 0.6, 'total_weight': total_adjusted_weight, 
+                   'meets_threshold': False, 'independence_failure': True}
+        
+        # Update weight calculations with adjusted weights
+        total_weight = total_adjusted_weight
+        wallet_weights = adjusted_weights  # Replace original weights with adjusted
+        
         # Convert weight to confidence score (scale to 0-100)
         confidence_score = min(total_weight * 20, 100)  # Scale weight to confidence
         
@@ -361,6 +425,46 @@ class WalletTracker:
             except:
                 return time.time()
         return time.time()
+
+    async def _wallet_exits_early(self, wallet: str, mint: str, signal_time: float, 
+                                 moralis_client, window_seconds: int = 20) -> bool:
+        """
+        Check if wallet exits within window_seconds after signal_time
+        
+        Args:
+            wallet: Wallet address
+            mint: Token mint address  
+            signal_time: Unix timestamp of our entry signal
+            moralis_client: Moralis client instance
+            window_seconds: Time window to check for exits (default 20s)
+            
+        Returns:
+            True if wallet exits early (copy-trade bait), False otherwise
+        """
+        try:
+            # Get recent swaps for the token
+            swaps = await moralis_client.get_token_swaps(mint, limit=50, ttl_override='swaps_alpha')
+            
+            # Check for sells from this wallet within the window
+            for swap in swaps:
+                if swap.get('wallet') != wallet:
+                    continue
+                    
+                swap_time = self._parse_timestamp(swap.get('timestamp'))
+                
+                # Check if this is a sell within our window
+                if (swap.get('side') == 'sell' and 
+                    signal_time <= swap_time <= signal_time + window_seconds):
+                    
+                    self.logger.warning(f"Copy-trade bait detected: {wallet[:8]}... sold {mint[:8]}... "
+                                      f"{swap_time - signal_time:.1f}s after signal")
+                    return True
+                    
+            return False
+            
+        except Exception as e:
+            self.logger.debug(f"Error checking early exit for {wallet[:8]}...: {e}")
+            return False  # Don't penalize on API errors
 
     def get_wallet_tier(self, wallet_address: str) -> str:
         """Get the performance tier for a wallet (S, A, B, C)"""
@@ -801,3 +905,101 @@ class WalletTracker:
     def get_tier_performance_stats(self):
         """Get performance statistics grouped by wallet tiers"""
         return self.performance_tracker.get_tier_performance_stats()
+
+    def update_wallet_correlation(self, wallets_in_signal: list, mint: str, 
+                                buy_timestamps: dict):
+        """
+        Update correlation tracking when wallets co-buy
+        
+        Args:
+            wallets_in_signal: List of wallets that bought this signal
+            mint: Token mint address  
+            buy_timestamps: {wallet: timestamp} mapping
+        """
+        # Find wallets that bought within 250ms of each other
+        time_threshold = self.config.get('alpha_enhanced', {}).get('correlation_time_threshold_ms', 250) / 1000.0
+        
+        for i, wallet1 in enumerate(wallets_in_signal):
+            for wallet2 in wallets_in_signal[i+1:]:
+                time1 = buy_timestamps.get(wallet1, 0)
+                time2 = buy_timestamps.get(wallet2, 0)
+                
+                # Check if they bought close in time
+                if abs(time1 - time2) <= time_threshold:
+                    # Create sorted pair key for consistent caching
+                    pair_key = tuple(sorted([wallet1, wallet2]))
+                    
+                    # Increment co-buy count
+                    self.wallet_correlation_cache[pair_key] = (
+                        self.wallet_correlation_cache.get(pair_key, 0) + 1
+                    )
+                    
+                    self.logger.debug(f"Co-buy detected: {wallet1[:8]}... & {wallet2[:8]}... "
+                                    f"({abs(time1 - time2)*1000:.0f}ms apart)")
+
+    def calculate_independence_penalty(self, wallets: list) -> dict:
+        """
+        Calculate correlation penalty for each wallet in the signal
+        
+        Args:
+            wallets: List of wallets in current signal
+            
+        Returns:
+            Dict of {wallet: penalty_factor} where factor is 0.0-1.0
+        """
+        penalties = {}
+        config = self.config.get('alpha_enhanced', {})
+        
+        for wallet in wallets:
+            penalty_factors = []
+            
+            # Check co-buying correlation with other wallets in signal
+            for other_wallet in wallets:
+                if wallet != other_wallet:
+                    pair_key = tuple(sorted([wallet, other_wallet]))
+                    co_buy_count = self.wallet_correlation_cache.get(pair_key, 0)
+                    
+                    # Apply penalty based on co-buy frequency
+                    if co_buy_count >= 5:  # Frequent co-buyers
+                        penalty = config.get('correlation_penalty_frequent', 0.8)
+                        penalty_factors.append(penalty)
+                    elif co_buy_count >= 3:  # Some co-buying
+                        penalty = config.get('correlation_penalty_some', 0.9)
+                        penalty_factors.append(penalty)
+            
+            # Check shared funder penalty (if available)
+            wallet_funder = self.shared_funder_cache.get(wallet)
+            if wallet_funder:
+                for other_wallet in wallets:
+                    if (wallet != other_wallet and 
+                        self.shared_funder_cache.get(other_wallet) == wallet_funder):
+                        penalty = config.get('correlation_penalty_shared_funder', 0.8)
+                        penalty_factors.append(penalty)
+            
+            # Calculate final penalty (multiply all factors)
+            final_penalty = 1.0
+            for factor in penalty_factors:
+                final_penalty *= factor
+            
+            penalties[wallet] = final_penalty
+        
+        return penalties
+
+    def get_independent_wallet_count(self, wallets: list) -> int:
+        """
+        Count wallets with minimal correlation (independence > 0.67)
+        
+        Args:
+            wallets: List of wallets to check
+            
+        Returns:
+            Count of independent wallets
+        """
+        penalties = self.calculate_independence_penalty(wallets)
+        
+        independent_count = sum(
+            1 for penalty in penalties.values() 
+            if penalty > 0.67  # More than 67% independence
+        )
+        
+        return independent_count

@@ -64,12 +64,30 @@ discovery_quality_checks:
   enable_risk_adjusted_scoring: true   # Enable risk-adjusted performance scoring
   min_exit_quality: 0.3       # Minimum exit timing quality (0.0-1.0, 0.3 = 30th percentile)
   min_consistency: 0.2        # Minimum performance consistency (0.0-1.0, 0.2 = low variance)
-min_liquidity_usd: 25000      # Minimum liquidity required (raised to avoid slippage)
-time_window_sec: 300          # Time window to wait for alpha activity (5 minutes for better signals)
+
+# Enhanced alpha detection parameters
+alpha_enhanced:
+  min_independent_wallets: 2          # Require 2+ independent wallets
+  correlation_time_threshold_ms: 250  # Co-buy time threshold
+  correlation_penalty_frequent: 0.8   # Penalty for frequent co-buyers (5+)
+  correlation_penalty_some: 0.9       # Penalty for some co-buying (3+)
+  correlation_penalty_shared_funder: 0.8  # Penalty for shared funding source
+
+min_liquidity_usd: 15000      # Minimum liquidity required (increased from 5000)
+time_window_sec: 180          # Time window to wait for alpha activity (reduced from 300)
 max_trade_pct: 0.05           # Max % of capital per trade (5%)
 tp_multiplier: 1.25           # Take profit multiplier (1.25x - more realistic)
 stop_loss_pct: 0.92           # Stop loss percentage (8% loss - tighter stop)
 max_hold_seconds: 900         # Maximum time to hold position (15 minutes)
+
+# Scratch rule parameters
+scratch_rule:
+  enabled: true                       # Enable scratch exits
+  max_time_seconds: 45                # Only scratch in first 45s
+  drawdown_threshold: 0.04            # 4% peak drawdown threshold
+  exit_range_low: -0.03               # Scratch between -3% and -2%
+  exit_range_high: -0.02
+  buyer_acceleration_window: 30       # Window for buyer acceleration calc
 
 # Token processing optimization (reduces Moralis API calls)
 min_token_age_seconds: 10     # Wait time before checking Moralis (allows indexing)
@@ -131,11 +149,17 @@ pump_fun:
   program_address: "6EF8rrecthHAuSStzpf6aXr9HWs8jgPVr5S6fqF6P"
   api_endpoint: "https://pumpapi.fun"
   
-# Safety checks (Phase 4.1)
+# Enhanced safety checks
 safety:
-  require_sellability: true    # Check for recent sells (honeypot detection)
-  max_price_impact: 0.01      # Maximum acceptable price impact (1%)
-  sellability_window: 60      # Look for sells in last N seconds
+  require_sellability: true          # Check for recent sells (honeypot detection)
+  max_price_impact: 0.008             # Maximum acceptable price impact (0.8% - tightened)
+  sellability_window: 90              # Look for sells in last N seconds (increased from 60)
+  min_distinct_sellers: 3             # Require 3+ distinct sellers (enhanced)
+  max_sell_failure_rate: 0.05         # Max 5% sell failure rate (enhanced)
+  hold_through_entry_check: true      # Enable copy-trade bait detection
+  hold_through_window_seconds: 20     # Window to check for early exits
+  price_extension_guard: true         # Enable price extension guard
+  price_extension_percentile: 95      # Reject if price > p95 of last 60s
   
 # Adaptive risk management (Phase 4.2)
 risk_management:

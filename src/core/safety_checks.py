@@ -16,29 +16,36 @@ class SafetyChecker:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         
-    def check_sellability(self, mint: str, recent_trades: List[Dict]) -> bool:
+    def check_sellability(self, mint: str, recent_trades: List[Dict]) -> Dict:
         """
-        Check if token is sellable (not a honeypot)
-        Requires at least 1 sell by non-dev wallet in last 60s
+        Enhanced sellability check requiring multiple distinct sellers
         
         Args:
             mint: Token mint address
             recent_trades: List of recent swap transactions
             
         Returns:
-            True if token appears sellable, False otherwise
+            Dictionary with sellability results
         """
         if not recent_trades:
             self.logger.warning(f"No trade data for sellability check on {mint[:8]}...")
-            return False
+            return {
+                'is_sellable': False,
+                'reason': 'No trade data available',
+                'sellers_found': 0,
+                'unique_sellers': 0,
+                'sell_failure_rate': 0.0
+            }
             
-        # Look for sells in the last 60 seconds
+        # Look for sells in the last 90 seconds (increased from 60)
         import time
         current_timestamp = time.time()
-        cutoff_timestamp = current_timestamp - 60
+        cutoff_timestamp = current_timestamp - 90
         
         sells_found = 0
         unique_sellers = set()
+        failed_sells = 0
+        total_sell_attempts = 0
         
         for trade in recent_trades:
             # Parse timestamp to unix timestamp for consistent comparison
@@ -49,24 +56,52 @@ class SafetyChecker:
             # Check if it's a sell
             if trade.get('side') == 'sell':
                 wallet = trade.get('wallet', '')
+                total_sell_attempts += 1
                 
-                # Ignore known dev/deployer wallets (would need a list)
-                # For now, just check for any sells
+                # Check if transaction failed (if this data is available)
+                tx_success = trade.get('success', True)  # Default to True if not available
+                if not tx_success:
+                    failed_sells += 1
+                    continue
+                    
                 if wallet:
                     sells_found += 1
                     unique_sellers.add(wallet)
         
-        # Require at least 1 sell from unique wallet
-        if sells_found == 0:
-            self.logger.warning(f"No sells detected for {mint[:8]}... - potential honeypot")
-            return False
+        # Calculate failure rate
+        sell_failure_rate = failed_sells / max(total_sell_attempts, 1)
+        
+        # Enhanced requirements
+        min_sellers = 3  # Increased from 1
+        max_failure_rate = 0.05  # 5% max failure rate
+        
+        is_sellable = (
+            len(unique_sellers) >= min_sellers and 
+            sell_failure_rate <= max_failure_rate
+        )
+        
+        reason_parts = []
+        if not is_sellable:
+            if len(unique_sellers) < min_sellers:
+                reason_parts.append(f"Only {len(unique_sellers)} unique sellers (need {min_sellers})")
+            if sell_failure_rate > max_failure_rate:
+                reason_parts.append(f"High failure rate: {sell_failure_rate:.1%} (max {max_failure_rate:.1%})")
             
-        if len(unique_sellers) == 0:
-            self.logger.warning(f"No unique sellers for {mint[:8]}... - suspicious")
-            return False
+            reason = '; '.join(reason_parts)
+            self.logger.warning(f"Enhanced sellability failed for {mint[:8]}...: {reason}")
+        else:
+            reason = 'Passed enhanced sellability'
             
-        self.logger.debug(f"Sellability check passed: {sells_found} sells from {len(unique_sellers)} wallets")
-        return True
+        result = {
+            'is_sellable': is_sellable,
+            'reason': reason,
+            'sellers_found': sells_found,
+            'unique_sellers': len(unique_sellers),
+            'sell_failure_rate': sell_failure_rate
+        }
+        
+        self.logger.debug(f"Enhanced sellability check: {result}")
+        return result
     
     def estimate_price_impact(self, mint: str, order_size_usd: float, recent_trades: List[Dict]) -> float:
         """
@@ -120,8 +155,76 @@ class SafetyChecker:
         
         return base_impact
     
+    def check_price_extension(self, mint: str, recent_trades: List[Dict], 
+                             current_price: float = None) -> Dict:
+        """
+        Check if current price is at recent peak (extension guard)
+        
+        Args:
+            mint: Token mint address
+            recent_trades: List of recent trades
+            current_price: Current token price (optional)
+            
+        Returns:
+            Dictionary with extension check results
+        """
+        if not recent_trades:
+            return {
+                'is_extended': False,
+                'reason': 'No trade data available',
+                'percentile_rank': 0.0
+            }
+        
+        # Get prices from last 60 seconds
+        import time
+        current_timestamp = time.time()
+        cutoff_timestamp = current_timestamp - 60
+        
+        recent_prices = []
+        for trade in recent_trades:
+            trade_timestamp = self._parse_timestamp_to_unix(trade.get('timestamp'))
+            if trade_timestamp >= cutoff_timestamp:
+                price = trade.get('price', 0) or trade.get('price_usd', 0)
+                if price > 0:
+                    recent_prices.append(price)
+        
+        if len(recent_prices) < 5:  # Need minimum price points
+            return {
+                'is_extended': False,
+                'reason': 'Insufficient price data',
+                'percentile_rank': 0.0
+            }
+        
+        # Use current price or latest trade price
+        if current_price is None:
+            current_price = recent_prices[-1] if recent_prices else 0
+        
+        if current_price <= 0:
+            return {
+                'is_extended': False,
+                'reason': 'Invalid current price',
+                'percentile_rank': 0.0
+            }
+        
+        # Calculate percentile rank
+        sorted_prices = sorted(recent_prices)
+        p95_threshold = sorted_prices[int(len(sorted_prices) * 0.95)] if len(sorted_prices) > 1 else sorted_prices[0]
+        is_extended = current_price > p95_threshold
+        
+        # Calculate where current price ranks
+        rank = sum(1 for p in sorted_prices if p <= current_price) / len(sorted_prices)
+        
+        return {
+            'is_extended': is_extended,
+            'reason': f"Price at {rank:.1%} percentile" if is_extended else "Price not extended",
+            'percentile_rank': rank,
+            'p95_threshold': p95_threshold,
+            'current_price': current_price,
+            'recent_prices_count': len(recent_prices)
+        }
+    
     def check_token_safety(self, mint: str, order_size_usd: float, recent_trades: List[Dict],
-                          max_impact: float = 0.01) -> Dict:
+                          max_impact: float = 0.01, current_price: float = None) -> Dict:
         """
         Comprehensive safety check combining sellability and price impact
         
@@ -134,30 +237,41 @@ class SafetyChecker:
         Returns:
             Dictionary with safety results
         """
-        # Check sellability (honeypot detection)
-        is_sellable = self.check_sellability(mint, recent_trades)
+        # Enhanced sellability check
+        sellability_result = self.check_sellability(mint, recent_trades)
+        is_sellable = sellability_result['is_sellable']
         
         # Estimate price impact
         price_impact = self.estimate_price_impact(mint, order_size_usd, recent_trades)
         
+        # Price extension guard
+        extension_result = self.check_price_extension(mint, recent_trades, current_price)
+        is_not_extended = not extension_result['is_extended']
+        
         # Determine if safe to trade
-        safe_to_trade = is_sellable and price_impact <= max_impact
+        safe_to_trade = is_sellable and price_impact <= max_impact and is_not_extended
         
         # Compile warnings
         warnings = []
         if not is_sellable:
-            warnings.append("No recent sells detected (potential honeypot)")
+            warnings.append(sellability_result['reason'])
         if price_impact > max_impact:
-            warnings.append(f"High price impact: {price_impact*100:.1f}%")
+            warnings.append(f"High price impact: {price_impact*100:.1f}% > {max_impact*100:.1f}%")
         if price_impact > 0.03:
             warnings.append("Order size may be too large for liquidity")
+        if extension_result['is_extended']:
+            warnings.append(f"Price extended: {extension_result['reason']}")
             
         result = {
             'safe': safe_to_trade,
-            'sellable': is_sellable,
+            'safe_to_trade': safe_to_trade,  # Alias for backward compatibility
+            'sellability': sellability_result,  # Enhanced sellability data
+            'sellable': is_sellable,  # Backward compatibility
             'price_impact': price_impact,
+            'extension_guard': extension_result,  # Price extension data
             'warnings': warnings,
-            'recommendation': 'TRADE' if safe_to_trade else 'SKIP'
+            'recommendation': 'TRADE' if safe_to_trade else 'SKIP',
+            'max_impact_threshold': max_impact
         }
         
         if not safe_to_trade:

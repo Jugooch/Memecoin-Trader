@@ -750,27 +750,46 @@ class MemecoinTradingBot:
         warnings = []
         rug_score = 0  # 0 = safe, 100 = definite rug
         
-        # Use Phase 4.1 safety checker if we have swap data
+        # Use enhanced safety checker if we have swap data
         if cached_swaps and len(cached_swaps) > 0:
             # Calculate our order size
             order_size = self.config.initial_capital * self.config.max_trade_pct
             
-            # Perform comprehensive safety check
+            # Get current price from recent trades for extension guard
+            current_price = None
+            if cached_swaps:
+                recent_prices = [swap.get('price', 0) for swap in cached_swaps[-5:] if swap.get('price', 0) > 0]
+                current_price = recent_prices[-1] if recent_prices else None
+            
+            # Perform comprehensive enhanced safety check
             safety_result = self.safety_checker.check_token_safety(
                 mint_address, 
                 order_size,
                 cached_swaps,
-                max_impact=getattr(self.config, 'max_price_impact', 0.01)
+                max_impact=getattr(self.config, 'safety', {}).get('max_price_impact', 0.008),
+                current_price=current_price
             )
             
             # Convert to legacy format for compatibility
-            if not safety_result['safe']:
+            if not safety_result['safe_to_trade']:
                 rug_score += 50  # Major penalty for failing safety checks
                 warnings.extend(safety_result['warnings'])
             
             # Add price impact to rug score
             impact_penalty = min(safety_result['price_impact'] * 1000, 30)  # Max 30 points
             rug_score += impact_penalty
+            
+            # Add extension guard penalty
+            if safety_result.get('extension_guard', {}).get('is_extended', False):
+                rug_score += 25  # Penalty for buying at price extension
+                
+            # Log enhanced safety details
+            sellability = safety_result.get('sellability', {})
+            extension = safety_result.get('extension_guard', {})
+            self.logger.debug(f"Enhanced safety for {mint_address[:8]}...: "
+                            f"Sellers: {sellability.get('unique_sellers', 0)}, "
+                            f"Extension: {extension.get('percentile_rank', 0):.1%}, "
+                            f"Impact: {safety_result['price_impact']:.2%}")
         
         try:
             # Check liquidity amount (basic check)

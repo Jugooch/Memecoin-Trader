@@ -387,6 +387,15 @@ class TradingEngine:
             position.peak_price = current_price
             position.high_gain_peak = max(position.high_gain_peak, current_gain_pct)
         
+        # NEW: Check for scratch exit conditions (early weakness detection)
+        scratch_enabled = getattr(self.config, 'scratch_rule', {}).get('enabled', True)
+        if scratch_enabled and hold_time_seconds <= 45:
+            scratch_result = self.should_scratch_exit(position, current_price)
+            
+            if scratch_result['should_scratch']:
+                self.logger.info(f"SCRATCH EXIT triggered for {mint_address[:8]}...: {scratch_result['reason']}")
+                return ("scratch", 1.0)
+        
         # PHASE 3.1: Dynamic TP1 Sizing based on time to target
         if current_price >= position.tp_price and position.tp1_hit_time is None:
             position.tp1_hit_time = datetime.now()
@@ -456,6 +465,84 @@ class TradingEngine:
             # If profitable, let it run with trailing stop
         
         return None
+
+    def should_scratch_exit(self, position: Position, current_price: float, 
+                           recent_trades: list = None) -> Dict:
+        """
+        Determine if position should be scratched due to early weakness
+        
+        Args:
+            position: Current position data
+            current_price: Current token price
+            recent_trades: Recent trade data for buyer acceleration
+            
+        Returns:
+            Dictionary with scratch decision
+        """
+        current_time = datetime.now()
+        entry_time = position.entry_time
+        
+        # Only consider scratch in first 45 seconds
+        hold_time_seconds = (current_time - entry_time).total_seconds()
+        if hold_time_seconds > 45:
+            return {
+                'should_scratch': False,
+                'reason': 'Outside scratch window (>45s)'
+            }
+        
+        if position.entry_price <= 0 or current_price <= 0:
+            return {
+                'should_scratch': False,
+                'reason': 'Invalid price data'
+            }
+        
+        # Calculate current P&L
+        current_pnl_pct = (current_price - position.entry_price) / position.entry_price
+        
+        # Calculate peak-to-current drawdown
+        peak_drawdown = (position.peak_price - current_price) / position.peak_price if position.peak_price > 0 else 0
+        
+        # Check if drawdown exceeds threshold
+        drawdown_threshold = 0.04  # 4%
+        if peak_drawdown < drawdown_threshold:
+            return {
+                'should_scratch': False,
+                'reason': f'Drawdown {peak_drawdown:.1%} < {drawdown_threshold:.1%}'
+            }
+        
+        # Check buyer acceleration (simplified - we'll estimate without recent_trades for now)
+        buyer_accel = self._estimate_buyer_acceleration(position.mint)
+        
+        # Scratch conditions
+        is_negative_accel = buyer_accel < 0
+        scratch_threshold_low = -0.02   # -2%
+        scratch_threshold_high = -0.03  # -3%
+        
+        should_scratch = (
+            peak_drawdown >= drawdown_threshold and
+            is_negative_accel and
+            scratch_threshold_high <= current_pnl_pct <= scratch_threshold_low
+        )
+        
+        return {
+            'should_scratch': should_scratch,
+            'reason': f'Drawdown: {peak_drawdown:.1%}, Accel: {buyer_accel:.1f}, P&L: {current_pnl_pct:.1%}',
+            'peak_drawdown': peak_drawdown,
+            'buyer_acceleration': buyer_accel,
+            'current_pnl_pct': current_pnl_pct
+        }
+
+    def _estimate_buyer_acceleration(self, mint_address: str) -> float:
+        """
+        Estimate buyer acceleration without external data
+        For now, return 0 (neutral) - can be enhanced later with real-time data
+        
+        Returns:
+            Buyer acceleration (positive = accelerating, negative = decelerating)
+        """
+        # TODO: Implement real buyer acceleration calculation when real-time data is available
+        # For now, return slightly negative to be conservative
+        return -0.5
 
     async def update_position_prices(self):
         """Update prices for all active positions"""
