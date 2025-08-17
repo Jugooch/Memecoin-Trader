@@ -950,144 +950,96 @@ class MemecoinTradingBot:
             self.logger.error(f"Trade execution failed: {e}")
 
     async def monitor_position(self, mint_address: str, entry_data: Dict, metadata: Dict = None):
-        """Monitor position with tiered exit strategy"""
-        entry_price = entry_data['price']
-        peak_price = entry_price
+        """Monitor position using sophisticated exit strategy from trading_engine"""
         symbol = metadata.get('symbol', 'UNKNOWN') if metadata else 'UNKNOWN'
         
-        # Use config values with sensible defaults
-        tp_mul = getattr(self.config, "tp_multiplier", 1.25)  # Default 1.25x if not in config
+        # Ensure position exists in trading_engine
+        if mint_address not in self.trading_engine.active_positions:
+            self.logger.error(f"Position {mint_address} not found in trading_engine!")
+            return
+            
+        position = self.trading_engine.active_positions[mint_address]
         
-        # Tiered exit levels using config
-        tp1_price = entry_price * tp_mul           # e.g., 1.25x - take 30% profit
-        tp2_price = entry_price * (tp_mul + 0.25)  # e.g., 1.5x - take another 30% profit
-        sl_price = entry_price * self.config.stop_loss_pct
+        self.logger.info(f"🎯 SMART MONITORING {mint_address[:8]}... "
+                        f"Entry: ${position.entry_price:.8f}, "
+                        f"TP: ${position.tp_price:.8f}, "
+                        f"SL: ${position.sl_price:.8f}")
         
-        # Time-based exit parameters
-        max_hold_sec = getattr(self.config, "max_hold_seconds", 300)  # 5 minutes default
-        entry_ts = time.time()
-        
-        # Break-even stop parameters
-        be_armed = False
-        be_arm_threshold = entry_price * 1.10  # Arm BE stop after +10%
-        be_price = entry_price  # Will be set when armed
-        
-        # Track what percentage we've already sold
-        remaining_position = 1.0  # Start with 100%
-        tp1_executed = False
-        tp2_executed = False
-        
-        self.logger.info(f"Monitoring position {mint_address}: TP1: {tp1_price:.8f}, TP2: {tp2_price:.8f}, SL: {sl_price:.8f}, Max hold: {max_hold_sec}s")
-        
-        while remaining_position > 0.05:  # Continue until less than 5% left
+        # Monitor until position is fully closed in trading_engine
+        while mint_address in self.trading_engine.active_positions:
             try:
-                # Use fresh price for position monitoring (bypass cache)
+                # Get current price and update position state
                 current_price = await self.moralis.get_current_price(mint_address, fresh=True)
                 
-                # Track peak price for trailing stop
-                if current_price > peak_price:
-                    peak_price = current_price
+                if current_price <= 0:
+                    self.logger.warning(f"Invalid price for {mint_address}, retrying...")
+                    await asyncio.sleep(5)
+                    continue
                 
-                # First take profit at 2x - sell 30%
-                if current_price >= tp1_price and not tp1_executed:
-                    sell_percentage = 0.3  # Sell 30% of total position
-                    await self._execute_partial_exit(mint_address, sell_percentage, current_price, 
-                                                   'TP1_2X', symbol)
-                    remaining_position -= sell_percentage
-                    tp1_executed = True
-                    self.logger.info(f"TP1 executed for {mint_address}: sold 30% at 2x, {remaining_position*100:.0f}% remaining")
+                # Update peak price and gain tracking in position
+                if current_price > position.peak_price:
+                    position.peak_price = current_price
+                    position.high_gain_peak = max(position.high_gain_peak, 
+                                                 ((current_price / position.entry_price) - 1) * 100)
                 
-                # Second take profit at 3x - sell another 30%
-                elif current_price >= tp2_price and not tp2_executed and tp1_executed:
-                    sell_percentage = 0.3 / remaining_position  # 30% of original, adjusted for remaining
-                    await self._execute_partial_exit(mint_address, sell_percentage, current_price, 
-                                                   'TP2_3X', symbol)
-                    remaining_position -= 0.3  # 30% of original position
-                    tp2_executed = True
-                    self.logger.info(f"TP2 executed for {mint_address}: sold another 30% at 3x, {remaining_position*100:.0f}% remaining")
+                # 🚀 USE SOPHISTICATED EXIT LOGIC
+                exit_result = await self.trading_engine.check_exit_conditions(mint_address)
                 
-                # Check and arm break-even stop after +10%
-                if not be_armed and current_price >= be_arm_threshold:
-                    be_armed = True
-                    be_price = entry_price
-                    self.logger.info(f"Break-even stop armed for {mint_address} at {be_price:.8f}")
+                if exit_result:
+                    exit_reason, sell_percentage = exit_result
+                    
+                    current_gain = ((current_price / position.entry_price) - 1) * 100
+                    
+                    self.logger.info(f"🎯 EXIT TRIGGERED: {mint_address[:8]}... "
+                                   f"Reason: {exit_reason}, "
+                                   f"Amount: {sell_percentage*100:.0f}%, "
+                                   f"Price: ${current_price:.8f}, "
+                                   f"Gain: {current_gain:+.1f}%")
+                    
+                    # Execute the sophisticated exit
+                    sell_result = await self.trading_engine.sell_token(
+                        mint_address, 
+                        sell_percentage, 
+                        self.config.paper_mode,
+                        symbol=symbol,
+                        exit_reason=exit_reason
+                    )
+                    
+                    if sell_result.get('success'):
+                        # Record trade outcome for wallet performance tracking (on full exits)
+                        if sell_percentage >= 0.99:  # Full exit
+                            profit_pct = sell_result.get('realized_pnl', 0)
+                            self.wallet_tracker.record_trade_outcome(mint_address, profit_pct)
+                            self.logger.info(f"✅ Position CLOSED: {mint_address[:8]}... via {exit_reason}")
+                            break
+                        else:
+                            remaining_tokens = position.amount if mint_address in self.trading_engine.active_positions else 0
+                            self.logger.info(f"📊 Partial exit: {sell_percentage*100:.0f}% sold, "
+                                          f"Remaining: {remaining_tokens:.0f} tokens")
+                    else:
+                        self.logger.error(f"❌ Exit failed: {sell_result.get('error')}")
                 
-                # Break-even stop check
-                if be_armed and current_price <= be_price:
-                    await self._execute_partial_exit(mint_address, 1.0, current_price, 
-                                                   'BREAKEVEN_EXIT', symbol)
-                    self.logger.info(f"Break-even exit for {mint_address}: sold remaining {remaining_position*100:.0f}%")
-                    break
+                # Log position status every 30 seconds for monitoring
+                if int(time.time()) % 30 == 0:
+                    hold_time = (datetime.now() - position.entry_time).total_seconds()
+                    current_pnl = ((current_price / position.entry_price) - 1) * 100
+                    self.logger.debug(f"📊 {mint_address[:8]}... "
+                                    f"Hold: {hold_time:.0f}s, "
+                                    f"P&L: {current_pnl:+.1f}%, "
+                                    f"Peak: {position.high_gain_peak:.1f}%, "
+                                    f"TP1: {'✓' if position.tp1_hit_time else '○'}, "
+                                    f"BE: {'✓' if position.break_even_armed else '○'}")
                 
-                # Time-based stop check
-                if time.time() - entry_ts > max_hold_sec:
-                    await self._execute_partial_exit(mint_address, 1.0, current_price, 
-                                                   'TIME_STOP', symbol)
-                    self.logger.info(f"Time stop for {mint_address} after {max_hold_sec}s: sold remaining {remaining_position*100:.0f}%")
-                    break
-                
-                # Stop loss or trailing stop condition
-                should_stop_loss = (
-                    current_price <= sl_price or  # Basic stop loss
-                    (peak_price > entry_price * 1.5 and current_price <= peak_price * 0.85)  # Trailing stop after 50% gain
-                )
-                
-                if should_stop_loss:
-                    # Sell remaining position
-                    await self._execute_partial_exit(mint_address, 1.0, current_price, 
-                                                   'STOP_LOSS', symbol)
-                    self.logger.info(f"Stop loss executed for {mint_address}: sold remaining {remaining_position*100:.0f}%")
-                    break
-                
-                await asyncio.sleep(2)  # Poll every 2 seconds
+                await asyncio.sleep(2)  # Check every 2 seconds
                 
             except Exception as e:
                 self.logger.error(f"Error monitoring position {mint_address}: {e}")
                 await asyncio.sleep(5)
-    
-    async def _execute_partial_exit(self, mint_address: str, sell_percentage: float, 
-                                  current_price: float, exit_reason: str, symbol: str):
-        """Execute a partial position exit and record the trade"""
-        sell_result = await self.trading_engine.sell_token(mint_address, sell_percentage, self.config.paper_mode, symbol=symbol)
         
-        if sell_result.get('success'):
-            # Create sell trade record
-            sell_record = {
-                'mint': mint_address,
-                'action': 'SELL',
-                'amount': sell_result.get('usd_amount', 0),
-                'price': current_price,
-                'sol_amount': sell_result.get('sol_amount', 0),
-                'tokens_amount': sell_result.get('tokens_sold', 0),
-                'timestamp': time.time(),  # Use unix timestamp for in-memory
-                'paper_mode': self.config.paper_mode,
-                'profit': sell_result.get('profit', 0),
-                'profit_pct': sell_result.get('profit_pct', 0),
-                'exit_reason': exit_reason,
-                'sell_percentage': sell_percentage,
-                'metadata': {
-                    'symbol': symbol,
-                    'type': 'sell',
-                    'exit_strategy': 'tiered'
-                }
-            }
-            
-            # Add to in-memory trade history
-            self.recent_trades.append(sell_record)
-            self._cleanup_old_trades()
-            
-            # Record trade outcome for wallet performance tracking (on full exits)
-            if sell_percentage >= 0.99:  # Full exit (100% or close to it)
-                profit_pct = sell_result.get('profit_pct', 0)
-                self.wallet_tracker.record_trade_outcome(mint_address, profit_pct)
-            
-            # Try to record in database (but don't fail if it doesn't work)
-            try:
-                db_record = sell_record.copy()
-                db_record['timestamp'] = datetime.now()  # Database expects datetime
-                await self.database.record_trade(db_record)
-            except Exception as db_error:
-                self.logger.warning(f"Failed to save sell trade to database: {db_error}")
+        self.logger.info(f"🏁 Position monitoring ended for {mint_address[:8]}...")
+    
+    # Note: _execute_partial_exit removed - now using trading_engine.sell_token directly
+    # All exit logic is centralized in trading_engine.check_exit_conditions
 
     async def manage_active_positions(self):
         """Manage all active trading positions"""

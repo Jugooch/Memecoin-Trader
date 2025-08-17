@@ -382,6 +382,14 @@ class TradingEngine:
         current_gain_pct = ((current_price / position.entry_price) - 1) * 100
         hold_time_seconds = (datetime.now() - position.entry_time).total_seconds()
         
+        # Enhanced logging for exit decision monitoring
+        self.logger.debug(f"EXIT CHECK {mint_address[:8]}... "
+                         f"Price: ${current_price:.8f}, "
+                         f"Gain: {current_gain_pct:+.1f}%, "
+                         f"Hold: {hold_time_seconds:.0f}s, "
+                         f"Peak: {position.high_gain_peak:.1f}%, "
+                         f"TP1Hit: {position.tp1_hit_time is not None}")
+        
         # Update peak price and high gain
         if current_price > position.peak_price:
             position.peak_price = current_price
@@ -393,7 +401,8 @@ class TradingEngine:
             scratch_result = self.should_scratch_exit(position, current_price)
             
             if scratch_result['should_scratch']:
-                self.logger.info(f"SCRATCH EXIT triggered for {mint_address[:8]}...: {scratch_result['reason']}")
+                self.logger.info(f"🔸 SCRATCH EXIT triggered for {mint_address[:8]}...: {scratch_result['reason']}")
+                self.logger.info(f"   Exiting at {current_gain_pct:.1f}% loss to prevent further drawdown")
                 return ("scratch", 1.0)
         
         # PHASE 3.1: Dynamic TP1 Sizing based on time to target
@@ -544,26 +553,8 @@ class TradingEngine:
         # For now, return slightly negative to be conservative
         return -0.5
 
-    async def update_position_prices(self):
-        """Update prices for all active positions"""
-        for mint_address in list(self.active_positions.keys()):
-            try:
-                current_price = await self.moralis.get_current_price(mint_address)
-                position = self.active_positions[mint_address]
-                
-                if current_price > position.peak_price:
-                    position.peak_price = current_price
-                    
-                # Check exit conditions - now returns (reason, percentage) tuple
-                exit_result = await self.check_exit_conditions(mint_address)
-                if exit_result:
-                    exit_reason, sell_pct = exit_result
-                    self.logger.info(f"Exit condition triggered for {mint_address}: {exit_reason} ({sell_pct*100:.0f}%)")
-                    
-                    await self.sell_token(mint_address, sell_pct, position.paper_mode, exit_reason=exit_reason)
-                    
-            except Exception as e:
-                self.logger.error(f"Error updating position {mint_address}: {e}")
+    # Note: update_position_prices removed - position monitoring is now handled by main.py:monitor_position
+    # which calls check_exit_conditions directly for better integration
 
     def get_portfolio_summary(self) -> Dict:
         """Get summary of current portfolio"""
