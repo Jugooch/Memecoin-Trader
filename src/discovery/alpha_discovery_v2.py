@@ -54,13 +54,13 @@ class ProvenAlphaFinder:
         self.logger = logging.getLogger(__name__)
         
         # Strategy parameters - Multi-tier approach for more wallet discovery
-        self.analysis_window_hours = 24  # Analyze tokens after 24 hours
+        # Aligned with 15-minute trading strategy (not 1-3 hour holds)
         self.success_thresholds = {
-            'high': 2.0,      # 2x price increase = high success
-            'medium': 1.5,    # 1.5x price increase = medium success  
-            'low': 1.2        # 1.2x price increase = low success
+            'high': 1.5,      # 1.5x price increase = high success (reduced from 2.0x)
+            'medium': 1.3,    # 1.3x price increase = medium success (reduced from 1.5x)
+            'low': 1.15       # 1.15x price increase = low success (reduced from 1.2x)
         }
-        self.early_window_seconds = 600   # First 10 minutes = early (expanded)
+        self.early_window_seconds = 300   # First 5 minutes = early (reduced from 10)
         self.min_wallet_appearances = {
             'tier_1': 2,      # High-quality wallets: 2+ high success tokens
             'tier_2': 3,      # Medium-quality wallets: 3+ medium success tokens
@@ -73,7 +73,7 @@ class ProvenAlphaFinder:
         self.logger.info("Starting FIXED alpha wallet discovery (Paginated + Metrics + Fallback)")
         self.logger.info("=" * 80)
         
-        # Step 1: Get tokens from 24-48h ago with comprehensive metrics
+        # Step 1: Get tokens from 45min-15min ago (aligned with trading timeframe)
         start_time = time.time()
         historical_tokens = await self._get_historical_tokens()
         fetch_time = time.time() - start_time
@@ -145,7 +145,7 @@ class ProvenAlphaFinder:
             for wallet in early_buyers:
                 alpha_candidates[wallet].append({
                     'token': token_data,
-                    'buy_time': 'early',  # Within first 10 minutes
+                    'buy_time': 'early',  # Within first 5 minutes
                     'performance': token_data.get('performance_multiplier', 1.0)
                 })
                 
@@ -202,10 +202,10 @@ class ProvenAlphaFinder:
     async def _get_historical_tokens(self) -> List[Dict]:
         """Get recent tokens with comprehensive metrics computation"""
         # Use window where both BitQuery has data AND Moralis has indexed prices
-        # Reduced window for fresher alpha wallets: 2h-30min ago (was 4h-1h)
+        # Optimized for 15-minute trading strategy: 45min-15min ago
         now = datetime.utcnow()
-        start_time = now - timedelta(hours=2)      # 2 hours ago UTC (was 4)
-        end_time = now - timedelta(minutes=30)     # 30 minutes ago UTC (was 1 hour)
+        start_time = now - timedelta(minutes=45)   # 45 minutes ago UTC
+        end_time = now - timedelta(minutes=15)     # 15 minutes ago UTC
         
         self.logger.info(f"Analyzing recent tokens window: {start_time.isoformat()}Z -> {end_time.isoformat()}Z")
         
@@ -240,7 +240,7 @@ class ProvenAlphaFinder:
                 self.logger.info(f"Actual coverage: {coverage_minutes:.1f} minutes from {min_time}Z to {max_time}Z")
                 
                 # Bail if coverage is too small (prevents false negatives)
-                if coverage_minutes < 10:  # Less than 10 minutes of coverage
+                if coverage_minutes < 5:  # Less than 5 minutes of coverage
                     self.logger.warning(f"Coverage too small ({coverage_minutes:.1f} min), skipping discovery")
                     return []
             else:
@@ -568,7 +568,7 @@ class ProvenAlphaFinder:
                 # Get swaps (Moralis max limit is 100)
                 all_swaps = await self.moralis.get_token_swaps(mint, limit=100)
                 
-                # Filter to early swaps (first 2 minutes after launch)
+                # Filter to early swaps (first 5 minutes after launch - aligned with trading)
                 early_swaps = []
                 for swap in all_swaps:
                     swap_time = self._parse_iso_timestamp(swap.get('timestamp', ''))
@@ -584,11 +584,12 @@ class ProvenAlphaFinder:
                 if early_buy_prices:
                     early_price = sorted(early_buy_prices)[len(early_buy_prices)//2]  # median
                     
-                    # Filter existing swaps for follow-through period (1-3 hours post launch)
+                    # Filter existing swaps for follow-through period (5-20 minutes post launch)
+                    # Aligned with 15-minute max hold strategy
                     ft_swaps = []
                     for swap in all_swaps:
                         swap_time = self._parse_iso_timestamp(swap.get('timestamp', ''))
-                        if launch_time + 3600 <= swap_time <= launch_time + 10800:
+                        if launch_time + 300 <= swap_time <= launch_time + 1200:  # 5-20 minutes
                             ft_swaps.append(swap)
                     
                     # Calculate VWAP for follow-through period (fixed USD×USD bug)
@@ -690,7 +691,7 @@ class ProvenAlphaFinder:
         return min_usd <= usd_size <= max_usd
 
     async def _find_early_buyers(self, token_data: Dict) -> List[str]:
-        """Find wallets that bought token in first 10 minutes after launch using Bitquery first"""
+        """Find wallets that bought token in first 5 minutes after launch using Bitquery first"""
         mint = token_data['mint']
         launch_time = token_data.get('launch_time')
         
@@ -699,7 +700,7 @@ class ProvenAlphaFinder:
             return []
         
         try:
-            early_window = self.early_window_seconds  # 600 seconds (10 minutes)
+            early_window = self.early_window_seconds  # 300 seconds (5 minutes)
             early_buyers = set()
             filtered_buyers = set()
             
@@ -1341,7 +1342,7 @@ async def main():
             await finder._update_bot_config(alpha_wallets)
             
             print(f"\nOK - These wallets have been validated through time-delayed analysis")
-            print(f"   They consistently bought successful tokens within first 10 minutes")
+            print(f"   They consistently bought successful tokens within first 5 minutes")
             print(f"   Config updated with {len(alpha_wallets)} alpha wallets!")
     
     finally:
