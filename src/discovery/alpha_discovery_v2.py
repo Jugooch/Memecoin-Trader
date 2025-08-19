@@ -204,7 +204,7 @@ class ProvenAlphaFinder:
         # Optimized for 2-3 minute pump trading: analyze recent completed pumps
         # 20-5 minutes ago gives more data while staying fresh
         now = datetime.utcnow()
-        start_time = now - timedelta(minutes=20)   # 20 minutes ago UTC
+        start_time = now - timedelta(minutes=60)   # 20 minutes ago UTC
         end_time = now - timedelta(minutes=5)      # 5 minutes ago UTC
         
         self.logger.info(f"Analyzing recent tokens window: {start_time.isoformat()}Z -> {end_time.isoformat()}Z")
