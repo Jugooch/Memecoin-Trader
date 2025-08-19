@@ -46,11 +46,11 @@ watched_wallets:
   # - wallet_address_2
 
 # Trading parameters (Phase 2: Bayesian Scoring)
-alpha_weight_min: 2.5         # Minimum weighted vote score (replaces threshold_alpha_buys)
+alpha_weight_min: 3.5         # Minimum weighted vote score (higher for quality)
 require_one_wallet_pge_55: false  # Require at least one wallet with >55% win rate (smart scoring handles this)
 beta_prior_alpha: 3           # Bayesian prior alpha (wins + 1)
 beta_prior_beta: 5            # Bayesian prior beta (losses + 1) = 37.5% baseline
-threshold_alpha_buys: 3       # DEPRECATED - kept for backward compatibility
+threshold_alpha_buys: 5       # Minimum alpha wallets required (increased for consensus)
 
 # Discovery Quality Controls (Phase 3: Quality Improvements)
 discovery_position_filters:
@@ -73,12 +73,12 @@ alpha_enhanced:
   correlation_penalty_some: 0.9       # Penalty for some co-buying (3+)
   correlation_penalty_shared_funder: 0.8  # Penalty for shared funding source
 
-min_liquidity_usd: 15000      # Minimum liquidity required (increased from 5000)
-time_window_sec: 180          # Time window to wait for alpha activity (reduced from 300)
+min_liquidity_usd: 25000      # Minimum liquidity required (higher quality tokens)
+time_window_sec: 180          # Time window to wait for alpha activity (3 min for quick pumps)
 max_trade_pct: 0.05           # Max % of capital per trade (5%)
-tp_multiplier: 1.25           # Take profit multiplier (1.25x - more realistic)
-stop_loss_pct: 0.92           # Stop loss percentage (8% loss - tighter stop)
-max_hold_seconds: 900         # Maximum time to hold position (15 minutes)
+tp_multiplier: 1.20           # Take profit multiplier (1.20x - achievable in 2-3 min)
+stop_loss_pct: 0.95           # Stop loss percentage (5% loss - tighter for quick trades)
+max_hold_seconds: 300         # Maximum time to hold position (5 minutes for quick pumps)
 
 # Scratch rule parameters
 scratch_rule:
@@ -123,7 +123,7 @@ api_optimization:
   
   # Alpha check optimization  
   alpha_polls_max: 3         # Maximum polls per alpha check
-  alpha_poll_intervals: [5, 20, 40]  # Poll timing in seconds
+  alpha_poll_intervals: [3, 10, 20]  # Poll timing in seconds (faster for quick pumps)
   alpha_swap_limit: 50       # Swap limit per poll (reduced from 100)
   alpha_early_abort_min_buyers: 10   # Early abort threshold
   alpha_early_abort_buy_sell_ratio: 1.0  # Early abort ratio
@@ -131,7 +131,7 @@ api_optimization:
   # Discovery V2 optimization (updated for more alpha wallets)
   discovery_max_moralis_tokens: 50    # Validate top 50 tokens (increased from 20)
   discovery_bitquery_success_threshold: 25  # Lower threshold (reduced from 40)
-  discovery_early_window_minutes: 5   # Early buyer window (aligned with 15-min trading strategy)
+  discovery_early_window_minutes: 1.5   # Early buyer window (90 seconds for ultra-early)
   
   # Multi-tier alpha wallet discovery (aligned with 15-min trading)
   discovery_success_thresholds:

@@ -53,14 +53,14 @@ class ProvenAlphaFinder:
         self.config = config or {}
         self.logger = logging.getLogger(__name__)
         
-        # Strategy parameters - Multi-tier approach for more wallet discovery
-        # Aligned with 15-minute trading strategy (not 1-3 hour holds)
+        # Strategy parameters - Aligned with 2-3 minute pump trading
+        # Focus on ultra-fast gains matching our TP targets
         self.success_thresholds = {
-            'high': 1.5,      # 1.5x price increase = high success (reduced from 2.0x)
-            'medium': 1.3,    # 1.3x price increase = medium success (reduced from 1.5x)
-            'low': 1.15       # 1.15x price increase = low success (reduced from 1.2x)
+            'high': 1.20,      # 1.20x = 20% gain (matches reduced TP target)
+            'medium': 1.15,    # 1.15x = 15% gain (good quick pump)
+            'low': 1.08       # 1.08x = 8% gain (minimum after fees)
         }
-        self.early_window_seconds = 300   # First 5 minutes = early (reduced from 10)
+        self.early_window_seconds = 90   # First 90 seconds = early (ultra-early entry)
         self.min_wallet_appearances = {
             'tier_1': 2,      # High-quality wallets: 2+ high success tokens
             'tier_2': 3,      # Medium-quality wallets: 3+ medium success tokens
@@ -201,11 +201,11 @@ class ProvenAlphaFinder:
     
     async def _get_historical_tokens(self) -> List[Dict]:
         """Get recent tokens with comprehensive metrics computation"""
-        # Use window where both BitQuery has data AND Moralis has indexed prices
-        # Optimized for 15-minute trading strategy: 45min-15min ago
+        # Optimized for 2-3 minute pump trading: analyze very recent completed pumps
+        # 12-4 minutes ago gives us fresh data with complete pump cycles
         now = datetime.utcnow()
-        start_time = now - timedelta(minutes=45)   # 45 minutes ago UTC
-        end_time = now - timedelta(minutes=15)     # 15 minutes ago UTC
+        start_time = now - timedelta(minutes=12)   # 12 minutes ago UTC
+        end_time = now - timedelta(minutes=4)      # 4 minutes ago UTC
         
         self.logger.info(f"Analyzing recent tokens window: {start_time.isoformat()}Z -> {end_time.isoformat()}Z")
         
