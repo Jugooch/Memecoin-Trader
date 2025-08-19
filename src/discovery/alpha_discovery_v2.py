@@ -56,9 +56,9 @@ class ProvenAlphaFinder:
         # Strategy parameters - Aligned with 2-3 minute pump trading
         # Focus on ultra-fast gains matching our TP targets
         self.success_thresholds = {
-            'high': 1.20,      # 1.20x = 20% gain (matches reduced TP target)
-            'medium': 1.15,    # 1.15x = 15% gain (good quick pump)
-            'low': 1.08       # 1.08x = 8% gain (minimum after fees)
+            'high': 1.3,      # 1.3x = 30% gain (matches reduced TP target)
+            'medium': 1.2,    # 1.2x = 20% gain (good quick pump)
+            'low': 1.1       # 1.1x = 10% gain (minimum after fees)
         }
         self.early_window_seconds = 180   # First 3 minutes = early (matches our entry window)
         self.min_wallet_appearances = {
@@ -584,12 +584,12 @@ class ProvenAlphaFinder:
                 if early_buy_prices:
                     early_price = sorted(early_buy_prices)[len(early_buy_prices)//2]  # median
                     
-                    # Filter existing swaps for follow-through period (5-20 minutes post launch)
+                    # Filter existing swaps for follow-through period (5-60 minutes post launch)
                     # Aligned with 15-minute max hold strategy
                     ft_swaps = []
                     for swap in all_swaps:
                         swap_time = self._parse_iso_timestamp(swap.get('timestamp', ''))
-                        if launch_time + 300 <= swap_time <= launch_time + 1200:  # 5-20 minutes
+                        if launch_time + 300 <= swap_time <= launch_time + 3600:  # 5 min to 1 hour
                             ft_swaps.append(swap)
                     
                     # Calculate VWAP for follow-through period (fixed USD×USD bug)
