@@ -46,11 +46,11 @@ watched_wallets:
   # - wallet_address_2
 
 # Trading parameters (Phase 2: Bayesian Scoring)
-alpha_weight_min: 3.5         # Minimum weighted vote score (higher for quality)
+alpha_weight_min: 3.0         # Minimum weighted vote score (balanced for coverage)
 require_one_wallet_pge_55: false  # Require at least one wallet with >55% win rate (smart scoring handles this)
 beta_prior_alpha: 3           # Bayesian prior alpha (wins + 1)
 beta_prior_beta: 5            # Bayesian prior beta (losses + 1) = 37.5% baseline
-threshold_alpha_buys: 5       # Minimum alpha wallets required (increased for consensus)
+threshold_alpha_buys: 4       # Minimum alpha wallets required (balanced consensus)
 
 # Discovery Quality Controls (Phase 3: Quality Improvements)
 discovery_position_filters:
@@ -131,7 +131,7 @@ api_optimization:
   # Discovery V2 optimization (updated for more alpha wallets)
   discovery_max_moralis_tokens: 50    # Validate top 50 tokens (increased from 20)
   discovery_bitquery_success_threshold: 25  # Lower threshold (reduced from 40)
-  discovery_early_window_minutes: 1.5   # Early buyer window (90 seconds for ultra-early)
+  discovery_early_window_minutes: 3   # Early buyer window (3 minutes matches entry window)
   
   # Multi-tier alpha wallet discovery (aligned with 15-min trading)
   discovery_success_thresholds:

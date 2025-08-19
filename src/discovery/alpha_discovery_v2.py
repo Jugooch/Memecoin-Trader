@@ -60,7 +60,7 @@ class ProvenAlphaFinder:
             'medium': 1.15,    # 1.15x = 15% gain (good quick pump)
             'low': 1.08       # 1.08x = 8% gain (minimum after fees)
         }
-        self.early_window_seconds = 90   # First 90 seconds = early (ultra-early entry)
+        self.early_window_seconds = 180   # First 3 minutes = early (matches our entry window)
         self.min_wallet_appearances = {
             'tier_1': 2,      # High-quality wallets: 2+ high success tokens
             'tier_2': 3,      # Medium-quality wallets: 3+ medium success tokens
@@ -201,11 +201,11 @@ class ProvenAlphaFinder:
     
     async def _get_historical_tokens(self) -> List[Dict]:
         """Get recent tokens with comprehensive metrics computation"""
-        # Optimized for 2-3 minute pump trading: analyze very recent completed pumps
-        # 12-4 minutes ago gives us fresh data with complete pump cycles
+        # Optimized for 2-3 minute pump trading: analyze recent completed pumps
+        # 20-5 minutes ago gives more data while staying fresh
         now = datetime.utcnow()
-        start_time = now - timedelta(minutes=12)   # 12 minutes ago UTC
-        end_time = now - timedelta(minutes=4)      # 4 minutes ago UTC
+        start_time = now - timedelta(minutes=20)   # 20 minutes ago UTC
+        end_time = now - timedelta(minutes=5)      # 5 minutes ago UTC
         
         self.logger.info(f"Analyzing recent tokens window: {start_time.isoformat()}Z -> {end_time.isoformat()}Z")
         
