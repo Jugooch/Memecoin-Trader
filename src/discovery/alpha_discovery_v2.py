@@ -275,6 +275,9 @@ class ProvenAlphaFinder:
                     if trades_checked == 1:
                         self.logger.info(f"DEBUG Trade structure: Buy keys={list(trade_data.get('Buy', {}).keys())}, "
                                        f"Sell keys={list(trade_data.get('Sell', {}).keys())}")
+                        # Show the actual raw values
+                        self.logger.info(f"DEBUG Raw Buy object: {trade_data.get('Buy', {})}")
+                        self.logger.info(f"DEBUG Raw Sell object: {trade_data.get('Sell', {})}")
                     self.logger.info(f"DEBUG Trade {trades_checked}: buy_price={buy_price_usd}, sell_price={sell_price_usd}, "
                                    f"buy_amt={buy_amount_usd}, sell_amt={sell_amount_usd}")
                     if buy_price_usd or sell_price_usd:
