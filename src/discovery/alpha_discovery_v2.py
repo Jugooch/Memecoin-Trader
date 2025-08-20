@@ -522,7 +522,9 @@ class ProvenAlphaFinder:
             success_tier = token_data.get('success_tier', None)
             success_threshold = self.success_thresholds['low']
 
-            self.logger.debug(f"Token {mint[:8]}... validation check: price=${current_price:.8f}, perf={performance_multiplier:.2f}x, score={bitquery_score}, tier={success_tier}, threshold={success_threshold}")
+            # Handle None price safely
+            price_str = f"${current_price:.8f}" if current_price is not None else "None"
+            self.logger.debug(f"Token {mint[:8]}... validation check: price={price_str}, perf={performance_multiplier:.2f}x, score={bitquery_score}, tier={success_tier}, threshold={success_threshold}")
 
             token_data['current_price'] = current_price
             is_successful = (

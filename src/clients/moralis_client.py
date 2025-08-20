@@ -333,7 +333,18 @@ class MoralisClient:
             # Skip cache if fresh=True (for position monitoring)
             cache_type = None if fresh else 'price'
             data = await self._make_request(url, cache_type=cache_type)
-            return float(data.get('usdPrice', 0))
+            
+            # Debug logging to see what we're actually getting
+            if data is None:
+                self.logger.error(f"CRITICAL: _make_request returned None for {mint_address}")
+                return 0.0
+            
+            price = data.get('usdPrice', 0)
+            if price is None:
+                self.logger.error(f"CRITICAL: usdPrice is None in response for {mint_address}: {data}")
+                return 0.0
+                
+            return float(price)
             
         except Exception as e:
             self.logger.error(f"Error getting price for {mint_address}: {e}")
