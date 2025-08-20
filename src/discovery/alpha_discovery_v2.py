@@ -253,6 +253,9 @@ class ProvenAlphaFinder:
             SOL_ADDRESS = "11111111111111111111111111111111"
             SOL_WRAPPED = "So11111111111111111111111111111112"
             
+            trades_with_price_count = 0
+            trades_checked = 0
+            
             for trade in recent_trades:
                 # Extract trade details
                 trade_data = trade.get('Trade', {})
@@ -264,6 +267,14 @@ class ProvenAlphaFinder:
                 buy_price_usd = trade_data.get('Buy', {}).get('PriceInUSD', 0)
                 sell_price_usd = trade_data.get('Sell', {}).get('PriceInUSD', 0)
                 signer = trade.get('Transaction', {}).get('Signer', '')
+                
+                # Debug: Check first 5 trades
+                if trades_checked < 5:
+                    trades_checked += 1
+                    self.logger.debug(f"Trade {trades_checked}: buy_price={buy_price_usd}, sell_price={sell_price_usd}, "
+                                    f"buy_amt={buy_amount_usd}, sell_amt={sell_amount_usd}")
+                    if buy_price_usd or sell_price_usd:
+                        trades_with_price_count += 1
                 
                 # Determine which side has the new token (non-SOL)
                 buy_mint = buy_currency.get('MintAddress', '')
@@ -283,6 +294,10 @@ class ProvenAlphaFinder:
                     # For token buys: USD amount is on the sell side (SOL), price is on buy side (token)
                     amount_usd = sell_amount_usd or 0  # SOL side has the USD amount
                     price_usd = buy_price_usd or 0     # Token side has the price
+                    
+                    # Debug first few tokens
+                    if len(token_trades) < 3 and price_usd != 0:
+                        self.logger.debug(f"Token buy: {mint[:8]}... price={price_usd}, amount_usd={amount_usd}")
                 elif sell_mint and sell_mint not in [SOL_ADDRESS, SOL_WRAPPED]:
                     mint = sell_mint  
                     token_currency = sell_currency
@@ -319,6 +334,7 @@ class ProvenAlphaFinder:
                 })
             
             self.logger.info(f"Found {len(token_trades)} unique tokens, computing metrics...")
+            self.logger.info(f"DEBUG: First 5 trades had {trades_with_price_count} with price data")
             
             # Compute comprehensive metrics for each token
             historical_tokens = []
