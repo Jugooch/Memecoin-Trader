@@ -271,8 +271,12 @@ class ProvenAlphaFinder:
                 # Debug: Check first 5 trades
                 if trades_checked < 5:
                     trades_checked += 1
-                    self.logger.debug(f"Trade {trades_checked}: buy_price={buy_price_usd}, sell_price={sell_price_usd}, "
-                                    f"buy_amt={buy_amount_usd}, sell_amt={sell_amount_usd}")
+                    # Log the raw structure to see what we're actually getting
+                    if trades_checked == 1:
+                        self.logger.info(f"DEBUG Trade structure: Buy keys={list(trade_data.get('Buy', {}).keys())}, "
+                                       f"Sell keys={list(trade_data.get('Sell', {}).keys())}")
+                    self.logger.info(f"DEBUG Trade {trades_checked}: buy_price={buy_price_usd}, sell_price={sell_price_usd}, "
+                                   f"buy_amt={buy_amount_usd}, sell_amt={sell_amount_usd}")
                     if buy_price_usd or sell_price_usd:
                         trades_with_price_count += 1
                 
