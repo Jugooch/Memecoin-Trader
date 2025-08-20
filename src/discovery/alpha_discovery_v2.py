@@ -263,9 +263,12 @@ class ProvenAlphaFinder:
                 sell_currency = trade_data.get('Sell', {}).get('Currency', {})
                 buy_amount_usd = trade_data.get('Buy', {}).get('AmountInUSD', 0)
                 sell_amount_usd = trade_data.get('Sell', {}).get('AmountInUSD', 0)
-                # Price comes from Buy or Sell object depending on which side is the token
-                buy_price_usd = trade_data.get('Buy', {}).get('PriceInUSD', 0)
-                sell_price_usd = trade_data.get('Sell', {}).get('PriceInUSD', 0)
+                # Use Price field, not PriceInUSD (which is always 0 in pump.fun trades)
+                buy_price = trade_data.get('Buy', {}).get('Price', 0)
+                sell_price = trade_data.get('Sell', {}).get('Price', 0)
+                # PriceInUSD is always 0, so we'll use Price instead
+                buy_price_usd = buy_price
+                sell_price_usd = sell_price
                 signer = trade.get('Transaction', {}).get('Signer', '')
                 
                 # Debug: Check first 5 trades
@@ -298,9 +301,9 @@ class ProvenAlphaFinder:
                     mint = buy_mint
                     token_currency = buy_currency
                     side = 'buy'
-                    # For token buys: USD amount is on the sell side (SOL), price is on buy side (token)
-                    amount_usd = sell_amount_usd or 0  # SOL side has the USD amount
-                    price_usd = buy_price_usd or 0     # Token side has the price
+                    # Token is on buy side - use buy price (token price in SOL)
+                    amount_usd = float(sell_amount_usd) if sell_amount_usd else 0
+                    price_usd = buy_price_usd if buy_price_usd else 0
                     
                     # Debug first few tokens
                     if len(token_trades) < 3 and price_usd != 0:
@@ -309,9 +312,9 @@ class ProvenAlphaFinder:
                     mint = sell_mint  
                     token_currency = sell_currency
                     side = 'sell'
-                    # For token sells: USD amount is on the buy side (SOL), price is on sell side (token)
-                    amount_usd = buy_amount_usd or 0   # SOL side has the USD amount
-                    price_usd = sell_price_usd or 0    # Token side has the price
+                    # Token is on sell side - use sell price (token price in SOL)
+                    amount_usd = float(buy_amount_usd) if buy_amount_usd else 0
+                    price_usd = sell_price_usd if sell_price_usd else 0
                 else:
                     continue  # Skip if no valid token found
                 
