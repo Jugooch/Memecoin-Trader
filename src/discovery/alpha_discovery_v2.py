@@ -280,14 +280,16 @@ class ProvenAlphaFinder:
                     mint = buy_mint
                     token_currency = buy_currency
                     side = 'buy'
-                    amount_usd = buy_amount_usd or 0
-                    price_usd = buy_price_usd or 0
+                    # For token buys: USD amount is on the sell side (SOL), price is on buy side (token)
+                    amount_usd = sell_amount_usd or 0  # SOL side has the USD amount
+                    price_usd = buy_price_usd or 0     # Token side has the price
                 elif sell_mint and sell_mint not in [SOL_ADDRESS, SOL_WRAPPED]:
                     mint = sell_mint  
                     token_currency = sell_currency
                     side = 'sell'
-                    amount_usd = sell_amount_usd or 0
-                    price_usd = sell_price_usd or 0
+                    # For token sells: USD amount is on the buy side (SOL), price is on sell side (token)
+                    amount_usd = buy_amount_usd or 0   # SOL side has the USD amount
+                    price_usd = sell_price_usd or 0    # Token side has the price
                 else:
                     continue  # Skip if no valid token found
                 
@@ -522,21 +524,25 @@ class ProvenAlphaFinder:
             success_tier = token_data.get('success_tier', None)
             success_threshold = self.success_thresholds['low']
 
-            # Handle None price safely
+            # Handle None price and performance safely
             price_str = f"${current_price:.8f}" if current_price is not None else "None"
-            self.logger.debug(f"Token {mint[:8]}... validation check: price={price_str}, perf={performance_multiplier:.2f}x, score={bitquery_score}, tier={success_tier}, threshold={success_threshold}")
+            perf_str = f"{performance_multiplier:.2f}x" if performance_multiplier is not None else "no_price"
+            self.logger.debug(f"Token {mint[:8]}... validation check: price={price_str}, perf={perf_str}, score={bitquery_score}, tier={success_tier}, threshold={success_threshold}")
 
             token_data['current_price'] = current_price
             is_successful = (
                 success_tier is not None and 
                 bitquery_score >= 25 and
+                performance_multiplier is not None and
                 performance_multiplier >= success_threshold  # At least 1.2x
             )
             
             if not is_successful:
-                self.logger.debug(f"Token {mint[:8]}... FAILED validation: tier_ok={success_tier is not None}, score_ok={bitquery_score >= 25}, perf_ok={performance_multiplier >= success_threshold}")
+                perf_ok = performance_multiplier >= success_threshold if performance_multiplier is not None else False
+                self.logger.debug(f"Token {mint[:8]}... FAILED validation: tier_ok={success_tier is not None}, score_ok={bitquery_score >= 25}, perf_ok={perf_ok}")
             else:
-                self.logger.debug(f"Token {mint[:8]}... PASSED validation: perf={performance_multiplier:.2f}x, score={bitquery_score}")
+                perf_str = f"{performance_multiplier:.2f}x" if performance_multiplier is not None else "no_price"
+                self.logger.debug(f"Token {mint[:8]}... PASSED validation: perf={perf_str}, score={bitquery_score}")
                 
             return is_successful
 
