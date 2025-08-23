@@ -484,6 +484,28 @@ class MemecoinTradingBot:
         )
         
         if signal_quality_passed:
+            # NEW: Check entry timing - reject if too late after first alpha buy
+            if 'alpha_wallets' in alpha_analysis and alpha_wallets:
+                # Get timestamps of alpha buys from realtime cache
+                buy_timestamps = []
+                for wallet in alpha_wallets:
+                    if mint_address in self.wallet_tracker.realtime_trades_cache:
+                        for trade_wallet, trade_time in self.wallet_tracker.realtime_trades_cache[mint_address]:
+                            if trade_wallet == wallet:
+                                buy_timestamps.append(trade_time)
+                                break
+                
+                if buy_timestamps:
+                    first_alpha_buy = min(buy_timestamps)
+                    time_since_first_alpha = time.time() - first_alpha_buy
+                    max_entry_delay = getattr(self.config, 'max_entry_delay_seconds', 180)  # 3 minutes default
+                    
+                    if time_since_first_alpha > max_entry_delay:
+                        self.logger.warning(f"ENTRY TOO LATE: {time_since_first_alpha:.0f}s after first alpha "
+                                          f"(max: {max_entry_delay}s) for {mint_address[:8]}...")
+                        self._record_token_status(mint_address, 'failed_filters', f'Entry too late: {time_since_first_alpha:.0f}s')
+                        return  # Skip this trade - momentum likely gone
+            
             # Check token safety before trading (reuse swap data from alpha check)
             alpha_swaps_data = alpha_analysis.get('last_swaps_data', [])
             safety_check = await self.check_token_safety(mint_address, metadata, liquidity, alpha_swaps_data)
@@ -496,7 +518,27 @@ class MemecoinTradingBot:
                 self._record_token_status(mint_address, 'failed_filters', f'Safety score: {rug_score}')
                 return  # Skip this trade
             
-            # ENHANCED: Comprehensive trade decision logging with Bayesian scores
+            # NEW: Hard block on price extension
+            # The extension check is done in check_token_safety and adds to rug_score
+            # We need to explicitly check the extension_guard result
+            if alpha_swaps_data and len(alpha_swaps_data) > 0:
+                current_price = None
+                recent_prices = [swap.get('price', 0) for swap in alpha_swaps_data[-5:] if swap.get('price', 0) > 0]
+                if recent_prices:
+                    current_price = recent_prices[-1]
+                
+                extension_result = self.safety_checker.check_price_extension(
+                    mint_address, alpha_swaps_data, current_price
+                )
+                
+                if extension_result.get('is_extended', False):
+                    percentile = extension_result.get('percentile_rank', 0) * 100
+                    self.logger.warning(f"PRICE EXTENSION BLOCK: Price at {percentile:.0f}th percentile "
+                                      f"(>{getattr(self.config, 'price_extension_percentile', 90)}th) for {mint_address[:8]}...")
+                    self._record_token_status(mint_address, 'failed_filters', f'Price extended: {percentile:.0f}th percentile')
+                    return  # Hard block - don't buy at peaks
+            
+            # ENHANCED: Comprehensive trade decision logging with all new checks
             tier_summary = ', '.join([f"{addr[:8]}({tier})" for addr, tier in wallet_tiers.items()])
             wallet_details = [f"{addr[:8]}(tier={tier})" for addr, tier in wallet_tiers.items()]
             
@@ -504,11 +546,25 @@ class MemecoinTradingBot:
             wallet_weights = alpha_analysis.get('wallet_weights', {})
             weight_details = [f"{addr[:8]}({weight:.2f})" for addr, weight in wallet_weights.items()]
             
-            self.logger.info(f"TradeDecision: mint={mint_address[:8]}... total_weight={total_weight:.2f} "
-                           f"confidence={confidence_score:.1f} risk_level={risk_params['risk_level']} "
-                           f"wallets=[{', '.join(weight_details)}] safety_score={safety_check['rug_score']} "
-                           f"multiplier={investment_multiplier:.1f}x distinct_wallets={distinct_wallets} "
-                           f"liquidity=${liquidity.get('usd', 0):,.0f}")
+            # Get timing information for logging
+            entry_timing_info = ""
+            if buy_timestamps:
+                time_since_first = time.time() - min(buy_timestamps)
+                time_spread = max(buy_timestamps) - min(buy_timestamps) if len(buy_timestamps) > 1 else 0
+                entry_timing_info = f"entry_delay={time_since_first:.0f}s spread={time_spread:.0f}s"
+            
+            # Get price extension info
+            extension_info = ""
+            if 'extension_result' in locals():
+                percentile = extension_result.get('percentile_rank', 0) * 100
+                extension_info = f"price_percentile={percentile:.0f}th"
+            
+            self.logger.info(f"✅ TRADE APPROVED: mint={mint_address[:8]}... "
+                           f"weight={total_weight:.2f} confidence={confidence_score:.1f} "
+                           f"risk_level={risk_params['risk_level']} wallets=[{', '.join(weight_details)}] "
+                           f"safety={safety_check['rug_score']} mult={investment_multiplier:.1f}x "
+                           f"distinct={distinct_wallets} liquidity=${liquidity.get('usd', 0):,.0f} "
+                           f"{entry_timing_info} {extension_info}")
             
             # Track execution latency
             trade_executed_time = time.time()
@@ -540,18 +596,28 @@ class MemecoinTradingBot:
             await self.execute_trade(mint_address, metadata, liquidity, 
                                    confidence_score, investment_multiplier, wallet_tiers)
         else:
-            # ENHANCED: Log why trade was rejected
+            # ENHANCED: Detailed rejection logging with all failure points
             rejection_reasons = []
+            if not weighted_threshold_passed:
+                rejection_reasons.append(f"weighted_threshold_failed(weight={total_weight:.2f}<{risk_params['min_weight']})")
             if confidence_score < min_confidence:
                 rejection_reasons.append(f"low_confidence({confidence_score:.1f}<{min_confidence})")
-            if distinct_wallets < min_distinct_wallets:
-                rejection_reasons.append(f"insufficient_distinct_wallets({distinct_wallets}<{min_distinct_wallets})")
-            if len(alpha_wallets) < self.config.threshold_alpha_buys:
-                rejection_reasons.append(f"insufficient_alpha_buys({len(alpha_wallets)}<{self.config.threshold_alpha_buys})")
+            if distinct_wallets < risk_params['min_wallets']:
+                rejection_reasons.append(f"insufficient_wallets({distinct_wallets}<{risk_params['min_wallets']})")
+            if total_weight < risk_params['min_weight']:
+                rejection_reasons.append(f"low_weight({total_weight:.2f}<{risk_params['min_weight']})")
             
-            self.logger.debug(f"TradeRejected: mint={mint_address[:8]}... reasons=[{', '.join(rejection_reasons)}] "
-                            f"confidence={confidence_score:.1f} alpha_wallets={len(alpha_wallets)} "
-                            f"distinct={distinct_wallets}")
+            # Check for specific failure reasons from alpha analysis
+            if alpha_analysis.get('temporal_clustering_failure'):
+                time_spread = alpha_analysis.get('time_spread', 0)
+                rejection_reasons.append(f"temporal_clustering({time_spread:.0f}s)")
+            if alpha_analysis.get('independence_failure'):
+                rejection_reasons.append("insufficient_independent_wallets")
+            
+            self.logger.info(f"❌ TRADE REJECTED: mint={mint_address[:8]}... "
+                           f"reasons=[{', '.join(rejection_reasons)}] "
+                           f"confidence={confidence_score:.1f} wallets={len(alpha_wallets)} "
+                           f"distinct={distinct_wallets} weight={total_weight:.2f}")
             
             # Record as evaluated but not traded
             self._record_token_status(mint_address, 'evaluated', f"Rejected: {', '.join(rejection_reasons)}")
@@ -983,7 +1049,7 @@ class MemecoinTradingBot:
                                                  ((current_price / position.entry_price) - 1) * 100)
                 
                 # 🚀 USE SOPHISTICATED EXIT LOGIC
-                exit_result = await self.trading_engine.check_exit_conditions(mint_address)
+                exit_result = await self.trading_engine.check_exit_conditions(mint_address, current_price)
                 
                 if exit_result:
                     exit_reason, sell_percentage = exit_result
@@ -1008,7 +1074,7 @@ class MemecoinTradingBot:
                     if sell_result.get('success'):
                         # Record trade outcome for wallet performance tracking (on full exits)
                         if sell_percentage >= 0.99:  # Full exit
-                            profit_pct = sell_result.get('realized_pnl', 0)
+                            profit_pct = sell_result.get('profit_pct', 0)
                             self.wallet_tracker.record_trade_outcome(mint_address, profit_pct)
                             self.logger.info(f"✅ Position CLOSED: {mint_address[:8]}... via {exit_reason}")
                             break

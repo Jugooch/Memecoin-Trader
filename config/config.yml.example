@@ -45,12 +45,12 @@ watched_wallets:
   # - wallet_address_1
   # - wallet_address_2
 
-# Trading parameters (Phase 2: Bayesian Scoring)
-alpha_weight_min: 3.0         # Minimum weighted vote score (balanced for coverage)
-require_one_wallet_pge_55: false  # Require at least one wallet with >55% win rate (smart scoring handles this)
+# Trading parameters (Phase 2: Bayesian Scoring) - STRICTER REQUIREMENTS
+alpha_weight_min: 3.5         # Minimum weighted vote score (increased from 3.0)
+require_one_wallet_pge_55: true  # Require at least one wallet with >55% win rate (ENABLED)
 beta_prior_alpha: 3           # Bayesian prior alpha (wins + 1)
 beta_prior_beta: 5            # Bayesian prior beta (losses + 1) = 37.5% baseline
-threshold_alpha_buys: 4       # Minimum alpha wallets required (balanced consensus)
+threshold_alpha_buys: 5       # Minimum alpha wallets required (increased from 4)
 
 # Discovery Quality Controls (Phase 3: Quality Improvements)
 discovery_position_filters:
@@ -65,13 +65,18 @@ discovery_quality_checks:
   min_exit_quality: 0.3       # Minimum exit timing quality (0.0-1.0, 0.3 = 30th percentile)
   min_consistency: 0.2        # Minimum performance consistency (0.0-1.0, 0.2 = low variance)
 
-# Enhanced alpha detection parameters
+# Enhanced alpha detection parameters - STRICTER ENTRY CONTROLS
 alpha_enhanced:
   min_independent_wallets: 2          # Require 2+ independent wallets
+  max_time_spread_seconds: 90         # NEW: Maximum time spread between alpha buys (90s)
   correlation_time_threshold_ms: 250  # Co-buy time threshold
   correlation_penalty_frequent: 0.8   # Penalty for frequent co-buyers (5+)
   correlation_penalty_some: 0.9       # Penalty for some co-buying (3+)
   correlation_penalty_shared_funder: 0.8  # Penalty for shared funding source
+
+# Entry timing controls - NEW STRICTER SETTINGS
+max_entry_delay_seconds: 180  # NEW: Maximum delay after first alpha buy (3 minutes)
+price_extension_percentile: 90  # NEW: Block trades if price > 90th percentile
 
 min_liquidity_usd: 25000      # Minimum liquidity required (higher quality tokens)
 time_window_sec: 180          # Time window to wait for alpha activity (3 min for quick pumps)

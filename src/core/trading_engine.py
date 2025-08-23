@@ -108,7 +108,7 @@ class TradingEngine:
             if mint_address in self.active_positions:
                 pos = self.active_positions[mint_address]
                 hold_time = (datetime.now() - pos.entry_time).total_seconds()
-                current_price = await self.moralis.get_current_price(mint_address) or pos.entry_price
+                current_price = await self.moralis.get_current_price(mint_address, fresh=True) or pos.entry_price
                 pnl_pct = ((current_price / pos.entry_price) - 1) * 100 if pos.entry_price > 0 else 0
                 position_info = f"hold_sec={hold_time:.0f} pnl={pnl_pct:+.1f}% entry=${pos.entry_price:.8f} current=${current_price:.8f}"
             
@@ -256,7 +256,7 @@ class TradingEngine:
         position = self.active_positions[mint_address]
         
         # Get current price
-        current_price = await self.moralis.get_current_price(mint_address)
+        current_price = await self.moralis.get_current_price(mint_address, fresh=True)
         if current_price <= 0:
             return {"success": False, "error": "Could not get current price"}
         
@@ -363,7 +363,7 @@ class TradingEngine:
         self.logger.warning("Real trading not implemented, falling back to paper mode")
         return await self._execute_paper_sell(mint_address, percentage, exit_reason=exit_reason)
 
-    async def check_exit_conditions(self, mint_address: str) -> Optional[tuple]:
+    async def check_exit_conditions(self, mint_address: str, current_price: float = 0) -> Optional[tuple]:
         """
         Enhanced exit strategy with dynamic TP1 sizing and intelligent trailing stops
         Returns: (exit_reason, sell_percentage) or None
@@ -374,7 +374,6 @@ class TradingEngine:
         position = self.active_positions[mint_address]
         
         # Get current price
-        current_price = await self.moralis.get_current_price(mint_address)
         if current_price <= 0:
             return None
         
@@ -405,28 +404,42 @@ class TradingEngine:
                 self.logger.info(f"   Exiting at {current_gain_pct:.1f}% loss to prevent further drawdown")
                 return ("scratch", 1.0)
         
-        # PHASE 3.1: Dynamic TP1 Sizing based on time to target
+        # PHASE 3.1: Enhanced Dynamic TP1 Sizing
         if current_price >= position.tp_price and position.tp1_hit_time is None:
             position.tp1_hit_time = datetime.now()
             time_to_tp1 = (position.tp1_hit_time - position.entry_time).total_seconds()
             
-            # Calculate dynamic TP1 percentage
-            if time_to_tp1 < 60:  # < 1 minute - very fast move
+            # OPTIMIZED: Better TP1 logic for right tail capture
+            if current_gain_pct >= 60:  # Already at 60%+ gain
+                tp1_percentage = 0.0  # Don't take any - let it run with tight trail
+                self.logger.info(f"MOONSHOT DETECTED: {current_gain_pct:.0f}% gain, skipping TP1 to capture tail")
+                position.tp1_hit_time = datetime.now()  # Mark as hit but don't sell
+                position.trailing_stop_active = True  # Activate trailing immediately
+                return None  # Don't sell, just activate trailing
+            elif time_to_tp1 < 30:  # Ultra-fast spike (< 30 seconds)
+                tp1_percentage = 0.08  # Sell only 8% - likely strong momentum
+            elif time_to_tp1 < 60:  # < 1 minute - very fast move
                 tp1_percentage = 0.12  # Sell only 12%
             elif time_to_tp1 < 180:  # 1-3 minutes - fast move
                 tp1_percentage = 0.20  # Sell 20%
-            else:  # > 3 minutes - normal move
-                tp1_percentage = 0.30  # Sell 30%
+            else:  # > 3 minutes - normal/slow move
+                tp1_percentage = 0.25  # Sell 25% (reduced from 30%)
             
             position.tp1_percentage_sold = tp1_percentage
             self.logger.info(f"Dynamic TP1: Selling {tp1_percentage*100:.0f}% after {time_to_tp1:.0f}s to TP")
             return ("take_profit_partial", tp1_percentage)
         
-        # PHASE 3.2: Intelligent Trailing Stops
+        # PHASE 3.2: Optimized Intelligent Trailing Stops
         
-        # Peak-based trailing for exceptional gains
-        if position.high_gain_peak >= 60:  # If we hit +60% at any point
-            trailing_pct = 0.82  # Trail at 82% of peak
+        # MOONSHOT trailing for exceptional gains (looser to capture full runs)
+        if position.high_gain_peak >= 100:  # Triple digit gains
+            trailing_pct = 0.75  # Trail at 75% of peak - very loose for moonshots
+            trailing_stop = position.peak_price * trailing_pct
+            if current_price <= trailing_stop:
+                self.logger.info(f"MOONSHOT EXIT: {position.high_gain_peak:.0f}% peak, exiting at {current_gain_pct:.0f}%")
+                return ("trailing_stop_moonshot", 1.0)
+        elif position.high_gain_peak >= 60:  # High gains
+            trailing_pct = 0.80  # Trail at 80% of peak (loosened from 82%)
             trailing_stop = position.peak_price * trailing_pct
             if current_price <= trailing_stop:
                 return ("trailing_stop_high_gain", 1.0)
@@ -460,8 +473,13 @@ class TradingEngine:
             if current_price <= trailing_stop:
                 return ("trailing_stop", 1.0)
         
-        # Check stop loss
-        if current_price <= position.sl_price:
+        # VOLATILITY-BASED STOP LOSS
+        # Instead of fixed 8%, adjust based on token volatility and time
+        volatility_stop = await self._calculate_dynamic_stop_loss(mint_address, position, hold_time_seconds)
+        
+        if current_price <= volatility_stop:
+            stop_pct = ((volatility_stop / position.entry_price) - 1) * 100
+            self.logger.info(f"DYNAMIC STOP HIT: Volatility-adjusted stop at {stop_pct:.1f}%")
             return ("stop_loss", 1.0)
         
         # PHASE 3.3: Remove hard time exit (or extend it)
@@ -552,6 +570,80 @@ class TradingEngine:
         # TODO: Implement real buyer acceleration calculation when real-time data is available
         # For now, return slightly negative to be conservative
         return -0.5
+    
+    async def _calculate_dynamic_stop_loss(self, mint_address: str, position: Position, hold_time_seconds: float) -> float:
+        """
+        Calculate volatility-based stop loss that adapts to market conditions
+        
+        Args:
+            mint_address: Token mint address
+            position: Current position
+            hold_time_seconds: How long we've held the position
+            
+        Returns:
+            Stop loss price level
+        """
+        try:
+            # Time-based stop loss tightening
+            if hold_time_seconds < 30:
+                # First 30 seconds: Tight 4% stop (quick scratch)
+                base_stop_pct = 0.96
+            elif hold_time_seconds < 60:
+                # 30-60 seconds: Get recent trades to calculate volatility
+                try:
+                    # Try to get recent trades for volatility calculation
+                    recent_trades = await self.moralis.get_token_swaps(mint_address, limit=20, ttl_override=5)
+                    
+                    if recent_trades and len(recent_trades) >= 5:
+                        # Calculate simple volatility from recent price moves
+                        prices = [t.get('price', 0) for t in recent_trades if t.get('price', 0) > 0]
+                        
+                        if len(prices) >= 5:
+                            # Calculate price volatility
+                            price_changes = []
+                            for i in range(1, len(prices)):
+                                change = abs((prices[i] - prices[i-1]) / prices[i-1])
+                                price_changes.append(change)
+                            
+                            # Average volatility
+                            avg_volatility = sum(price_changes) / len(price_changes) if price_changes else 0.08
+                            
+                            # Scale stop loss to volatility (2x volatility, capped)
+                            volatility_stop = min(max(avg_volatility * 2, 0.05), 0.15)  # 5-15% range
+                            base_stop_pct = 1 - volatility_stop
+                            
+                            self.logger.debug(f"Volatility-based stop: {volatility_stop:.1%} "
+                                            f"(avg volatility: {avg_volatility:.1%})")
+                        else:
+                            # Not enough price data, use default
+                            base_stop_pct = 0.94  # 6% stop
+                    else:
+                        # No trade data available, use moderate stop
+                        base_stop_pct = 0.94  # 6% stop
+                        
+                except Exception as e:
+                    self.logger.debug(f"Could not calculate volatility: {e}")
+                    base_stop_pct = 0.94  # 6% stop on error
+                    
+            elif hold_time_seconds < 180:
+                # 1-3 minutes: Standard 8% stop
+                base_stop_pct = 0.92
+            else:
+                # After 3 minutes: Wider 10% stop (more room for swings)
+                base_stop_pct = 0.90
+            
+            # Calculate stop price
+            stop_price = position.entry_price * base_stop_pct
+            
+            # Never let stop price go above entry (no positive stops)
+            stop_price = min(stop_price, position.entry_price * 0.99)
+            
+            return stop_price
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating dynamic stop loss: {e}")
+            # Fallback to conservative fixed stop
+            return position.entry_price * 0.92  # 8% stop on error
 
     # Note: update_position_prices removed - position monitoring is now handled by main.py:monitor_position
     # which calls check_exit_conditions directly for better integration

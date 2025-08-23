@@ -373,6 +373,44 @@ class WalletTracker:
                    'investment_multiplier': 0.6, 'total_weight': total_adjusted_weight, 
                    'meets_threshold': False, 'independence_failure': True}
         
+        # NEW: Temporal clustering check - ensure wallets bought close together
+        buy_timestamps = []
+        for wallet in alpha_buyers:
+            # Try to get timestamp from realtime cache first
+            wallet_buy_time = None
+            if mint_address in self.realtime_trades_cache:
+                for trade_wallet, trade_time in self.realtime_trades_cache[mint_address]:
+                    if trade_wallet == wallet:
+                        wallet_buy_time = trade_time
+                        break
+            
+            # Fallback to recent swaps data if available
+            if wallet_buy_time is None and 'swaps' in locals() and swaps:
+                for swap in swaps:
+                    if swap.get('wallet') == wallet and swap.get('side') == 'buy':
+                        wallet_buy_time = self._parse_timestamp(swap.get('timestamp'))
+                        break
+            
+            if wallet_buy_time:
+                buy_timestamps.append(wallet_buy_time)
+        
+        # Check temporal clustering if we have enough timestamps
+        if len(buy_timestamps) >= 2:
+            buy_timestamps.sort()
+            time_spread = buy_timestamps[-1] - buy_timestamps[0]
+            max_allowed_spread = self.config.get('alpha_enhanced', {}).get('max_time_spread_seconds', 90)
+            
+            if time_spread > max_allowed_spread:
+                self.logger.warning(f"TEMPORAL CLUSTERING FAILED: Buys spread over {time_spread:.0f}s "
+                                  f"(max allowed: {max_allowed_spread}s). "
+                                  f"First buy: {buy_timestamps[0]:.0f}, Last buy: {buy_timestamps[-1]:.0f}")
+                return {'alpha_wallets': set(), 'wallet_tiers': {}, 'confidence_score': 0,
+                       'investment_multiplier': 0.6, 'total_weight': total_adjusted_weight,
+                       'meets_threshold': False, 'temporal_clustering_failure': True,
+                       'time_spread': time_spread}
+            else:
+                self.logger.info(f"Temporal clustering PASSED: {len(buy_timestamps)} buys within {time_spread:.0f}s")
+        
         # Update weight calculations with adjusted weights
         total_weight = total_adjusted_weight
         wallet_weights = adjusted_weights  # Replace original weights with adjusted
