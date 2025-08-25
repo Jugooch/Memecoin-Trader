@@ -62,6 +62,7 @@ class TradingConfig:
     alpha_weight_min: float = 3.5  # Add alpha weight minimum threshold (conservative default)
     alpha_enhanced: Dict = None  # Add alpha enhanced configuration section
     risk_management: Dict = None  # Add risk management configuration section
+    min_confidence: float = 50.0  # Add minimum confidence threshold
 
 
 class MemecoinTradingBot:
@@ -175,7 +176,8 @@ class MemecoinTradingBot:
             notifications=config_data.get('notifications', {}),  # Add notifications section
             alpha_weight_min=config_data.get('alpha_weight_min', 3.5),  # Add alpha weight threshold
             alpha_enhanced=config_data.get('alpha_enhanced', {}),  # Add alpha enhanced section
-            risk_management=config_data.get('risk_management', {'enabled': True})  # Add risk management section
+            risk_management=config_data.get('risk_management', {'enabled': True}),  # Add risk management section
+            min_confidence=config_data.get('min_confidence', 50.0)  # Add minimum confidence threshold
         )
 
     def _get_realtime_config(self) -> Dict:
@@ -463,8 +465,8 @@ class MemecoinTradingBot:
         else:
             self.logger.debug(f"Alpha check completed in {alpha_check_duration:.1f}s: no alpha wallets found for {mint_address[:8]}...")
         
-        # Stricter alpha signal requirements
-        min_confidence = 50
+        # Use configurable confidence requirements
+        min_confidence = self.config.min_confidence
         
         # Ensure we have distinct wallets (not just one wallet buying multiple times)
         distinct_wallets = len(set(alpha_wallets))
