@@ -31,6 +31,10 @@ class Position:
     avg_cost_per_token: float
     tp1_hit_time: Optional[datetime] = None  # Track when TP1 was hit
     tp1_percentage_sold: float = 0  # Track how much was sold at TP1
+    tp2_hit_time: Optional[datetime] = None  # Track when TP2 was hit (50%)
+    tp2_percentage_sold: float = 0  # Track how much was sold at TP2
+    tp3_hit_time: Optional[datetime] = None  # Track when TP3 was hit (100%)
+    tp3_percentage_sold: float = 0  # Track how much was sold at TP3
     break_even_armed: bool = False  # Track if break-even stop is armed
     break_even_armed_time: Optional[datetime] = None  # When break-even was armed
     trailing_stop_active: bool = False  # Track if trailing stop is active
@@ -107,14 +111,22 @@ class TradingEngine:
     async def sell_token(self, mint_address: str, percentage: float, paper_mode: bool = True, symbol: str = "UNKNOWN", exit_reason: str = "unknown") -> Dict:
         """Execute a sell order for a token"""
         try:
-            # ENHANCED: Comprehensive exit logging with position details
+            # ENHANCED: Comprehensive exit logging with multi-tier details
             position_info = ""
             if mint_address in self.active_positions:
                 pos = self.active_positions[mint_address]
                 hold_time = (datetime.now() - pos.entry_time).total_seconds()
                 current_price = await self.moralis.get_current_price(mint_address, fresh=True) or pos.entry_price
                 pnl_pct = ((current_price / pos.entry_price) - 1) * 100 if pos.entry_price > 0 else 0
-                position_info = f"hold_sec={hold_time:.0f} pnl={pnl_pct:+.1f}% entry=${pos.entry_price:.8f} current=${current_price:.8f}"
+                
+                # Add multi-tier status to logging
+                multi_tier_config = getattr(self.config, 'multi_tier_exits', {})
+                if multi_tier_config.get('enabled', False):
+                    tier_status = self.get_position_tier_status(pos)
+                    tier_info = f"tier={tier_status['current_tier']} sold={tier_status['total_sold_pct']:.0%} remaining={tier_status['remaining_pct']:.0%}"
+                    position_info = f"hold_sec={hold_time:.0f} pnl={pnl_pct:+.1f}% {tier_info} entry=${pos.entry_price:.8f} current=${current_price:.8f}"
+                else:
+                    position_info = f"hold_sec={hold_time:.0f} pnl={pnl_pct:+.1f}% entry=${pos.entry_price:.8f} current=${current_price:.8f}"
             
             self.logger.info(f"Exit: mint={mint_address[:8]}... reason={exit_reason} percentage={percentage*100:.0f}% {position_info}")
             
@@ -408,30 +420,56 @@ class TradingEngine:
                 self.logger.info(f"   Exiting at {current_gain_pct:.1f}% loss to prevent further drawdown")
                 return ("scratch", 1.0)
         
-        # PHASE 3.1: Enhanced Dynamic TP1 Sizing
-        if current_price >= position.tp_price and position.tp1_hit_time is None:
-            position.tp1_hit_time = datetime.now()
-            time_to_tp1 = (position.tp1_hit_time - position.entry_time).total_seconds()
+        # PHASE 3.1: Multi-Tier Exit Strategy
+        multi_tier_config = getattr(self.config, 'multi_tier_exits', {})
+        use_multi_tier = multi_tier_config.get('enabled', False)
+        
+        if use_multi_tier:
+            # Multi-tier exit strategy for aggressive mode
+            tp2_price = position.entry_price * getattr(self.config, 'tp2_multiplier', 1.50)
+            tp3_price = position.entry_price * getattr(self.config, 'tp3_multiplier', 2.00)
             
-            # OPTIMIZED: Better TP1 logic for right tail capture
-            if current_gain_pct >= 60:  # Already at 60%+ gain
-                tp1_percentage = 0.0  # Don't take any - let it run with tight trail
-                self.logger.info(f"MOONSHOT DETECTED: {current_gain_pct:.0f}% gain, skipping TP1 to capture tail")
-                position.tp1_hit_time = datetime.now()  # Mark as hit but don't sell
-                position.trailing_stop_active = True  # Activate trailing immediately
-                return None  # Don't sell, just activate trailing
-            elif time_to_tp1 < 30:  # Ultra-fast spike (< 30 seconds)
-                tp1_percentage = 0.08  # Sell only 8% - likely strong momentum
-            elif time_to_tp1 < 60:  # < 1 minute - very fast move
-                tp1_percentage = 0.12  # Sell only 12%
-            elif time_to_tp1 < 180:  # 1-3 minutes - fast move
-                tp1_percentage = 0.20  # Sell 20%
-            else:  # > 3 minutes - normal/slow move
-                tp1_percentage = 0.25  # Sell 25% (reduced from 30%)
+            # TP1 at 25% - Sell 45%
+            if current_price >= position.tp_price and position.tp1_hit_time is None:
+                position.tp1_hit_time = datetime.now()
+                tp1_percentage = multi_tier_config.get('tp1_sell_pct', 0.45)
+                position.tp1_percentage_sold = tp1_percentage
+                self.logger.info(f"🎯 TP1 HIT: Selling {tp1_percentage*100:.0f}% at +{current_gain_pct:.1f}% gain")
+                return ("take_profit_partial", tp1_percentage)
             
-            position.tp1_percentage_sold = tp1_percentage
-            self.logger.info(f"Dynamic TP1: Selling {tp1_percentage*100:.0f}% after {time_to_tp1:.0f}s to TP")
-            return ("take_profit_partial", tp1_percentage)
+            # TP2 at 50% - Sell 35%  
+            if current_price >= tp2_price and position.tp2_hit_time is None and position.tp1_hit_time is not None:
+                position.tp2_hit_time = datetime.now()
+                tp2_percentage = multi_tier_config.get('tp2_sell_pct', 0.35)
+                position.tp2_percentage_sold = tp2_percentage
+                self.logger.info(f"🚀 TP2 HIT: Selling {tp2_percentage*100:.0f}% at +{current_gain_pct:.1f}% gain")
+                return ("take_profit_partial", tp2_percentage)
+            
+            # TP3 at 100% - Sell 15%
+            if current_price >= tp3_price and position.tp3_hit_time is None and position.tp2_hit_time is not None:
+                position.tp3_hit_time = datetime.now()
+                tp3_percentage = multi_tier_config.get('tp3_sell_pct', 0.15)
+                position.tp3_percentage_sold = tp3_percentage
+                self.logger.info(f"🌙 TP3 HIT: Selling {tp3_percentage*100:.0f}% at +{current_gain_pct:.1f}% gain (Moonshot!)")
+                return ("take_profit_partial", tp3_percentage)
+        else:
+            # Original single TP1 logic for conservative mode
+            if current_price >= position.tp_price and position.tp1_hit_time is None:
+                position.tp1_hit_time = datetime.now()
+                time_to_tp1 = (position.tp1_hit_time - position.entry_time).total_seconds()
+                
+                if time_to_tp1 < 30:  # Ultra-fast spike
+                    tp1_percentage = 0.08
+                elif time_to_tp1 < 60:  # Fast move
+                    tp1_percentage = 0.12
+                elif time_to_tp1 < 180:  # Normal move
+                    tp1_percentage = 0.20
+                else:  # Slow move
+                    tp1_percentage = 0.25
+                
+                position.tp1_percentage_sold = tp1_percentage
+                self.logger.info(f"TP1: Selling {tp1_percentage*100:.0f}% after {time_to_tp1:.0f}s")
+                return ("take_profit_partial", tp1_percentage)
         
         # PHASE 3.2: Optimized Intelligent Trailing Stops
         
@@ -453,28 +491,45 @@ class TradingEngine:
             if current_price <= trailing_stop:
                 return ("trailing_stop_fast_gain", 1.0)
         
-        # Break-even stop logic
-        if current_gain_pct >= 8 and not position.break_even_armed:
-            # Arm break-even stop at +8% gain
+        # Multi-tier aware break-even and trailing logic
+        total_sold_pct = position.tp1_percentage_sold + position.tp2_percentage_sold + position.tp3_percentage_sold
+        has_banked_profits = total_sold_pct > 0
+        
+        # Break-even stop logic - more aggressive after taking profits
+        break_even_threshold = 5 if has_banked_profits else 8
+        if current_gain_pct >= break_even_threshold and not position.break_even_armed:
             position.break_even_armed = True
             position.break_even_armed_time = datetime.now()
-            self.logger.info(f"Break-even stop armed for {mint_address[:8]}... at +{current_gain_pct:.1f}%")
+            self.logger.info(f"Break-even stop armed for {mint_address[:8]}... at +{current_gain_pct:.1f}% (banked: {has_banked_profits})")
         
         if position.break_even_armed:
             time_since_armed = (datetime.now() - position.break_even_armed_time).total_seconds()
             if time_since_armed <= 60:  # Break-even protection for 60 seconds
-                if current_price <= position.entry_price * 1.01:  # Allow 1% buffer
+                buffer = 1.005 if has_banked_profits else 1.01  # Tighter buffer after profits
+                if current_price <= position.entry_price * buffer:
                     return ("break_even_stop", 1.0)
             else:
                 # After 60 seconds, switch to normal trailing
                 position.trailing_stop_active = True
                 position.break_even_armed = False
         
-        # Standard trailing stop (less aggressive)
+        # Adaptive trailing stop based on profit-taking progress
         if position.trailing_stop_active or current_gain_pct >= 15:
-            trailing_pct = 0.85  # Trail at 85% of peak
+            # Tighter trailing after taking multi-tier profits
+            if has_banked_profits:
+                if total_sold_pct >= 0.80:  # After TP1+TP2 (80% sold)
+                    trailing_pct = 0.95  # Very tight 5% trail on final 20%
+                elif total_sold_pct >= 0.45:  # After TP1 (45% sold)
+                    trailing_pct = 0.90  # Moderate 10% trail on remaining 55%
+                else:
+                    trailing_pct = 0.85  # Standard trail
+            else:
+                trailing_pct = 0.85  # Standard trail for conservative mode
+                
             trailing_stop = position.peak_price * trailing_pct
             if current_price <= trailing_stop:
+                trail_pct = int((1 - trailing_pct) * 100)
+                self.logger.info(f"Trailing stop hit: {trail_pct}% drawdown from peak (banked {total_sold_pct:.0%})")
                 return ("trailing_stop", 1.0)
         
         # VOLATILITY-BASED STOP LOSS
@@ -709,6 +764,27 @@ class TradingEngine:
                 win_rate=summary["win_rate"],
                 active_positions=len(self.active_positions)
             )
+    
+    def get_position_tier_status(self, position: Position) -> Dict:
+        """
+        Get current tier status for multi-tier exit strategy
+        
+        Returns:
+            Dictionary with tier information and remaining position percentage
+        """
+        total_sold = position.tp1_percentage_sold + position.tp2_percentage_sold + position.tp3_percentage_sold
+        remaining_pct = 1.0 - total_sold
+        
+        tier_status = {
+            'tp1_hit': position.tp1_hit_time is not None,
+            'tp2_hit': position.tp2_hit_time is not None, 
+            'tp3_hit': position.tp3_hit_time is not None,
+            'total_sold_pct': total_sold,
+            'remaining_pct': remaining_pct,
+            'current_tier': 'runner' if position.tp3_hit_time else 'tp3_zone' if position.tp2_hit_time else 'tp2_zone' if position.tp1_hit_time else 'accumulation'
+        }
+        
+        return tier_status
     
     def should_skip_safety_checks(self, wallet_confidence: float, wallet_tier: str, signal_strength: float) -> str:
         """
