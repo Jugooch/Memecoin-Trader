@@ -84,6 +84,10 @@ class TradingConfig:
     paper_trading: Dict = None
     pumpportal: Dict = None
     realtime_source: str = 'bitquery'
+    # Dynamic TP configuration
+    tp2_multiplier: float = 1.50
+    tp3_multiplier: float = 2.00
+    multi_tier_exits: Dict = None
 
 
 class MemecoinTradingBot:
@@ -215,7 +219,11 @@ class MemecoinTradingBot:
             safety_hybrid=config_data.get('safety_hybrid', {}),
             paper_trading=config_data.get('paper_trading', {}),
             pumpportal=config_data.get('pumpportal', {}),
-            realtime_source=config_data.get('realtime_source', 'bitquery')
+            realtime_source=config_data.get('realtime_source', 'bitquery'),
+            # Dynamic TP configuration
+            tp2_multiplier=config_data.get('tp2_multiplier', 1.50),
+            tp3_multiplier=config_data.get('tp3_multiplier', 2.00),
+            multi_tier_exits=config_data.get('multi_tier_exits', {})
         )
 
     def _get_realtime_config(self) -> Dict:
