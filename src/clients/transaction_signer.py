@@ -34,9 +34,9 @@ class TransactionSigner:
             try:
                 # Decode base58 private key to bytes
                 private_key_bytes = base58.b58decode(private_key_base58)
-                # Create keypair from private key
-                self.keypair = Keypair.from_secret_key(private_key_bytes)
-                self.logger.info(f"Wallet loaded: {str(self.keypair.public_key)[:8]}...")
+                # Create keypair from private key (solders uses different method)
+                self.keypair = Keypair.from_bytes(private_key_bytes)
+                self.logger.info(f"Wallet loaded: {str(self.keypair.pubkey())[:8]}...")
             except Exception as e:
                 self.logger.error(f"Failed to load wallet from private key: {e}")
                 raise
@@ -172,7 +172,7 @@ class TransactionSigner:
             
             result = await self._make_rpc_request(
                 "getBalance",
-                [str(self.keypair.public_key)]
+                [str(self.keypair.pubkey())]
             )
             
             if "error" not in result and "value" in result:
@@ -195,7 +195,7 @@ class TransactionSigner:
             result = await self._make_rpc_request(
                 "getTokenAccountsByOwner",
                 [
-                    str(self.keypair.public_key),
+                    str(self.keypair.pubkey()),
                     {"mint": mint_address},
                     {"encoding": "jsonParsed"}
                 ]
@@ -218,7 +218,7 @@ class TransactionSigner:
     def get_wallet_address(self) -> Optional[str]:
         """Get the wallet's public address"""
         if self.keypair:
-            return str(self.keypair.public_key)
+            return str(self.keypair.pubkey())
         return None
     
     async def close(self):
