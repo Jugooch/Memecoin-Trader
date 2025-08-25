@@ -11,6 +11,7 @@ from datetime import datetime
 
 from src.clients.pumpfun_client import PumpFunClient
 from src.clients.moralis_client import MoralisClient
+from src.clients.transaction_signer import TransactionSigner
 from src.utils.discord_notifier import DiscordNotifier
 from src.utils.pnl_store import PnLStore
 
@@ -49,6 +50,22 @@ class TradingEngine:
         # Initialize clients
         self.pumpfun = PumpFunClient(config.quicknode_endpoint, config.quicknode_api_key)
         self.moralis = moralis_client  # Use shared client instead of creating new one
+        
+        # Initialize transaction signer for live trading (using wallet keys from pumpportal)
+        self.transaction_signer = None
+        if hasattr(config, 'pumpportal') and config.pumpportal:
+            wallet_private_key = config.pumpportal.get('wallet_private_key')
+            if wallet_private_key and config.quicknode_endpoint:
+                try:
+                    self.transaction_signer = TransactionSigner(
+                        quicknode_endpoint=config.quicknode_endpoint,
+                        quicknode_api_key=config.quicknode_api_key,
+                        private_key_base58=wallet_private_key
+                    )
+                    self.logger.info(f"Live trading wallet initialized: {self.transaction_signer.get_wallet_address()[:8]}...")
+                except Exception as e:
+                    self.logger.error(f"Failed to initialize transaction signer: {e}")
+                    self.transaction_signer = None
         
         # Initialize Discord notifier
         webhook_url = None
@@ -94,7 +111,7 @@ class TradingEngine:
             if paper_mode:
                 return await self._execute_paper_buy(mint_address, usd_amount, symbol, confidence_score)
             else:
-                return await self._execute_real_buy(mint_address, usd_amount)
+                return await self._execute_real_buy(mint_address, usd_amount, symbol)
                 
         except Exception as e:
             self.logger.error(f"Error executing buy: {e}")
@@ -133,7 +150,7 @@ class TradingEngine:
             if paper_mode:
                 return await self._execute_paper_sell(mint_address, percentage, symbol, exit_reason)
             else:
-                return await self._execute_real_sell(mint_address, percentage, exit_reason)
+                return await self._execute_real_sell(mint_address, percentage, symbol, exit_reason)
                 
         except Exception as e:
             self.logger.error(f"Error executing sell: {e}")
@@ -257,12 +274,138 @@ class TradingEngine:
             "paper_mode": True
         }
 
-    async def _execute_real_buy(self, mint_address: str, usd_amount: float) -> Dict:
-        """Execute a real buy transaction"""
-        # This would require actual wallet integration
-        # For now, implement paper trading logic
-        self.logger.warning("Real trading not implemented, falling back to paper mode")
-        return await self._execute_paper_buy(mint_address, usd_amount)
+    async def _execute_real_buy(self, mint_address: str, usd_amount: float, symbol: str = "UNKNOWN") -> Dict:
+        """Execute a real buy transaction via QuickNode/PumpFun API"""
+        try:
+            # Check trading mode
+            trading_mode = getattr(self.config, 'trading_mode', 'simulation')
+            
+            if trading_mode != 'auto':
+                self.logger.warning(f"Trading mode is '{trading_mode}', not executing real trade")
+                return await self._execute_paper_buy(mint_address, usd_amount, symbol)
+            
+            # Check if we have transaction signer
+            if not self.transaction_signer:
+                self.logger.error("Transaction signer not initialized for live trading")
+                return {"success": False, "error": "Transaction signer not configured"}
+            
+            # Check if we have QuickNode configuration
+            if not self.pumpfun or not self.config.quicknode_endpoint:
+                self.logger.error("QuickNode not configured for live trading")
+                return {"success": False, "error": "QuickNode not configured"}
+            
+            # Get wallet public key from pumpportal config
+            wallet_pubkey = self.config.pumpportal.get('wallet_public_key') if hasattr(self.config, 'pumpportal') else None
+            
+            if not wallet_pubkey:
+                self.logger.error("Wallet public key not configured in pumpportal section")
+                return {"success": False, "error": "Wallet public key not configured"}
+            
+            # Convert USD to SOL
+            sol_price = getattr(self.config, "paper_trading", {}).get("sol_price_estimate", 140)
+            sol_amount = usd_amount / sol_price
+            
+            # Get current price for reference
+            current_price = await self.moralis.get_current_price(mint_address)
+            if current_price <= 0:
+                return {"success": False, "error": "Could not get current price"}
+            
+            # Check wallet balance
+            wallet_balance = await self.transaction_signer.get_wallet_balance()
+            if wallet_balance is None or wallet_balance < sol_amount:
+                self.logger.error(f"Insufficient balance: {wallet_balance:.4f} SOL < {sol_amount:.4f} SOL needed")
+                return {"success": False, "error": f"Insufficient balance: {wallet_balance:.4f} SOL"}
+            
+            # Create buy transaction via QuickNode pump-fun API
+            self.logger.info(f"Creating live buy transaction: ${usd_amount} ({sol_amount:.4f} SOL) for {symbol}")
+            
+            # Use conservative slippage for live trading
+            slippage_bps = 200  # 2% slippage
+            
+            tx_result = await self.pumpfun.create_buy_transaction(
+                wallet_pubkey=wallet_pubkey,
+                mint_address=mint_address,
+                sol_amount=sol_amount,
+                slippage_bps=slippage_bps
+            )
+            
+            if not tx_result.get("success"):
+                self.logger.error(f"Failed to create buy transaction: {tx_result.get('error')}")
+                return tx_result
+            
+            # Get the base64 transaction
+            transaction_b64 = tx_result.get("transaction")
+            if not transaction_b64:
+                return {"success": False, "error": "No transaction returned"}
+            
+            # Sign and send transaction
+            self.logger.info("Signing and sending transaction...")
+            send_result = await self.transaction_signer.sign_and_send_transaction(transaction_b64)
+            
+            if send_result.get("success"):
+                tx_signature = send_result.get("signature")
+                self.logger.info(f"✅ Live buy executed: {symbol} for ${usd_amount} - TX: {tx_signature}")
+                
+                # Create position tracking
+                estimated_tokens = sol_amount * (10**9) / current_price  # Rough estimate
+                position = Position(
+                    mint=mint_address,
+                    entry_price=current_price,
+                    amount=estimated_tokens,
+                    sol_invested=sol_amount,
+                    entry_time=datetime.now(),
+                    tp_price=current_price * self.config.tp_multiplier,
+                    sl_price=current_price * self.config.stop_loss_pct,
+                    peak_price=current_price,
+                    paper_mode=False,  # This is live trading
+                    tokens_initial=estimated_tokens,
+                    cost_usd_remaining=usd_amount,
+                    avg_cost_per_token=usd_amount / estimated_tokens
+                )
+                
+                self.active_positions[mint_address] = position
+                
+                # Record in P&L store
+                self.pnl_store.add_trade(
+                    action="BUY",
+                    symbol=symbol,
+                    mint_address=mint_address,
+                    amount=estimated_tokens,
+                    price=current_price,
+                    usd_value=usd_amount,
+                    paper_mode=False
+                )
+                
+                # Send Discord notification
+                if self.notifier:
+                    await self.notifier.send_trade_notification(
+                        side="BUY",
+                        symbol=symbol,
+                        mint_address=mint_address,
+                        quantity=estimated_tokens,
+                        price=current_price,
+                        usd_amount=usd_amount,
+                        equity=self.pnl_store.current_equity,
+                        paper_mode=False,
+                        tx_signature=tx_signature
+                    )
+                
+                return {
+                    "success": True,
+                    "tx_signature": tx_signature,
+                    "sol_amount": sol_amount,
+                    "usd_amount": usd_amount,
+                    "estimated_tokens": estimated_tokens,
+                    "symbol": symbol,
+                    "paper_mode": False
+                }
+            else:
+                self.logger.error(f"Failed to send transaction: {send_result.get('error')}")
+                return send_result
+            
+        except Exception as e:
+            self.logger.error(f"Error in real buy execution: {e}")
+            return {"success": False, "error": str(e)}
 
     async def _execute_paper_sell(self, mint_address: str, percentage: float, symbol: str = "UNKNOWN", exit_reason: str = "unknown") -> Dict:
         """Execute a paper trading sell"""
@@ -373,11 +516,154 @@ class TradingEngine:
             "paper_mode": True
         }
 
-    async def _execute_real_sell(self, mint_address: str, percentage: float, exit_reason: str = "unknown") -> Dict:
-        """Execute a real sell transaction"""
-        # This would require actual wallet integration
-        self.logger.warning("Real trading not implemented, falling back to paper mode")
-        return await self._execute_paper_sell(mint_address, percentage, exit_reason=exit_reason)
+    async def _execute_real_sell(self, mint_address: str, percentage: float, symbol: str = "UNKNOWN", exit_reason: str = "unknown") -> Dict:
+        """Execute a real sell transaction via QuickNode/PumpFun API"""
+        try:
+            # Check trading mode
+            trading_mode = getattr(self.config, 'trading_mode', 'simulation')
+            
+            if trading_mode != 'auto':
+                self.logger.warning(f"Trading mode is '{trading_mode}', not executing real trade")
+                return await self._execute_paper_sell(mint_address, percentage, symbol, exit_reason)
+            
+            # Check if we have the position
+            if mint_address not in self.active_positions:
+                self.logger.error(f"No active position for {mint_address}")
+                return {"success": False, "error": "No active position"}
+            
+            position = self.active_positions[mint_address]
+            
+            # Check if we have transaction signer
+            if not self.transaction_signer:
+                self.logger.error("Transaction signer not initialized for live trading")
+                return {"success": False, "error": "Transaction signer not configured"}
+            
+            # Check if we have QuickNode configuration
+            if not self.pumpfun or not self.config.quicknode_endpoint:
+                self.logger.error("QuickNode not configured for live trading")
+                return {"success": False, "error": "QuickNode not configured"}
+            
+            # Get wallet public key from pumpportal config
+            wallet_pubkey = self.config.pumpportal.get('wallet_public_key') if hasattr(self.config, 'pumpportal') else None
+            
+            if not wallet_pubkey:
+                self.logger.error("Wallet public key not configured")
+                return {"success": False, "error": "Wallet public key not configured"}
+            
+            # Get actual token balance from blockchain
+            token_balance = await self.transaction_signer.get_token_balance(mint_address)
+            if token_balance is None or token_balance <= 0:
+                self.logger.error(f"No token balance found for {mint_address}")
+                return {"success": False, "error": "No tokens to sell"}
+            
+            # Calculate token amount to sell
+            tokens_to_sell = token_balance * percentage
+            
+            # Get current price for logging
+            current_price = await self.moralis.get_current_price(mint_address, fresh=True)
+            if current_price <= 0:
+                current_price = position.entry_price
+            
+            # Create sell transaction
+            self.logger.info(f"Creating live sell transaction: {percentage*100:.0f}% of {symbol} position ({tokens_to_sell:.2f} tokens)")
+            
+            # Use conservative slippage for sells
+            slippage_bps = 300  # 3% slippage for sells
+            
+            tx_result = await self.pumpfun.create_sell_transaction(
+                wallet_pubkey=wallet_pubkey,
+                mint_address=mint_address,
+                token_amount=tokens_to_sell,
+                slippage_bps=slippage_bps
+            )
+            
+            if not tx_result.get("success"):
+                self.logger.error(f"Failed to create sell transaction: {tx_result.get('error')}")
+                return tx_result
+            
+            # Get the base64 transaction
+            transaction_b64 = tx_result.get("transaction")
+            if not transaction_b64:
+                return {"success": False, "error": "No transaction returned"}
+            
+            # Sign and send transaction
+            self.logger.info("Signing and sending sell transaction...")
+            send_result = await self.transaction_signer.sign_and_send_transaction(transaction_b64)
+            
+            if send_result.get("success"):
+                tx_signature = send_result.get("signature")
+                pnl_pct = ((current_price / position.entry_price) - 1) * 100
+                estimated_sol = tx_result.get("estimated_sol", 0)
+                
+                self.logger.info(f"✅ Live sell executed: {percentage*100:.0f}% of {symbol} at {pnl_pct:+.1f}% P&L - TX: {tx_signature}")
+                
+                # Update position
+                if percentage >= 0.99:  # Full exit
+                    del self.active_positions[mint_address]
+                else:
+                    # Update remaining position
+                    position.amount *= (1 - percentage)
+                    position.cost_usd_remaining *= (1 - percentage)
+                
+                # Calculate profit
+                sol_price = getattr(self.config, "paper_trading", {}).get("sol_price_estimate", 140)
+                usd_value = estimated_sol * sol_price
+                cost_basis = position.cost_usd_remaining * percentage
+                profit_usd = usd_value - cost_basis
+                profit_pct = (profit_usd / cost_basis) * 100 if cost_basis > 0 else 0
+                
+                # Update P&L
+                self.pnl_store.add_trade(
+                    action="SELL",
+                    symbol=symbol,
+                    mint_address=mint_address,
+                    amount=tokens_to_sell,
+                    price=current_price,
+                    usd_value=usd_value,
+                    paper_mode=False,
+                    profit=profit_usd
+                )
+                
+                # Update win rate
+                self.total_trades += 1
+                if profit_usd > 0:
+                    self.winning_trades += 1
+                
+                # Send Discord notification
+                if self.notifier:
+                    await self.notifier.send_trade_notification(
+                        side="SELL",
+                        symbol=symbol,
+                        mint_address=mint_address,
+                        quantity=tokens_to_sell,
+                        price=current_price,
+                        usd_amount=usd_value,
+                        equity=self.pnl_store.current_equity,
+                        paper_mode=False,
+                        profit=profit_usd,
+                        profit_pct=profit_pct,
+                        exit_reason=exit_reason,
+                        tx_signature=tx_signature
+                    )
+                
+                return {
+                    "success": True,
+                    "tx_signature": tx_signature,
+                    "tokens_sold": tokens_to_sell,
+                    "estimated_sol": estimated_sol,
+                    "usd_value": usd_value,
+                    "profit_usd": profit_usd,
+                    "profit_pct": profit_pct,
+                    "symbol": symbol,
+                    "paper_mode": False
+                }
+            else:
+                self.logger.error(f"Failed to send sell transaction: {send_result.get('error')}")
+                return send_result
+            
+        except Exception as e:
+            self.logger.error(f"Error in real sell execution: {e}")
+            return {"success": False, "error": str(e)}
 
     async def check_exit_conditions(self, mint_address: str, current_price: float = 0) -> Optional[tuple]:
         """
