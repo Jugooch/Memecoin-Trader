@@ -114,7 +114,7 @@ class MemecoinTradingBot:
         # Initialize wallet rotation manager (will get discord notifier and realtime client later)
         self.wallet_rotation_manager = WalletRotationManager(
             self.wallet_tracker, self.realtime_client.bitquery_client, self.moralis, self.database, config_path,
-            realtime_client=self.realtime_client, config=self.config.to_dict()
+            realtime_client=self.realtime_client
         )
         
         # Monitoring state

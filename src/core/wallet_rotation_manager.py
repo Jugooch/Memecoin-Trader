@@ -17,16 +17,19 @@ from src.core.database import Database
 class WalletRotationManager:
     def __init__(self, wallet_tracker: WalletTracker, bitquery: BitqueryClient, 
                  moralis: MoralisClient, database: Database, config_path: str = "config/config.yml",
-                 discord_notifier=None, realtime_client=None, config: Dict = None):
+                 discord_notifier=None, realtime_client=None):
         self.wallet_tracker = wallet_tracker
         self.bitquery = bitquery
         self.moralis = moralis
         self.database = database
         self.config_path = config_path
-        self.config = config or {}
         self.discord_notifier = discord_notifier
         self.realtime_client = realtime_client  # Add realtime client for updating subscriptions
         self.logger = logging.getLogger(__name__)
+        
+        # Load config from file
+        from src.utils.config_loader import load_config
+        self.config = load_config(config_path.split('/')[-1]) if '/' in config_path else load_config(config_path)
         
         # Rotation settings - read from config or use defaults
         rotation_config = self.config.get('wallet_rotation', {})
