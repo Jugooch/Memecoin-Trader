@@ -37,5 +37,5 @@ echo "📊 Log: logs/trading_aggressive.log"
 echo "🎯 Strategy: Fast execution, single wallet triggers"
 echo "=============================================="
 
-# Start aggressive trading bot
-"$PYTHON" main.py --config config_aggressive.yml --bot-name AGGRESSIVE
+# Start aggressive trading bot (using dedicated startup script like original)
+"$PYTHON" start_bot_aggressive.py
