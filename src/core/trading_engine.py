@@ -342,7 +342,7 @@ class TradingEngine:
             self.logger.info(f"Creating live buy transaction: ${usd_amount} ({sol_amount:.4f} SOL) for {symbol}")
             
             # Use conservative slippage for live trading
-            slippage_bps = 200  # 2% slippage
+            slippage_bps = 1000  # 10% slippage for pump.fun tokens (higher volatility)
             
             tx_result = await self.pumpfun.create_buy_transaction(
                 wallet_pubkey=wallet_pubkey,
@@ -590,7 +590,7 @@ class TradingEngine:
             self.logger.info(f"Creating live sell transaction: {percentage*100:.0f}% of {symbol} position ({tokens_to_sell:.2f} tokens)")
             
             # Use conservative slippage for sells
-            slippage_bps = 300  # 3% slippage for sells
+            slippage_bps = 1000  # 10% slippage for pump.fun sells
             
             tx_result = await self.pumpfun.create_sell_transaction(
                 wallet_pubkey=wallet_pubkey,
