@@ -50,6 +50,7 @@ class TradingConfig:
     tp_multiplier: float
     stop_loss_pct: float
     paper_mode: bool
+    trading_mode: str
     initial_capital: float
     max_trades_per_day: int
     min_time_between_trades: int
@@ -190,6 +191,7 @@ class MemecoinTradingBot:
             tp_multiplier=config_data['tp_multiplier'],
             stop_loss_pct=config_data['stop_loss_pct'],
             paper_mode=config_data.get('trading_mode', 'simulation') == 'simulation',
+            trading_mode=config_data.get('trading_mode', 'simulation'),
             initial_capital=config_data['trading']['initial_capital'],
             max_trades_per_day=config_data['trading']['max_trades_per_day'],
             min_time_between_trades=config_data['trading']['min_time_between_trades'],
