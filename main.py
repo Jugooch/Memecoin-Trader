@@ -435,9 +435,8 @@ class MemecoinTradingBot:
         min_token_age = self.config.min_token_age_seconds
         
         if token_age < min_token_age:
-            wait_time = min_token_age - token_age
-            self.logger.info(f"Token {mint_address[:8]}... is too new ({token_age:.1f}s), waiting {wait_time:.1f}s for Moralis indexing")
-            await asyncio.sleep(wait_time)
+            self.logger.info(f"⚡ SPEED MODE: Token {mint_address[:8]}... is {token_age:.1f}s old - SKIPPING {min_token_age}s Moralis wait for ALL wallets (need successful trades to discover S-tier)")
+            # Skip delay completely - can't discover good wallets if trades never succeed
         
         # Now check Moralis, but be more lenient with liquidity for alpha-signaled tokens
         try:
