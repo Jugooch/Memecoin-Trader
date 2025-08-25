@@ -222,7 +222,6 @@ class MemecoinTradingBot:
             scratch_rule=config_data.get('scratch_rule', {}),
             safety_hybrid=config_data.get('safety_hybrid', {}),
             paper_trading=config_data.get('paper_trading', {}),
-            pumpportal=config_data.get('pumpportal', {}),
             realtime_source=config_data.get('realtime_source', 'bitquery'),
             # Dynamic TP configuration
             tp2_multiplier=config_data.get('tp2_multiplier', 1.50),
