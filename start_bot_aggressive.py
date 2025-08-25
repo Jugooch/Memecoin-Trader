@@ -43,8 +43,8 @@ class BotManager:
             # Initialize bot with aggressive config
             self.bot = MemecoinTradingBot(config_path=config_file)
             
-            # Initialize monitoring
-            self.performance_monitor = PerformanceMonitor()
+            # Initialize monitoring (needs database from bot)
+            self.performance_monitor = PerformanceMonitor(self.bot.database)
             self.system_monitor = SystemMonitor()
             
             # Start monitoring tasks
