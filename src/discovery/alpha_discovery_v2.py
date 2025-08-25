@@ -53,19 +53,27 @@ class ProvenAlphaFinder:
         self.config = config or {}
         self.logger = logging.getLogger(__name__)
         
-        # Strategy parameters - Aligned with 2-3 minute pump trading
-        # Focus on ultra-fast gains matching our TP targets
-        self.success_thresholds = {
+        # Strategy parameters - Read from config or use defaults
+        # Get discovery success thresholds from config
+        api_opt = self.config.get('api_optimization', {})
+        self.success_thresholds = api_opt.get('discovery_success_thresholds', {
             'high': 1.3,      # 1.3x = 30% gain (matches reduced TP target)
             'medium': 1.2,    # 1.2x = 20% gain (good quick pump)
             'low': 1.1       # 1.1x = 10% gain (minimum after fees)
-        }
-        self.early_window_seconds = 180   # First 3 minutes = early (matches our entry window)
-        self.min_wallet_appearances = {
+        })
+        
+        # Get early window from config (in minutes, convert to seconds)
+        self.early_window_seconds = api_opt.get('discovery_early_window_minutes', 3) * 60
+        
+        # Get minimum wallet appearances from config
+        self.min_wallet_appearances = api_opt.get('discovery_min_appearances', {
             'tier_1': 2,      # High-quality wallets: 2+ high success tokens
             'tier_2': 3,      # Medium-quality wallets: 3+ medium success tokens
             'tier_3': 4       # Emerging wallets: 4+ low success tokens
-        }
+        })
+        
+        self.logger.info(f"Discovery config loaded: thresholds={self.success_thresholds}, "
+                        f"early_window={self.early_window_seconds}s, appearances={self.min_wallet_appearances}")
         
     async def discover_alpha_wallets(self) -> List[str]:
         """Optimized discovery process - Bitquery-first approach with comprehensive diagnostics"""
@@ -476,9 +484,14 @@ class ProvenAlphaFinder:
                     score += 20
                 else:
                     # Track rejection reasons for debugging
-                    if unique_traders < 10:
+                    # Get prefilter thresholds from config
+                    prefilter_config = self.config.get('discovery_prefilter', {})
+                    min_traders = prefilter_config.get('min_unique_traders', 10)
+                    min_swaps = prefilter_config.get('min_swap_count', 20)
+                    
+                    if unique_traders < min_traders:
                         tokens_rejected_low_traders += 1
-                    if swap_count < 20:
+                    if swap_count < min_swaps:
                         tokens_rejected_low_swaps += 1
                     if performance_multiplier is None:
                         tokens_rejected_no_price_low_activity += 1

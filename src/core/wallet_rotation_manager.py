@@ -17,22 +17,28 @@ from src.core.database import Database
 class WalletRotationManager:
     def __init__(self, wallet_tracker: WalletTracker, bitquery: BitqueryClient, 
                  moralis: MoralisClient, database: Database, config_path: str = "config/config.yml",
-                 discord_notifier=None, realtime_client=None):
+                 discord_notifier=None, realtime_client=None, config: Dict = None):
         self.wallet_tracker = wallet_tracker
         self.bitquery = bitquery
         self.moralis = moralis
         self.database = database
         self.config_path = config_path
+        self.config = config or {}
         self.discord_notifier = discord_notifier
         self.realtime_client = realtime_client  # Add realtime client for updating subscriptions
         self.logger = logging.getLogger(__name__)
         
-        # Rotation settings
-        self.rotation_interval = 2 * 3600  # 2 hours in seconds
-        self.min_wallets = 50
-        self.max_wallets = 100
-        self.retention_threshold = 50.0
-        self.high_performer_threshold = 70.0
+        # Rotation settings - read from config or use defaults
+        rotation_config = self.config.get('wallet_rotation', {})
+        self.rotation_interval = rotation_config.get('interval_hours', 2) * 3600  # Convert hours to seconds
+        self.min_wallets = rotation_config.get('min_wallets', 50)
+        self.max_wallets = rotation_config.get('max_wallets', 100)
+        self.retention_threshold = rotation_config.get('retention_threshold', 50.0)
+        self.high_performer_threshold = rotation_config.get('high_performer_threshold', 70.0)
+        
+        self.logger.info(f"Wallet rotation config: interval={self.rotation_interval/3600}h, "
+                        f"wallets={self.min_wallets}-{self.max_wallets}, "
+                        f"thresholds={self.retention_threshold}/{self.high_performer_threshold}")
         
         # Track last rotation
         self.last_rotation = 0
@@ -109,7 +115,7 @@ class WalletRotationManager:
         if target_new_wallets > 0:
             discovery_start = time.time()
             try:
-                finder = ProvenAlphaFinder(self.bitquery, self.moralis, self.database)
+                finder = ProvenAlphaFinder(self.bitquery, self.moralis, self.database, self.config)
                 discovered_wallets = await finder.discover_alpha_wallets()
                 
                 if discovered_wallets:
