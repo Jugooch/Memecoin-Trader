@@ -38,4 +38,4 @@ echo "🎯 Strategy: Fast execution, single wallet triggers"
 echo "=============================================="
 
 # Start aggressive trading bot
-"$PYTHON" main.py --config config/config_aggressive.yml --bot-name AGGRESSIVE
+"$PYTHON" main.py --config config_aggressive.yml --bot-name AGGRESSIVE
