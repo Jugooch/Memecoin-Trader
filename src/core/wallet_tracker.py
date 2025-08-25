@@ -160,22 +160,24 @@ class WalletTracker:
             
         moralis = moralis_client
         
-        # Optimized polling: max 3 polls with early abort conditions
-        # Total: 5 + 20 + 40 = 65 seconds, only 3 API calls maximum
-        poll_intervals = [5, 20, 40]
+        # Optimized polling: use config values for aggressive vs conservative
+        api_config = self.config.get('api_optimization', {})
+        poll_intervals = api_config.get('alpha_poll_intervals', [5, 20, 40])
+        max_polls = api_config.get('alpha_polls_max', 3)
         poll_count = 0
         last_alpha_count = 0
         unique_buyers = 0
         buy_to_sell_ratio = 0
         
         for i, interval in enumerate(poll_intervals):
-            # Check if we've exceeded our time window
-            if time.time() - start_time >= time_window_sec:
+            # Check if we've exceeded our time window or max polls
+            if time.time() - start_time >= time_window_sec or i >= max_polls:
                 break
                 
             try:
-                # Use smaller limit (50 vs 100) and alpha-optimized TTL
-                swaps = await moralis.get_token_swaps(mint_address, limit=100, ttl_override='swaps_alpha')
+                # Use configurable limit for alpha checks
+                swap_limit = api_config.get('alpha_swap_limit', 100)
+                swaps = await moralis.get_token_swaps(mint_address, limit=swap_limit, ttl_override='swaps_alpha')
                 poll_count += 1
                 
                 # Track market activity for early abort decisions
@@ -230,10 +232,12 @@ class WalletTracker:
                 unique_buyers = len(unique_buyers_set)
                 buy_to_sell_ratio = total_buys / max(total_sells, 1)  # Avoid division by zero
                 
-                # Early abort conditions after first poll
+                # Early abort conditions after first poll (configurable for aggressive trading)
                 if i == 0:  # First poll
-                    if unique_buyers < 10 and buy_to_sell_ratio < 1.0:
-                        self.logger.debug(f"Early abort: poor activity ({unique_buyers} buyers, ratio {buy_to_sell_ratio:.2f})")
+                    min_buyers_abort = api_config.get('alpha_early_abort_min_buyers', 10)
+                    min_ratio_abort = api_config.get('alpha_early_abort_buy_sell_ratio', 1.0)
+                    if unique_buyers < min_buyers_abort and buy_to_sell_ratio < min_ratio_abort:
+                        self.logger.debug(f"Early abort: poor activity ({unique_buyers} buyers < {min_buyers_abort}, ratio {buy_to_sell_ratio:.2f} < {min_ratio_abort})")
                         break
                 
                 # Early exit if we reach threshold

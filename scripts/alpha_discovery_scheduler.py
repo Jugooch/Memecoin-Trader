@@ -34,7 +34,7 @@ async def run_discovery():
         
         # Initialize clients
         bitquery = BitqueryClient(config.get('bitquery_tokens', config.get('bitquery_token')))
-        moralis = MoralisClient(config.get('moralis_keys', config.get('moralis_key')))
+        moralis = MoralisClient(config.get('moralis_keys', config.get('moralis_key')), config.get('api_optimization', {}))
         database = Database(get_database_path(config))
         
         await database.initialize()

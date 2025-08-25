@@ -225,7 +225,7 @@ class SafetyChecker:
         }
     
     def check_token_safety(self, mint: str, order_size_usd: float, recent_trades: List[Dict],
-                          max_impact: float = 0.01, current_price: float = None) -> Dict:
+                          max_impact: float = 0.01, current_price: float = None, bypass_sellability: bool = False) -> Dict:
         """
         Comprehensive safety check combining sellability and price impact
         
@@ -238,8 +238,11 @@ class SafetyChecker:
         Returns:
             Dictionary with safety results
         """
-        # Enhanced sellability check (skip if disabled)
-        if self.config.get('require_sellability', True):
+        # Enhanced sellability check (skip if disabled or bypassed)
+        if bypass_sellability:
+            sellability_result = {'is_sellable': True, 'reason': 'Sellability check bypassed by safety hybrid'}
+            is_sellable = True
+        elif self.config.get('require_sellability', True):
             sellability_result = self.check_sellability(mint, recent_trades)
             is_sellable = sellability_result['is_sellable']
         else:

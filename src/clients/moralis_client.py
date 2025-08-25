@@ -12,7 +12,7 @@ import json
 
 
 class MoralisClient:
-    def __init__(self, api_keys):
+    def __init__(self, api_keys, api_optimization_config: Dict = None):
         # Support both single key (string) and multiple keys (list)
         if isinstance(api_keys, str):
             self.api_keys = [api_keys]
@@ -21,6 +21,7 @@ class MoralisClient:
             
         self.base_url = "https://solana-gateway.moralis.io"
         self.logger = logging.getLogger(__name__)
+        self.api_config = api_optimization_config or {}
 
         # Key rotation management
         self.current_key_index = 0
@@ -43,13 +44,14 @@ class MoralisClient:
         
         # Smart caching to reduce API calls - mode-aware TTLs
         self.cache = {}
+        # Use config values if available, otherwise fallback to defaults
         self.cache_ttl = {
-            'metadata': 7200,     # Cache metadata for 2 hours (very stable data)
-            'liquidity': 600,     # Cache liquidity for 10 minutes (reduce from 15)
-            'price': 8,           # Cache price for 8 seconds (use fresh=True for monitoring)
-            'swaps': 30,          # Cache swaps for 30 seconds (reduce calls during discovery)
-            'swaps_alpha': 10,    # Short TTL for alpha checks (more frequent updates)
-            'holders': 1800       # Cache holders for 30 minutes (changes slowly)
+            'metadata': self.api_config.get('metadata_ttl', 7200),     # Cache metadata for 2 hours (very stable data)
+            'liquidity': self.api_config.get('liquidity_ttl', 600),     # Cache liquidity for 10 minutes (reduce from 15)
+            'price': self.api_config.get('price_ttl', 8),           # Cache price for 8 seconds (use fresh=True for monitoring)
+            'swaps': self.api_config.get('swaps_ttl', 30),          # Cache swaps for 30 seconds (reduce calls during discovery)
+            'swaps_alpha': self.api_config.get('swaps_alpha_ttl', 10),    # Short TTL for alpha checks (more frequent updates)
+            'holders': self.api_config.get('holders_ttl', 1800)       # Cache holders for 30 minutes (changes slowly)
         }
         
         # Cache cleanup tracking

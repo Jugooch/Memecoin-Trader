@@ -66,6 +66,24 @@ class TradingConfig:
     risk_management: Dict = None  # Add risk management configuration section
     min_confidence: float = 50.0  # Add minimum confidence threshold
     safety: Dict = None  # Add safety configuration section
+    # Timing and strategy settings
+    max_entry_delay_seconds: int = 180
+    price_extension_percentile: int = 90
+    max_hold_seconds: int = 900
+    min_token_age_seconds: int = 15
+    alpha_first_strategy: bool = True
+    # Advanced sections
+    api_optimization: Dict = None
+    discovery_position_filters: Dict = None
+    discovery_quality_checks: Dict = None
+    scratch_rule: Dict = None
+    safety_hybrid: Dict = None
+    # History and monitoring durations
+    trade_history_duration: int = 604800  # 7 days
+    latency_history_duration: int = 3600  # 1 hour
+    paper_trading: Dict = None
+    pumpportal: Dict = None
+    realtime_source: str = 'bitquery'
 
 
 class MemecoinTradingBot:
@@ -74,7 +92,7 @@ class MemecoinTradingBot:
         self.logger = setup_logging(self.config.logging_level, self.config.logging_file)
         
         self.realtime_client = RealtimeClient(self._get_realtime_config())
-        self.moralis = MoralisClient(self.config.moralis_key)
+        self.moralis = MoralisClient(self.config.moralis_key, self.config.api_optimization)
         
         # QuickNode is optional - only for automated trading
         self.pumpfun = None
@@ -120,14 +138,14 @@ class MemecoinTradingBot:
         
         # In-memory trade history for summaries (to avoid database issues)
         self.recent_trades = []  # List of trade dicts with timestamps
-        self.trade_history_duration = 604800  # Keep 7 days of trade history (7 * 24 * 60 * 60)
+        self.trade_history_duration = getattr(self.config, 'trade_history_duration', 604800)  # Keep 7 days of trade history (7 * 24 * 60 * 60)
         
         # Token safety tracking
         self.token_safety_cache = {}  # Cache safety scores to avoid re-checking
         
         # Execution latency tracking
         self.execution_latencies = []  # Store recent latencies for monitoring
-        self.latency_history_duration = 3600  # Keep 1 hour of latency data
+        self.latency_history_duration = getattr(self.config, 'latency_history_duration', 3600)  # Keep 1 hour of latency data
         
         # Smart token cache with different TTLs based on processing outcome
         self.processed_tokens = {}  # Now stores {token: {'timestamp': time, 'status': str, 'reason': str}}
@@ -182,7 +200,22 @@ class MemecoinTradingBot:
             alpha_enhanced=config_data.get('alpha_enhanced', {}),  # Add alpha enhanced section
             risk_management=config_data.get('risk_management', {'enabled': True}),  # Add risk management section
             min_confidence=config_data.get('min_confidence', 50.0),  # Add minimum confidence threshold
-            safety=config_data.get('safety', {})  # Add safety configuration section
+            safety=config_data.get('safety', {}),  # Add safety configuration section
+            # Timing and strategy settings
+            max_entry_delay_seconds=config_data.get('max_entry_delay_seconds', 180),
+            price_extension_percentile=config_data.get('price_extension_percentile', 90),
+            max_hold_seconds=config_data.get('max_hold_seconds', 900),
+            min_token_age_seconds=config_data.get('min_token_age_seconds', 15),
+            alpha_first_strategy=config_data.get('alpha_first_strategy', True),
+            # Advanced sections
+            api_optimization=config_data.get('api_optimization', {}),
+            discovery_position_filters=config_data.get('discovery_position_filters', {}),
+            discovery_quality_checks=config_data.get('discovery_quality_checks', {}),
+            scratch_rule=config_data.get('scratch_rule', {}),
+            safety_hybrid=config_data.get('safety_hybrid', {}),
+            paper_trading=config_data.get('paper_trading', {}),
+            pumpportal=config_data.get('pumpportal', {}),
+            realtime_source=config_data.get('realtime_source', 'bitquery')
         )
 
     def _get_realtime_config(self) -> Dict:
@@ -388,7 +421,7 @@ class MemecoinTradingBot:
         
         # Token maturity check - wait a bit for Moralis to index the token
         token_age = time.time() - token_detected_time
-        min_token_age = getattr(self.config, 'min_token_age_seconds', 10)  # Default 10 seconds
+        min_token_age = self.config.min_token_age_seconds
         
         if token_age < min_token_age:
             wait_time = min_token_age - token_age
@@ -521,7 +554,7 @@ class MemecoinTradingBot:
                 if buy_timestamps:
                     first_alpha_buy = min(buy_timestamps)
                     time_since_first_alpha = time.time() - first_alpha_buy
-                    max_entry_delay = getattr(self.config, 'max_entry_delay_seconds', 180)  # 3 minutes default
+                    max_entry_delay = self.config.max_entry_delay_seconds
                     
                     if time_since_first_alpha > max_entry_delay:
                         self.logger.warning(f"ENTRY TOO LATE: {time_since_first_alpha:.0f}s after first alpha "
@@ -682,13 +715,73 @@ class MemecoinTradingBot:
                 last_sell = last_sells[0]
                 exit_reason = last_sell.get('exit_reason', '')
                 if exit_reason in ('STOP_LOSS', 'TIME_STOP'):
-                    cooldown_time = 180  # 3 minutes
+                    cooldown_time = getattr(self.config, 'min_time_between_trades', 180)  # 3 minutes
                     time_since_loss = time.time() - last_sell['timestamp']
                     if time_since_loss < cooldown_time:
                         self.logger.debug(f"Cooling down after {exit_reason}: {time_since_loss:.0f}s < {cooldown_time}s")
                         return False
         
         return True
+
+    def _check_safety_hybrid_bypasses(self, mint_address: str, cached_swaps: List = None) -> Dict:
+        """
+        Check if we should bypass safety checks based on high-confidence signals
+        
+        Returns:
+            Dict with 'bypass_all': bool, 'bypass_sellability': bool, 'reason': str
+        """
+        hybrid_config = self.config.safety_hybrid or {}
+        
+        # Get alpha information for this token
+        if hasattr(self, 'wallet_tracker') and self.wallet_tracker:
+            # Get wallet confidence for this token
+            alpha_info = self.wallet_tracker.get_alpha_summary_for_token(mint_address)
+            
+            if alpha_info:
+                max_confidence = alpha_info.get('max_confidence', 0)
+                signal_strength = alpha_info.get('signal_strength', 0)
+                s_tier_count = alpha_info.get('s_tier_wallets', 0)
+                
+                # Ultra confidence bypass (skip all safety)
+                ultra_threshold = hybrid_config.get('ultra_confidence_threshold', 0.80)
+                if max_confidence >= ultra_threshold:
+                    return {
+                        'bypass_all': True,
+                        'bypass_sellability': True,
+                        'reason': f'Ultra-high confidence {max_confidence:.1%} >= {ultra_threshold:.1%}'
+                    }
+                
+                # S-tier wallet bypass
+                if hybrid_config.get('s_tier_bypass', False) and s_tier_count > 0:
+                    return {
+                        'bypass_all': True,
+                        'bypass_sellability': True,
+                        'reason': f'S-tier wallet signal ({s_tier_count} S-tier wallets)'
+                    }
+                
+                # Signal strength bypass
+                signal_bypass_threshold = hybrid_config.get('signal_strength_bypass', 4.0)
+                if signal_strength >= signal_bypass_threshold:
+                    return {
+                        'bypass_all': True,
+                        'bypass_sellability': True,
+                        'reason': f'Strong signal strength {signal_strength:.1f} >= {signal_bypass_threshold:.1f}'
+                    }
+                
+                # High confidence bypass (skip sellability only)
+                high_threshold = hybrid_config.get('high_confidence_threshold', 0.70)
+                if max_confidence >= high_threshold:
+                    return {
+                        'bypass_all': False,
+                        'bypass_sellability': True,
+                        'reason': f'High confidence {max_confidence:.1%} >= {high_threshold:.1%}'
+                    }
+        
+        return {
+            'bypass_all': False,
+            'bypass_sellability': False,
+            'reason': 'No bypass conditions met'
+        }
 
     def _passes_filters(self, metadata: Dict, liquidity: Dict, deployer: str) -> bool:
         """Apply token filters"""
@@ -841,6 +934,19 @@ class MemecoinTradingBot:
         warnings = []
         rug_score = 0  # 0 = safe, 100 = definite rug
         
+        # Safety hybrid overrides - check if we should bypass safety checks
+        if self.config.safety_hybrid and self.config.safety_hybrid.get('enabled', False):
+            bypass_result = self._check_safety_hybrid_bypasses(mint_address, cached_swaps)
+            if bypass_result['bypass_all']:
+                self.logger.info(f"Safety hybrid: bypassing ALL safety checks for {mint_address[:8]}... ({bypass_result['reason']})")
+                result = {'safe': True, 'rug_score': 0, 'warnings': [f"Safety bypassed: {bypass_result['reason']}"]}
+                # Cache the result
+                self.token_safety_cache[mint_address] = {
+                    'timestamp': time.time(),
+                    'result': result
+                }
+                return result
+        
         # Use enhanced safety checker if we have swap data
         if cached_swaps and len(cached_swaps) > 0:
             # Calculate our order size
@@ -852,13 +958,19 @@ class MemecoinTradingBot:
                 recent_prices = [swap.get('price', 0) for swap in cached_swaps[-5:] if swap.get('price', 0) > 0]
                 current_price = recent_prices[-1] if recent_prices else None
             
+            # Check for partial safety hybrid bypasses
+            bypass_result = {'bypass_sellability': False}
+            if self.config.safety_hybrid and self.config.safety_hybrid.get('enabled', False):
+                bypass_result = self._check_safety_hybrid_bypasses(mint_address, cached_swaps)
+            
             # Perform comprehensive enhanced safety check
             safety_result = self.safety_checker.check_token_safety(
                 mint_address, 
                 order_size,
                 cached_swaps,
                 max_impact=self.config.safety.get('max_price_impact', 0.05) if self.config.safety else 0.008,
-                current_price=current_price
+                current_price=current_price,
+                bypass_sellability=bypass_result.get('bypass_sellability', False)
             )
             
             # Convert to legacy format for compatibility
