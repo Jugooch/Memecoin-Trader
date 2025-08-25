@@ -16,6 +16,7 @@ import os
 import yaml
 import json
 import time
+import argparse
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass
@@ -1566,13 +1567,38 @@ class MemecoinTradingBot:
 
 
 async def main():
-    bot = MemecoinTradingBot()
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Memecoin Trading Bot")
+    parser.add_argument(
+        '--config', 
+        default='config.yml',
+        help='Configuration file path (default: config.yml)'
+    )
+    parser.add_argument(
+        '--bot-name',
+        default=None,
+        help='Bot name for logging (auto-detected from config if not provided)'
+    )
+    
+    args = parser.parse_args()
+    
+    # Auto-detect bot name from config file
+    bot_name = args.bot_name
+    if not bot_name:
+        if 'aggressive' in args.config.lower():
+            bot_name = "AGGRESSIVE"
+        else:
+            bot_name = "CONSERVATIVE"
+    
+    print(f"🤖 Starting {bot_name} Bot with config: {args.config}")
+    
+    bot = MemecoinTradingBot(config_path=args.config)
     
     try:
         await bot.start()
     except KeyboardInterrupt:
         await bot.stop()
-        print("Bot stopped")
+        print(f"🛑 {bot_name} Bot stopped")
 
 
 if __name__ == "__main__":

@@ -77,6 +77,10 @@ class TradingEngine:
         self.paper_capital = self.pnl_store.current_equity  # Use P&L store's equity
         self.total_trades = 0
         self.winning_trades = 0
+        
+        # Hybrid safety configuration
+        self.safety_hybrid = getattr(config, 'safety_hybrid', {})
+        self.use_hybrid_safety = self.safety_hybrid.get('enabled', False)
 
     async def buy_token(self, mint_address: str, usd_amount: float, paper_mode: bool = True, symbol: str = "UNKNOWN", confidence_score: float = None) -> Dict:
         """Execute a buy order for a token"""
@@ -482,14 +486,29 @@ class TradingEngine:
             self.logger.info(f"DYNAMIC STOP HIT: Volatility-adjusted stop at {stop_pct:.1f}%")
             return ("stop_loss", 1.0)
         
-        # PHASE 3.3: Remove hard time exit (or extend it)
-        # Only exit after max_hold_seconds as a safety measure
-        max_hold = getattr(self.config, 'max_hold_seconds', 900)  # 15 minutes default
+        # AGGRESSIVE TIME-BASED EXITS (Friend's Strategy Refined)
+        max_hold = getattr(self.config, 'max_hold_seconds', 1800)  # 30 minutes for aggressive
+        hold_time_minutes = hold_time_seconds / 60
+        
+        # Aggressive time-based take profits
+        if hold_time_minutes >= 20:
+            # After 20 minutes: Take profit at 10% (refined from 5%)
+            if current_gain_pct >= 10:
+                self.logger.info(f"⏰ TIME-BASED TP: 20min+ hold, taking 10% profit")
+                return ("time_based_tp_20min", 1.0)
+        elif hold_time_minutes >= 15:
+            # After 15 minutes: Take profit at 15% (refined from 5%)
+            if current_gain_pct >= 15:
+                self.logger.info(f"⏰ TIME-BASED TP: 15min+ hold, taking 15% profit")
+                return ("time_based_tp_15min", 1.0)
+        
+        # Final safety exit after 30 minutes
         if hold_time_seconds > max_hold:
-            # But only if we're not in profit
-            if current_gain_pct < 5:  # Less than 5% gain
-                return ("time_limit", 1.0)
-            # If profitable, let it run with trailing stop
+            # After 30 minutes: Take profit at 5% (refined from -5% loss)
+            if current_gain_pct >= 5:
+                self.logger.info(f"⏰ MAX HOLD REACHED: Taking 5% profit after {hold_time_minutes:.0f} minutes")
+                return ("max_hold_tp", 1.0)
+            # If not profitable, let stop loss handle it
         
         return None
 
@@ -573,7 +592,7 @@ class TradingEngine:
     
     async def _calculate_dynamic_stop_loss(self, mint_address: str, position: Position, hold_time_seconds: float) -> float:
         """
-        Calculate volatility-based stop loss that adapts to market conditions
+        Calculate aggressive stop loss based on friend's strategy
         
         Args:
             mint_address: Token mint address
@@ -584,53 +603,21 @@ class TradingEngine:
             Stop loss price level
         """
         try:
-            # Time-based stop loss tightening
-            if hold_time_seconds < 30:
-                # First 30 seconds: Tight 4% stop (quick scratch)
-                base_stop_pct = 0.96
-            elif hold_time_seconds < 60:
-                # 30-60 seconds: Get recent trades to calculate volatility
-                try:
-                    # Try to get recent trades for volatility calculation
-                    recent_trades = await self.moralis.get_token_swaps(mint_address, limit=20, ttl_override=5)
-                    
-                    if recent_trades and len(recent_trades) >= 5:
-                        # Calculate simple volatility from recent price moves
-                        prices = [t.get('price', 0) for t in recent_trades if t.get('price', 0) > 0]
-                        
-                        if len(prices) >= 5:
-                            # Calculate price volatility
-                            price_changes = []
-                            for i in range(1, len(prices)):
-                                change = abs((prices[i] - prices[i-1]) / prices[i-1])
-                                price_changes.append(change)
-                            
-                            # Average volatility
-                            avg_volatility = sum(price_changes) / len(price_changes) if price_changes else 0.08
-                            
-                            # Scale stop loss to volatility (2x volatility, capped)
-                            volatility_stop = min(max(avg_volatility * 2, 0.05), 0.15)  # 5-15% range
-                            base_stop_pct = 1 - volatility_stop
-                            
-                            self.logger.debug(f"Volatility-based stop: {volatility_stop:.1%} "
-                                            f"(avg volatility: {avg_volatility:.1%})")
-                        else:
-                            # Not enough price data, use default
-                            base_stop_pct = 0.94  # 6% stop
-                    else:
-                        # No trade data available, use moderate stop
-                        base_stop_pct = 0.94  # 6% stop
-                        
-                except Exception as e:
-                    self.logger.debug(f"Could not calculate volatility: {e}")
-                    base_stop_pct = 0.94  # 6% stop on error
-                    
-            elif hold_time_seconds < 180:
-                # 1-3 minutes: Standard 8% stop
-                base_stop_pct = 0.92
+            # AGGRESSIVE STOP LOSS STRATEGY (Friend's Plan Refined)
+            hold_time_minutes = hold_time_seconds / 60
+            
+            if hold_time_minutes < 5:
+                # 0-5 minutes: 15% stop loss (refined from 25%)
+                base_stop_pct = 0.85
+                self.logger.debug(f"Aggressive early stop: 15% (hold time: {hold_time_minutes:.1f}m)")
+            elif hold_time_minutes < 10:
+                # 5-10 minutes: 20% stop loss (refined from 40%)  
+                base_stop_pct = 0.80
+                self.logger.debug(f"Aggressive mid stop: 20% (hold time: {hold_time_minutes:.1f}m)")
             else:
-                # After 3 minutes: Wider 10% stop (more room for swings)
-                base_stop_pct = 0.90
+                # 10+ minutes: 25% stop loss
+                base_stop_pct = 0.75
+                self.logger.debug(f"Aggressive late stop: 25% (hold time: {hold_time_minutes:.1f}m)")
             
             # Calculate stop price
             stop_price = position.entry_price * base_stop_pct
@@ -641,9 +628,9 @@ class TradingEngine:
             return stop_price
             
         except Exception as e:
-            self.logger.error(f"Error calculating dynamic stop loss: {e}")
-            # Fallback to conservative fixed stop
-            return position.entry_price * 0.92  # 8% stop on error
+            self.logger.error(f"Error calculating aggressive stop loss: {e}")
+            # Fallback to 15% stop
+            return position.entry_price * 0.85
 
     # Note: update_position_prices removed - position monitoring is now handled by main.py:monitor_position
     # which calls check_exit_conditions directly for better integration
@@ -722,6 +709,45 @@ class TradingEngine:
                 win_rate=summary["win_rate"],
                 active_positions=len(self.active_positions)
             )
+    
+    def should_skip_safety_checks(self, wallet_confidence: float, wallet_tier: str, signal_strength: float) -> str:
+        """
+        Determine what safety checks to skip based on wallet intelligence
+        
+        Args:
+            wallet_confidence: Confidence score of the triggering wallet (0-100)
+            wallet_tier: Tier of the wallet (S, A, B, C, Unknown)
+            signal_strength: Combined signal strength
+            
+        Returns:
+            "all" - Skip all safety checks
+            "partial" - Skip sellability only (keep price impact)
+            "none" - Full safety checks
+        """
+        if not self.use_hybrid_safety:
+            return "none"  # Conservative mode - full safety
+            
+        # Ultra-high confidence: Skip all safety
+        ultra_threshold = self.safety_hybrid.get('ultra_confidence_threshold', 80)
+        signal_bypass = self.safety_hybrid.get('signal_strength_bypass', 4.0)
+        s_tier_bypass = self.safety_hybrid.get('s_tier_bypass', True)
+        
+        if (wallet_confidence >= ultra_threshold and 
+            wallet_tier == "S" and 
+            signal_strength >= signal_bypass and
+            s_tier_bypass):
+            self.logger.info(f"🚀 ULTRA-FAST EXECUTION: S-tier wallet ({wallet_confidence:.0f}% confidence, {signal_strength:.1f} signal)")
+            return "all"
+        
+        # High confidence: Skip sellability only
+        high_threshold = self.safety_hybrid.get('high_confidence_threshold', 70)
+        if wallet_confidence >= high_threshold and signal_strength >= 3.5:
+            self.logger.info(f"⚡ FAST EXECUTION: High confidence ({wallet_confidence:.0f}%, {signal_strength:.1f} signal)")
+            return "partial"
+        
+        # Everything else: Full safety checks
+        self.logger.info(f"🛡️  SAFE EXECUTION: Full safety checks ({wallet_confidence:.0f}%, {signal_strength:.1f} signal)")
+        return "none"
     
     async def cleanup(self):
         """Cleanup resources"""

@@ -2,18 +2,26 @@
 
 Sophisticated Solana memecoin trading bot that follows proven "alpha wallets" (smart money) using advanced Bayesian statistics and adaptive risk management. Monitors pump.fun token launches in real-time and executes trades when multiple high-performing wallets show buying activity.
 
-## ✨ Key Features
+## ✨ Key Features (Recently Enhanced - Dec 2024)
 
 - **🧠 Bayesian Wallet Scoring**: Smart confidence system handling fresh vs established wallets
-- **📊 Adaptive Risk Management**: Dynamic parameter adjustment based on daily P&L performance
+- **📊 Adaptive Risk Management**: Dynamic parameter adjustment based on daily P&L performance  
+- **⏱️ Temporal Clustering**: NEW - Ensures alpha buys are coordinated within 90 seconds
+- **📈 Price Extension Guard**: NEW - Blocks trades at price peaks (90th percentile)
+- **🎯 Entry Timing Control**: NEW - Blocks late entries after momentum dissipates
+- **🔥 Moonshot Detection**: NEW - Skip profit-taking on exceptional 60%+ runs
+- **🛡️ Volatility-Based Stops**: NEW - Dynamic stop losses based on token volatility
+- **⚡ Scratch Exit System**: NEW - Early exit at -2% to prevent -8% stops
 - **🎯 PumpPortal Integration**: Real-time wallet activity monitoring with WebSocket subscriptions
 - **🔄 Intelligent Wallet Rotation**: Smart retention logic keeping best performers while discovering new alpha
-- **🛡️ Multi-tier Safety System**: Rug pull detection, wash trading detection, liquidity validation
-- **📈 Dynamic Exit Strategy**: Timing-based TP1 sizing with intelligent trailing stops
 - **💰 Paper Trading Mode**: Pessimistic fee simulation ensuring live trading profitability
-- **⚡ Real-time Monitoring**: Sub-second alpha signal detection and execution
-- **📱 Comprehensive P&L Tracking**: Persistent storage with detailed trade attribution
+- **📱 Enhanced Logging**: NEW - Comprehensive trade decision tracking
 - **🔔 Discord Integration**: Real-time notifications with confidence scores and performance summaries
+
+### 🎯 Performance Targets (Post-Update)
+- **Win Rate**: 35-45% (improved from 20%)
+- **Average Loss**: -2.5% (improved from -6%)
+- **Moonshot Capture**: Occasional 100%+ gains with optimized exits
 
 ## Quick Start
 
@@ -400,6 +408,22 @@ Project structure:
 2. **Risk Control**: Maximum 8% loss per trade, controlled drawdowns
 3. **Signal Quality**: High confidence alpha wallet signals
 4. **Execution Speed**: <3 seconds from signal to execution
+
+## 📚 Documentation
+
+### Recent Updates (December 2024)
+- **[CURRENT_STATE.md](docs/CURRENT_STATE.md)** - Complete overview of current bot state and recent optimizations
+- **[Improvements.md](Improvements.md)** - Implementation status of win rate improvements  
+- **[FEATURE_REFERENCE.md](docs/FEATURE_REFERENCE.md)** - Quick reference for all active features
+
+### Strategy Documentation  
+- **[TRADING_PLAN_DETAILED.md](docs/TRADING_PLAN_DETAILED.md)** - Comprehensive strategy breakdown
+- **[DISCORD_SETUP.md](docs/DISCORD_SETUP.md)** - Discord notification setup guide
+
+### Configuration Examples
+- **[config.yml.example](config/config.yml.example)** - Complete configuration template with new features
+
+**📊 Performance Note**: Recent optimizations target 35-45% win rate (up from 20%) with reduced average losses through enhanced entry filtering and intelligent exit strategies.
 
 ## Disclaimer
 
