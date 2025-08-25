@@ -53,12 +53,13 @@ class TradingConfig:
     initial_capital: float
     max_trades_per_day: int
     min_time_between_trades: int
-    max_concurrent_positions: int = 3  # Add max concurrent positions
     pump_fun_program: str
     pump_fun_api: str
     logging_level: str
     logging_file: str
     database_file: str
+    # Fields with defaults must come last
+    max_concurrent_positions: int = 3  # Add max concurrent positions
     notifications: Dict = None  # Add notifications section
     alpha_weight_min: float = 3.5  # Add alpha weight minimum threshold (conservative default)
     alpha_enhanced: Dict = None  # Add alpha enhanced configuration section
