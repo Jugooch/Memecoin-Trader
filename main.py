@@ -59,6 +59,7 @@ class TradingConfig:
     logging_file: str
     database_file: str
     notifications: Dict = None  # Add notifications section
+    alpha_weight_min: float = 2.5  # Add alpha weight minimum threshold
 
 
 class MemecoinTradingBot:
@@ -168,7 +169,8 @@ class MemecoinTradingBot:
             logging_level=config_data['logging']['level'],
             logging_file=config_data['logging']['file'],
             database_file=config_data['database']['file'],
-            notifications=config_data.get('notifications', {})  # Add notifications section
+            notifications=config_data.get('notifications', {}),  # Add notifications section
+            alpha_weight_min=config_data.get('alpha_weight_min', 2.5)  # Add alpha weight threshold
         )
 
     def _get_realtime_config(self) -> Dict:
