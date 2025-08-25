@@ -77,53 +77,35 @@ class PumpFunClient:
         return {"error": "max_retries_exceeded"}
 
     async def create_buy_transaction(self, wallet_pubkey: str, mint_address: str, sol_amount: float, slippage_bps: int = 100) -> Dict:
-        """Create a buy transaction via QuickNode Pump.fun API"""
-        # Use public Jupiter API endpoint (from QuickNode free tier)
-        url = "https://public.jupiterapi.com/pump-fun/swap"
-        
-        # Convert SOL to lamports (1 SOL = 1_000_000_000 lamports)
-        lamports = int(sol_amount * 1_000_000_000)
-        
-        payload = {
-            "wallet": wallet_pubkey,
-            "type": "BUY",
-            "mint": mint_address,
-            "inAmount": str(lamports),
-            "priorityFeeLevel": "high",
-            "slippageBps": str(slippage_bps)
-        }
-        
-        self.logger.info(f"Creating buy transaction: {sol_amount} SOL for {mint_address}")
-        self.logger.info(f"DEBUG: Request URL: {url}")
-        self.logger.info(f"DEBUG: Request payload: {payload}")
-        
+        """Create a buy transaction via Jupiter API"""
         try:
-            response = await self._make_request(url, payload)
+            # Step 1: Get quote from Jupiter
+            quote_response = await self._get_jupiter_quote(
+                input_mint="So11111111111111111111111111111111111111112",  # SOL
+                output_mint=mint_address,
+                amount=int(sol_amount * 1_000_000_000),  # Convert to lamports
+                slippage_bps=slippage_bps
+            )
             
-            if "error" in response:
-                self.logger.error(f"Buy transaction failed: {response}")
-                return {
-                    "success": False,
-                    "error": response["error"],
-                    "message": response.get("message", "Unknown error")
-                }
+            if "error" in quote_response:
+                return quote_response
             
-            # Extract transaction data
-            transaction_b64 = response.get("transaction")
-            if not transaction_b64:
-                return {
-                    "success": False,
-                    "error": "no_transaction",
-                    "message": "No transaction returned from API"
-                }
+            # Step 2: Create swap transaction with quote
+            swap_response = await self._create_jupiter_swap(
+                user_public_key=wallet_pubkey,
+                quote_response=quote_response
+            )
+            
+            if "error" in swap_response:
+                return swap_response
             
             return {
                 "success": True,
-                "transaction": transaction_b64,
+                "transaction": swap_response["swapTransaction"],
                 "mint": mint_address,
                 "sol_amount": sol_amount,
                 "slippage_bps": slippage_bps,
-                "estimated_tokens": response.get("estimatedTokens", 0)
+                "estimated_tokens": quote_response.get("outAmount", 0)
             }
             
         except Exception as e:
@@ -135,51 +117,38 @@ class PumpFunClient:
             }
 
     async def create_sell_transaction(self, wallet_pubkey: str, mint_address: str, token_amount: float, slippage_bps: int = 100) -> Dict:
-        """Create a sell transaction via QuickNode Pump.fun API"""
-        # Use public Jupiter API endpoint (from QuickNode free tier)
-        url = "https://public.jupiterapi.com/pump-fun/swap"
-        
-        # Convert token amount to smallest unit (usually with 6 or 9 decimals)
-        # This would need to be adjusted based on token decimals
-        token_units = int(token_amount * 1_000_000)  # Assuming 6 decimals
-        
-        payload = {
-            "wallet": wallet_pubkey,
-            "type": "SELL",
-            "mint": mint_address,
-            "inAmount": str(token_units),
-            "priorityFeeLevel": "high",
-            "slippageBps": str(slippage_bps)
-        }
-        
-        self.logger.info(f"Creating sell transaction: {token_amount} tokens for {mint_address}")
-        
+        """Create a sell transaction via Jupiter API"""
         try:
-            response = await self._make_request(url, payload)
+            # Convert token amount to smallest unit (assuming 6 decimals for most tokens)
+            token_units = int(token_amount * 1_000_000)
             
-            if "error" in response:
-                self.logger.error(f"Sell transaction failed: {response}")
-                return {
-                    "success": False,
-                    "error": response["error"],
-                    "message": response.get("message", "Unknown error")
-                }
+            # Step 1: Get quote from Jupiter
+            quote_response = await self._get_jupiter_quote(
+                input_mint=mint_address,  # Token to sell
+                output_mint="So11111111111111111111111111111111111111112",  # SOL
+                amount=token_units,
+                slippage_bps=slippage_bps
+            )
             
-            transaction_b64 = response.get("transaction")
-            if not transaction_b64:
-                return {
-                    "success": False,
-                    "error": "no_transaction",
-                    "message": "No transaction returned from API"
-                }
+            if "error" in quote_response:
+                return quote_response
+            
+            # Step 2: Create swap transaction with quote
+            swap_response = await self._create_jupiter_swap(
+                user_public_key=wallet_pubkey,
+                quote_response=quote_response
+            )
+            
+            if "error" in swap_response:
+                return swap_response
             
             return {
                 "success": True,
-                "transaction": transaction_b64,
+                "transaction": swap_response["swapTransaction"],
                 "mint": mint_address,
                 "token_amount": token_amount,
                 "slippage_bps": slippage_bps,
-                "estimated_sol": response.get("estimatedSol", 0)
+                "estimated_sol": float(quote_response.get("outAmount", 0)) / 1_000_000_000
             }
             
         except Exception as e:
@@ -244,6 +213,77 @@ class PumpFunClient:
         except Exception as e:
             self.logger.error(f"API status check failed: {e}")
             return False
+
+    async def _get_jupiter_quote(self, input_mint: str, output_mint: str, amount: int, slippage_bps: int) -> Dict:
+        """Get a quote from Jupiter API"""
+        url = "https://public.jupiterapi.com/quote"
+        
+        params = {
+            "inputMint": input_mint,
+            "outputMint": output_mint,
+            "amount": str(amount),
+            "slippageBps": str(slippage_bps)
+        }
+        
+        session = await self._get_session()
+        await self._rate_limit()
+        
+        try:
+            async with session.get(url, params=params) as response:
+                response_text = await response.text()
+                
+                if response.status == 200:
+                    return json.loads(response_text)
+                else:
+                    self.logger.error(f"Quote API error {response.status}: {response_text}")
+                    return {"error": f"HTTP {response.status}", "message": response_text}
+                    
+        except Exception as e:
+            self.logger.error(f"Quote request failed: {e}")
+            return {"error": "request_failed", "message": str(e)}
+    
+    async def _create_jupiter_swap(self, user_public_key: str, quote_response: Dict) -> Dict:
+        """Create a swap transaction using Jupiter API"""
+        url = "https://public.jupiterapi.com/swap"
+        
+        payload = {
+            "userPublicKey": user_public_key,
+            "wrapAndUnwrapSol": True,
+            "prioritizationFeeLamports": {
+                "priorityLevel": "high"
+            },
+            "quoteResponse": quote_response
+        }
+        
+        self.logger.info(f"Creating Jupiter swap transaction")
+        self.logger.info(f"DEBUG: Request URL: {url}")
+        self.logger.info(f"DEBUG: Quote response keys: {list(quote_response.keys())}")
+        
+        try:
+            response = await self._make_request(url, payload)
+            self.logger.info(f"DEBUG: Swap API Response keys: {list(response.keys()) if isinstance(response, dict) else 'Not a dict'}")
+            
+            if "error" in response:
+                self.logger.error(f"Jupiter swap failed: {response}")
+                return {
+                    "success": False,
+                    "error": response["error"],
+                    "message": response.get("message", "Unknown error")
+                }
+            
+            if "swapTransaction" not in response:
+                self.logger.error(f"No swapTransaction found in response. Available keys: {list(response.keys())}")
+                return {
+                    "success": False,
+                    "error": "no_transaction",
+                    "message": f"No swapTransaction returned from API. Response keys: {list(response.keys())}"
+                }
+            
+            return response
+            
+        except Exception as e:
+            self.logger.error(f"Error creating Jupiter swap: {e}")
+            return {"error": "exception", "message": str(e)}
 
     async def close(self):
         """Close the HTTP session"""
