@@ -79,17 +79,14 @@ class PumpFunClient:
     async def create_buy_transaction(self, wallet_pubkey: str, mint_address: str, sol_amount: float, slippage_bps: int = 100) -> Dict:
         """Create a buy transaction via Pump Portal Local Trading API"""
         try:
-            # Convert SOL amount to lamports for Pump Portal API
-            lamports = int(sol_amount * 1_000_000_000)
-            
             response = await self._make_pump_portal_local_request({
                 "publicKey": wallet_pubkey,
                 "action": "buy",
                 "mint": mint_address,
-                "amount": lamports,
+                "amount": sol_amount,  # Keep as SOL amount (0.05), not lamports
                 "denominatedInSol": "true",  # Amount is in SOL
-                "slippage": slippage_bps / 100,  # Convert bps to percentage
-                "priorityFee": 0.0001,  # High priority for fast execution
+                "slippage": int(slippage_bps / 100),  # Convert bps to integer percentage (200 bps = 2%)
+                "priorityFee": 0.005,  # Higher priority fee like docs example
                 "pool": "auto"  # Auto-select best exchange
             })
             
