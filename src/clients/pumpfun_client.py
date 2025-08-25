@@ -28,8 +28,8 @@ class PumpFunClient:
         if not self.session:
             self.session = aiohttp.ClientSession(
                 headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.api_key}"
+                    "Content-Type": "application/json"
+                    # Note: QuickNode uses API key in URL, not Authorization header
                 }
             )
         return self.session

@@ -48,8 +48,8 @@ class TransactionSigner:
         if not self.session:
             self.session = aiohttp.ClientSession(
                 headers={
-                    "Content-Type": "application/json",
-                    "x-api-key": self.quicknode_api_key  # QuickNode auth
+                    "Content-Type": "application/json"
+                    # Note: QuickNode uses API key in URL, not headers
                 }
             )
         return self.session
