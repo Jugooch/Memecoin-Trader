@@ -47,8 +47,10 @@ class TradingEngine:
         self.config = config
         self.logger = logging.getLogger(__name__)
         
-        # Initialize clients
+        # Initialize clients - Pump Portal Local API doesn't need API key
         self.pumpfun = PumpFunClient(config.quicknode_endpoint, config.quicknode_api_key)
+        
+        self.logger.info("✅ Pump Portal Local Trading API client initialized (no API key needed)")
         self.moralis = moralis_client  # Use shared client instead of creating new one
         
         # Initialize transaction signer for live trading (using wallet keys from pumpportal)

@@ -96,14 +96,30 @@ class TransactionSigner:
             # Decode base64 transaction
             transaction_bytes = base64.b64decode(transaction_b64)
             
-            # Deserialize transaction  
-            transaction = Transaction.from_bytes(transaction_bytes)
+            # Try to deserialize as VersionedTransaction first (Pump Portal format)
+            try:
+                from solders.transaction import VersionedTransaction
+                transaction = VersionedTransaction.from_bytes(transaction_bytes)
+                # For VersionedTransaction, we need to sign differently
+                signed_tx = VersionedTransaction(transaction.message, [self.keypair])
+                signed_tx_bytes = bytes(signed_tx)
+                self.logger.info("Signed as VersionedTransaction")
+            except Exception as versioned_error:
+                # Fallback to regular Transaction
+                try:
+                    transaction = Transaction.from_bytes(transaction_bytes)
+                    transaction.sign(self.keypair)
+                    signed_tx_bytes = bytes(transaction)
+                    self.logger.info("Signed as regular Transaction")
+                except Exception as regular_error:
+                    self.logger.error(f"Failed to parse transaction as VersionedTransaction: {versioned_error}")
+                    self.logger.error(f"Failed to parse transaction as regular Transaction: {regular_error}")
+                    return {
+                        "success": False,
+                        "error": f"Transaction parsing failed: {regular_error}"
+                    }
             
-            # Sign the transaction with our keypair
-            transaction.sign(self.keypair)
-            
-            # Serialize signed transaction back to base64
-            signed_tx_bytes = bytes(transaction)
+            # Serialize signed transaction back to base64 (signed_tx_bytes already set above)
             signed_tx_b64 = base64.b64encode(signed_tx_bytes).decode('utf-8')
             
             # Send transaction via QuickNode RPC

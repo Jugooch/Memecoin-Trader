@@ -13,8 +13,8 @@ import time
 
 class PumpFunClient:
     def __init__(self, quicknode_endpoint: str, api_key: str):
-        self.quicknode_endpoint = quicknode_endpoint
-        self.api_key = api_key
+        self.quicknode_endpoint = quicknode_endpoint  # Not used for Pump Portal, kept for compatibility
+        self.api_key = api_key  # Not needed for local trading API, kept for compatibility
         self.logger = logging.getLogger(__name__)
         
         # Rate limiting
@@ -77,35 +77,48 @@ class PumpFunClient:
         return {"error": "max_retries_exceeded"}
 
     async def create_buy_transaction(self, wallet_pubkey: str, mint_address: str, sol_amount: float, slippage_bps: int = 100) -> Dict:
-        """Create a buy transaction via Jupiter API"""
+        """Create a buy transaction via Pump Portal Local Trading API"""
         try:
-            # Step 1: Get quote from Jupiter
-            quote_response = await self._get_jupiter_quote(
-                input_mint="So11111111111111111111111111111111111111112",  # SOL
-                output_mint=mint_address,
-                amount=int(sol_amount * 1_000_000_000),  # Convert to lamports
-                slippage_bps=slippage_bps
-            )
+            # Convert SOL amount to lamports for Pump Portal API
+            lamports = int(sol_amount * 1_000_000_000)
             
-            if "error" in quote_response:
-                return quote_response
+            response = await self._make_pump_portal_local_request({
+                "publicKey": wallet_pubkey,
+                "action": "buy",
+                "mint": mint_address,
+                "amount": lamports,
+                "denominatedInSol": "true",  # Amount is in SOL
+                "slippage": slippage_bps / 100,  # Convert bps to percentage
+                "priorityFee": 0.0001,  # High priority for fast execution
+                "pool": "auto"  # Auto-select best exchange
+            })
             
-            # Step 2: Create swap transaction with quote
-            swap_response = await self._create_jupiter_swap(
-                user_public_key=wallet_pubkey,
-                quote_response=quote_response
-            )
+            if "error" in response:
+                error_msg = response.get("error", "Unknown error")
+                self.logger.error(f"Pump Portal buy failed: {error_msg}")
+                return {
+                    "success": False,
+                    "error": "pump_portal_error",
+                    "message": str(error_msg)
+                }
             
-            if "error" in swap_response:
-                return swap_response
+            # Response should contain raw transaction bytes for signing
+            transaction_bytes = response.get("transaction")
+            if not transaction_bytes:
+                self.logger.error("No transaction returned from Pump Portal")
+                return {
+                    "success": False,
+                    "error": "no_transaction",
+                    "message": "No transaction returned from Pump Portal"
+                }
             
             return {
                 "success": True,
-                "transaction": swap_response["swapTransaction"],
+                "transaction": transaction_bytes,  # Raw transaction for signing
                 "mint": mint_address,
                 "sol_amount": sol_amount,
                 "slippage_bps": slippage_bps,
-                "estimated_tokens": quote_response.get("outAmount", 0)
+                "estimated_tokens": response.get("amount", 0)
             }
             
         except Exception as e:
@@ -117,38 +130,48 @@ class PumpFunClient:
             }
 
     async def create_sell_transaction(self, wallet_pubkey: str, mint_address: str, token_amount: float, slippage_bps: int = 100) -> Dict:
-        """Create a sell transaction via Jupiter API"""
+        """Create a sell transaction via Pump Portal Local Trading API"""
         try:
             # Convert token amount to smallest unit (assuming 6 decimals for most tokens)
             token_units = int(token_amount * 1_000_000)
             
-            # Step 1: Get quote from Jupiter
-            quote_response = await self._get_jupiter_quote(
-                input_mint=mint_address,  # Token to sell
-                output_mint="So11111111111111111111111111111111111111112",  # SOL
-                amount=token_units,
-                slippage_bps=slippage_bps
-            )
+            response = await self._make_pump_portal_local_request({
+                "publicKey": wallet_pubkey,
+                "action": "sell",
+                "mint": mint_address,
+                "amount": token_units,
+                "denominatedInSol": "false",  # Amount is in tokens
+                "slippage": slippage_bps / 100,  # Convert bps to percentage
+                "priorityFee": 0.0001,  # High priority for fast execution
+                "pool": "auto"  # Auto-select best exchange
+            })
             
-            if "error" in quote_response:
-                return quote_response
+            if "error" in response:
+                error_msg = response.get("error", "Unknown error")
+                self.logger.error(f"Pump Portal sell failed: {error_msg}")
+                return {
+                    "success": False,
+                    "error": "pump_portal_error",
+                    "message": str(error_msg)
+                }
             
-            # Step 2: Create swap transaction with quote
-            swap_response = await self._create_jupiter_swap(
-                user_public_key=wallet_pubkey,
-                quote_response=quote_response
-            )
-            
-            if "error" in swap_response:
-                return swap_response
+            # Response should contain raw transaction bytes for signing
+            transaction_bytes = response.get("transaction")
+            if not transaction_bytes:
+                self.logger.error("No transaction returned from Pump Portal")
+                return {
+                    "success": False,
+                    "error": "no_transaction",
+                    "message": "No transaction returned from Pump Portal"
+                }
             
             return {
                 "success": True,
-                "transaction": swap_response["swapTransaction"],
+                "transaction": transaction_bytes,  # Raw transaction for signing
                 "mint": mint_address,
                 "token_amount": token_amount,
                 "slippage_bps": slippage_bps,
-                "estimated_sol": float(quote_response.get("outAmount", 0)) / 1_000_000_000
+                "estimated_sol": response.get("sol_amount", 0)
             }
             
         except Exception as e:
@@ -214,76 +237,51 @@ class PumpFunClient:
             self.logger.error(f"API status check failed: {e}")
             return False
 
-    async def _get_jupiter_quote(self, input_mint: str, output_mint: str, amount: int, slippage_bps: int) -> Dict:
-        """Get a quote from Jupiter API"""
-        url = "https://public.jupiterapi.com/quote"
+    async def _make_pump_portal_local_request(self, trade_data: Dict) -> Dict:
+        """Make a request to Pump Portal Local Trading API"""
+        url = "https://pumpportal.fun/api/trade-local"
         
-        params = {
-            "inputMint": input_mint,
-            "outputMint": output_mint,
-            "amount": str(amount),
-            "slippageBps": str(slippage_bps)
-        }
+        self.logger.info(f"Making Pump Portal local trade request")
+        self.logger.info(f"DEBUG: Request URL: {url}")
+        self.logger.info(f"DEBUG: Trade data: {trade_data}")
         
         session = await self._get_session()
         await self._rate_limit()
         
         try:
-            async with session.get(url, params=params) as response:
-                response_text = await response.text()
+            async with session.post(url, data=trade_data) as response:
+                
+                self.logger.info(f"DEBUG: Pump Portal response status: {response.status}")
                 
                 if response.status == 200:
-                    return json.loads(response_text)
+                    # For local API, response is raw transaction bytes
+                    transaction_bytes = await response.read()
+                    
+                    if transaction_bytes:
+                        # Convert bytes to base64 for compatibility with existing signer
+                        import base64
+                        transaction_b64 = base64.b64encode(transaction_bytes).decode('utf-8')
+                        
+                        return {
+                            "transaction": transaction_b64,
+                            "success": True
+                        }
+                    else:
+                        return {"error": "empty_response", "message": "Empty response from Pump Portal"}
                 else:
-                    self.logger.error(f"Quote API error {response.status}: {response_text}")
-                    return {"error": f"HTTP {response.status}", "message": response_text}
+                    response_text = await response.text()
+                    self.logger.error(f"Pump Portal API error {response.status}: {response_text}")
+                    
+                    # Try to parse error message
+                    try:
+                        error_data = json.loads(response_text)
+                        return {"error": f"HTTP {response.status}", "message": error_data}
+                    except:
+                        return {"error": f"HTTP {response.status}", "message": response_text}
                     
         except Exception as e:
-            self.logger.error(f"Quote request failed: {e}")
+            self.logger.error(f"Pump Portal request failed: {e}")
             return {"error": "request_failed", "message": str(e)}
-    
-    async def _create_jupiter_swap(self, user_public_key: str, quote_response: Dict) -> Dict:
-        """Create a swap transaction using Jupiter API"""
-        url = "https://public.jupiterapi.com/swap"
-        
-        payload = {
-            "userPublicKey": user_public_key,
-            "wrapAndUnwrapSol": True,
-            "prioritizationFeeLamports": {
-                "priorityLevel": "high"
-            },
-            "quoteResponse": quote_response
-        }
-        
-        self.logger.info(f"Creating Jupiter swap transaction")
-        self.logger.info(f"DEBUG: Request URL: {url}")
-        self.logger.info(f"DEBUG: Quote response keys: {list(quote_response.keys())}")
-        
-        try:
-            response = await self._make_request(url, payload)
-            self.logger.info(f"DEBUG: Swap API Response keys: {list(response.keys()) if isinstance(response, dict) else 'Not a dict'}")
-            
-            if "error" in response:
-                self.logger.error(f"Jupiter swap failed: {response}")
-                return {
-                    "success": False,
-                    "error": response["error"],
-                    "message": response.get("message", "Unknown error")
-                }
-            
-            if "swapTransaction" not in response:
-                self.logger.error(f"No swapTransaction found in response. Available keys: {list(response.keys())}")
-                return {
-                    "success": False,
-                    "error": "no_transaction",
-                    "message": f"No swapTransaction returned from API. Response keys: {list(response.keys())}"
-                }
-            
-            return response
-            
-        except Exception as e:
-            self.logger.error(f"Error creating Jupiter swap: {e}")
-            return {"error": "exception", "message": str(e)}
 
     async def close(self):
         """Close the HTTP session"""
