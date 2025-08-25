@@ -306,7 +306,7 @@ class WalletTracker:
                             f"(base={base_score:.3f}, recency={recency_boost:.2f}, size={size_factor:.2f})")
         
         # Check if we meet minimum weight threshold
-        min_weight = self.config.get('alpha_weight_min', 2.5)
+        min_weight = self.config.get('alpha_weight_min', 3.5)
         require_high_confidence = self.config.get('require_one_wallet_pge_55', False)
         
         # Use smart confidence scoring that handles fresh wallets appropriately
@@ -365,7 +365,7 @@ class WalletTracker:
                                 f"{base_weight:.2f} -> {adjusted_weight:.2f}")
         
         # Check independence requirements
-        min_independent_wallets = self.config.get('alpha_enhanced', {}).get('min_independent_wallets', 2)
+        min_independent_wallets = self.config.get('alpha_enhanced', {}).get('min_independent_wallets', 3)
         
         if independent_wallet_count < min_independent_wallets:
             self.logger.info(f"Insufficient independent wallets: {independent_wallet_count}/{min_independent_wallets}")

@@ -59,7 +59,9 @@ class TradingConfig:
     logging_file: str
     database_file: str
     notifications: Dict = None  # Add notifications section
-    alpha_weight_min: float = 2.5  # Add alpha weight minimum threshold
+    alpha_weight_min: float = 3.5  # Add alpha weight minimum threshold (conservative default)
+    alpha_enhanced: Dict = None  # Add alpha enhanced configuration section
+    risk_management: Dict = None  # Add risk management configuration section
 
 
 class MemecoinTradingBot:
@@ -79,8 +81,9 @@ class MemecoinTradingBot:
         wallet_config = {
             'beta_prior_alpha': getattr(self.config, 'beta_prior_alpha', 3),
             'beta_prior_beta': getattr(self.config, 'beta_prior_beta', 5),
-            'alpha_weight_min': getattr(self.config, 'alpha_weight_min', 2.5),
-            'require_one_wallet_pge_55': getattr(self.config, 'require_one_wallet_pge_55', False)
+            'alpha_weight_min': getattr(self.config, 'alpha_weight_min', 3.5),
+            'require_one_wallet_pge_55': getattr(self.config, 'require_one_wallet_pge_55', False),
+            'alpha_enhanced': getattr(self.config, 'alpha_enhanced', {})
         }
         self.wallet_tracker = WalletTracker(self.config.watched_wallets, config=wallet_config)
         self.trading_engine = TradingEngine(self.config, moralis_client=self.moralis)
@@ -170,7 +173,9 @@ class MemecoinTradingBot:
             logging_file=config_data['logging']['file'],
             database_file=config_data['database']['file'],
             notifications=config_data.get('notifications', {}),  # Add notifications section
-            alpha_weight_min=config_data.get('alpha_weight_min', 2.5)  # Add alpha weight threshold
+            alpha_weight_min=config_data.get('alpha_weight_min', 3.5),  # Add alpha weight threshold
+            alpha_enhanced=config_data.get('alpha_enhanced', {}),  # Add alpha enhanced section
+            risk_management=config_data.get('risk_management', {'enabled': True})  # Add risk management section
         )
 
     def _get_realtime_config(self) -> Dict:
@@ -472,7 +477,15 @@ class MemecoinTradingBot:
             return
         
         # Get current risk-adjusted parameters
-        risk_params = self.risk_manager.get_trading_params()
+        if self.config.risk_management.get('enabled', True):
+            risk_params = self.risk_manager.get_trading_params()
+        else:
+            # Use aggressive config values when risk management is disabled
+            risk_params = {
+                'min_weight': self.config.alpha_weight_min,
+                'min_wallets': self.config.alpha_enhanced.get('min_independent_wallets', 1),
+                'risk_level': 'aggressive'
+            }
         
         # Use weighted voting from Phase 2 (check meets_threshold from alpha_analysis)
         weighted_threshold_passed = alpha_analysis.get('meets_threshold', False)
