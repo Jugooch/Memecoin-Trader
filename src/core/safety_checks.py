@@ -13,8 +13,9 @@ class SafetyChecker:
     Performs safety checks on tokens using stream data
     """
     
-    def __init__(self):
+    def __init__(self, safety_config: Dict = None):
         self.logger = logging.getLogger(__name__)
+        self.config = safety_config or {}
         
     def check_sellability(self, mint: str, recent_trades: List[Dict]) -> Dict:
         """
@@ -71,9 +72,9 @@ class SafetyChecker:
         # Calculate failure rate
         sell_failure_rate = failed_sells / max(total_sell_attempts, 1)
         
-        # Enhanced requirements
-        min_sellers = 3  # Increased from 1
-        max_failure_rate = 0.05  # 5% max failure rate
+        # Enhanced requirements - use config values
+        min_sellers = self.config.get('min_distinct_sellers', 3)
+        max_failure_rate = self.config.get('max_sell_failure_rate', 0.05)
         
         is_sellable = (
             len(unique_sellers) >= min_sellers and 
@@ -237,9 +238,13 @@ class SafetyChecker:
         Returns:
             Dictionary with safety results
         """
-        # Enhanced sellability check
-        sellability_result = self.check_sellability(mint, recent_trades)
-        is_sellable = sellability_result['is_sellable']
+        # Enhanced sellability check (skip if disabled)
+        if self.config.get('require_sellability', True):
+            sellability_result = self.check_sellability(mint, recent_trades)
+            is_sellable = sellability_result['is_sellable']
+        else:
+            sellability_result = {'is_sellable': True, 'reason': 'Sellability check disabled'}
+            is_sellable = True
         
         # Estimate price impact
         price_impact = self.estimate_price_impact(mint, order_size_usd, recent_trades)

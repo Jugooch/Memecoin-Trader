@@ -65,6 +65,7 @@ class TradingConfig:
     alpha_enhanced: Dict = None  # Add alpha enhanced configuration section
     risk_management: Dict = None  # Add risk management configuration section
     min_confidence: float = 50.0  # Add minimum confidence threshold
+    safety: Dict = None  # Add safety configuration section
 
 
 class MemecoinTradingBot:
@@ -102,7 +103,7 @@ class MemecoinTradingBot:
         self._pumpportal_monitoring = False
         
         # Initialize safety checker and risk manager (Phase 4)
-        self.safety_checker = SafetyChecker()
+        self.safety_checker = SafetyChecker(self.config.safety if self.config.safety else {})
         self.risk_manager = AdaptiveRiskManager(
             pnl_store=self.trading_engine.pnl_store if hasattr(self.trading_engine, 'pnl_store') else None,
             config={'initial_capital': self.config.initial_capital}
@@ -180,7 +181,8 @@ class MemecoinTradingBot:
             alpha_weight_min=config_data.get('alpha_weight_min', 3.5),  # Add alpha weight threshold
             alpha_enhanced=config_data.get('alpha_enhanced', {}),  # Add alpha enhanced section
             risk_management=config_data.get('risk_management', {'enabled': True}),  # Add risk management section
-            min_confidence=config_data.get('min_confidence', 50.0)  # Add minimum confidence threshold
+            min_confidence=config_data.get('min_confidence', 50.0),  # Add minimum confidence threshold
+            safety=config_data.get('safety', {})  # Add safety configuration section
         )
 
     def _get_realtime_config(self) -> Dict:
@@ -855,7 +857,7 @@ class MemecoinTradingBot:
                 mint_address, 
                 order_size,
                 cached_swaps,
-                max_impact=getattr(self.config, 'safety', {}).get('max_price_impact', 0.008),
+                max_impact=self.config.safety.get('max_price_impact', 0.05) if self.config.safety else 0.008,
                 current_price=current_price
             )
             
