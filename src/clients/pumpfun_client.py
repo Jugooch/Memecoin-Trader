@@ -78,7 +78,8 @@ class PumpFunClient:
 
     async def create_buy_transaction(self, wallet_pubkey: str, mint_address: str, sol_amount: float, slippage_bps: int = 100) -> Dict:
         """Create a buy transaction via QuickNode Pump.fun API"""
-        url = f"{self.quicknode_endpoint}/pump-fun/swap"
+        # Use public Jupiter API endpoint (from QuickNode free tier)
+        url = "https://public.jupiterapi.com/pump-fun/swap"
         
         # Convert SOL to lamports (1 SOL = 1_000_000_000 lamports)
         lamports = int(sol_amount * 1_000_000_000)
@@ -93,6 +94,8 @@ class PumpFunClient:
         }
         
         self.logger.info(f"Creating buy transaction: {sol_amount} SOL for {mint_address}")
+        self.logger.info(f"DEBUG: Request URL: {url}")
+        self.logger.info(f"DEBUG: Request payload: {payload}")
         
         try:
             response = await self._make_request(url, payload)
@@ -133,7 +136,8 @@ class PumpFunClient:
 
     async def create_sell_transaction(self, wallet_pubkey: str, mint_address: str, token_amount: float, slippage_bps: int = 100) -> Dict:
         """Create a sell transaction via QuickNode Pump.fun API"""
-        url = f"{self.quicknode_endpoint}/pump-fun/swap"
+        # Use public Jupiter API endpoint (from QuickNode free tier)
+        url = "https://public.jupiterapi.com/pump-fun/swap"
         
         # Convert token amount to smallest unit (usually with 6 or 9 decimals)
         # This would need to be adjusted based on token decimals
