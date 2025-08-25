@@ -79,15 +79,18 @@ class PumpFunClient:
     async def create_buy_transaction(self, wallet_pubkey: str, mint_address: str, sol_amount: float, slippage_bps: int = 100) -> Dict:
         """Create a buy transaction via Pump Portal Local Trading API"""
         try:
+            # Follow their exact example format
+            lamports = int(sol_amount * 1_000_000_000)  # Convert to lamports
+            
             response = await self._make_pump_portal_local_request({
                 "publicKey": wallet_pubkey,
                 "action": "buy",
                 "mint": mint_address,
-                "amount": sol_amount,  # Keep as SOL amount (0.05), not lamports
-                "denominatedInSol": "true",  # Amount is in SOL
-                "slippage": int(slippage_bps / 100),  # Convert bps to integer percentage (200 bps = 2%)
-                "priorityFee": 0.005,  # Higher priority fee like docs example
-                "pool": "auto"  # Auto-select best exchange
+                "amount": lamports,
+                "denominatedInSol": "true",  # true = spending SOL amount
+                "slippage": int(slippage_bps / 100),  # percentage (200 bps = 2%)
+                "priorityFee": 0.005,
+                "pool": "auto"
             })
             
             if "error" in response:
@@ -251,30 +254,28 @@ class PumpFunClient:
                 self.logger.info(f"DEBUG: Pump Portal response status: {response.status}")
                 
                 if response.status == 200:
-                    # For local API, response is raw transaction bytes
+                    # For local API, response is raw transaction bytes (like Python example)
                     transaction_bytes = await response.read()
                     
-                    if transaction_bytes:
+                    if len(transaction_bytes) > 0:
                         # Convert bytes to base64 for compatibility with existing signer
                         import base64
                         transaction_b64 = base64.b64encode(transaction_bytes).decode('utf-8')
+                        
+                        self.logger.info(f"Received transaction bytes: {len(transaction_bytes)} bytes")
                         
                         return {
                             "transaction": transaction_b64,
                             "success": True
                         }
                     else:
+                        self.logger.error("Empty response from Pump Portal")
                         return {"error": "empty_response", "message": "Empty response from Pump Portal"}
                 else:
                     response_text = await response.text()
-                    self.logger.error(f"Pump Portal API error {response.status}: {response_text}")
+                    self.logger.error(f"Pump Portal API error {response.status}: {response_text[:500]}")
                     
-                    # Try to parse error message
-                    try:
-                        error_data = json.loads(response_text)
-                        return {"error": f"HTTP {response.status}", "message": error_data}
-                    except:
-                        return {"error": f"HTTP {response.status}", "message": response_text}
+                    return {"error": f"HTTP {response.status}", "message": response_text[:200]}
                     
         except Exception as e:
             self.logger.error(f"Pump Portal request failed: {e}")
