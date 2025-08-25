@@ -564,7 +564,27 @@ class MemecoinTradingBot:
             
             # Check token safety before trading (reuse swap data from alpha check)
             alpha_swaps_data = alpha_analysis.get('last_swaps_data', [])
-            safety_check = await self.check_token_safety(mint_address, metadata, liquidity, alpha_swaps_data)
+            
+            # Check for safety hybrid bypasses based on alpha analysis results
+            safety_bypassed = False
+            if self.config.safety_hybrid and self.config.safety_hybrid.get('enabled', False):
+                bypass_result = self._check_safety_hybrid_bypasses_with_alpha(confidence_score, total_weight, wallet_tiers, alpha_analysis)
+                if bypass_result['bypass_all']:
+                    self.logger.info(f"🚀 SAFETY BYPASS: {bypass_result['reason']} for {mint_address[:8]}...")
+                    safety_check = {'safe': True, 'rug_score': 0, 'warnings': [f"Safety bypassed: {bypass_result['reason']}"]}
+                    safety_bypassed = True
+            
+            # Perform safety check if not bypassed (with partial bypass info)
+            if not safety_bypassed:
+                # Check for partial bypass (sellability only)
+                bypass_sellability = False
+                if self.config.safety_hybrid and self.config.safety_hybrid.get('enabled', False):
+                    bypass_result = self._check_safety_hybrid_bypasses_with_alpha(confidence_score, total_weight, wallet_tiers, alpha_analysis)
+                    bypass_sellability = bypass_result.get('bypass_sellability', False)
+                    if bypass_sellability and not bypass_result['bypass_all']:
+                        self.logger.info(f"🔄 SELLABILITY BYPASS: {bypass_result['reason']} for {mint_address[:8]}...")
+                
+                safety_check = await self.check_token_safety(mint_address, metadata, liquidity, alpha_swaps_data)
             
             if not safety_check['safe']:
                 rug_score = safety_check['rug_score']
@@ -730,52 +750,64 @@ class MemecoinTradingBot:
         Returns:
             Dict with 'bypass_all': bool, 'bypass_sellability': bool, 'reason': str
         """
+        # This method is called during safety check but without alpha results
+        # Return no bypass here - the real logic is in _check_safety_hybrid_bypasses_with_alpha
+        return {
+            'bypass_all': False,
+            'bypass_sellability': False,
+            'reason': 'No alpha analysis available'
+        }
+    
+    def _check_safety_hybrid_bypasses_with_alpha(self, confidence_score: float, total_weight: float, 
+                                               wallet_tiers: Dict, alpha_analysis: Dict) -> Dict:
+        """
+        Check if we should bypass safety checks based on alpha analysis results
+        
+        Returns:
+            Dict with 'bypass_all': bool, 'bypass_sellability': bool, 'reason': str
+        """
         hybrid_config = self.config.safety_hybrid or {}
         
-        # Get alpha information for this token
-        if hasattr(self, 'wallet_tracker') and self.wallet_tracker:
-            # Get wallet confidence for this token
-            alpha_info = self.wallet_tracker.get_alpha_summary_for_token(mint_address)
-            
-            if alpha_info:
-                max_confidence = alpha_info.get('max_confidence', 0)
-                signal_strength = alpha_info.get('signal_strength', 0)
-                s_tier_count = alpha_info.get('s_tier_wallets', 0)
-                
-                # Ultra confidence bypass (skip all safety)
-                ultra_threshold = hybrid_config.get('ultra_confidence_threshold', 0.80)
-                if max_confidence >= ultra_threshold:
-                    return {
-                        'bypass_all': True,
-                        'bypass_sellability': True,
-                        'reason': f'Ultra-high confidence {max_confidence:.1%} >= {ultra_threshold:.1%}'
-                    }
-                
-                # S-tier wallet bypass
-                if hybrid_config.get('s_tier_bypass', False) and s_tier_count > 0:
-                    return {
-                        'bypass_all': True,
-                        'bypass_sellability': True,
-                        'reason': f'S-tier wallet signal ({s_tier_count} S-tier wallets)'
-                    }
-                
-                # Signal strength bypass
-                signal_bypass_threshold = hybrid_config.get('signal_strength_bypass', 4.0)
-                if signal_strength >= signal_bypass_threshold:
-                    return {
-                        'bypass_all': True,
-                        'bypass_sellability': True,
-                        'reason': f'Strong signal strength {signal_strength:.1f} >= {signal_bypass_threshold:.1f}'
-                    }
-                
-                # High confidence bypass (skip sellability only)
-                high_threshold = hybrid_config.get('high_confidence_threshold', 0.70)
-                if max_confidence >= high_threshold:
-                    return {
-                        'bypass_all': False,
-                        'bypass_sellability': True,
-                        'reason': f'High confidence {max_confidence:.1%} >= {high_threshold:.1%}'
-                    }
+        # Convert confidence to percentage (0-1 scale)
+        confidence_pct = confidence_score / 100.0
+        
+        # Count S-tier wallets
+        s_tier_count = sum(1 for tier in wallet_tiers.values() if tier == 'S')
+        
+        # Ultra confidence bypass (skip all safety)
+        ultra_threshold = hybrid_config.get('ultra_confidence_threshold', 0.80)
+        if confidence_pct >= ultra_threshold:
+            return {
+                'bypass_all': True,
+                'bypass_sellability': True,
+                'reason': f'Ultra-high confidence {confidence_pct:.1%} >= {ultra_threshold:.1%}'
+            }
+        
+        # S-tier wallet bypass
+        if hybrid_config.get('s_tier_bypass', False) and s_tier_count > 0:
+            return {
+                'bypass_all': True,
+                'bypass_sellability': True,
+                'reason': f'S-tier wallet signal ({s_tier_count} S-tier wallets)'
+            }
+        
+        # Signal strength bypass (using total weight as proxy)
+        signal_bypass_threshold = hybrid_config.get('signal_strength_bypass', 4.0)
+        if total_weight >= signal_bypass_threshold:
+            return {
+                'bypass_all': True,
+                'bypass_sellability': True,
+                'reason': f'Strong signal strength {total_weight:.1f} >= {signal_bypass_threshold:.1f}'
+            }
+        
+        # High confidence bypass (skip sellability only)
+        high_threshold = hybrid_config.get('high_confidence_threshold', 0.70)
+        if confidence_pct >= high_threshold:
+            return {
+                'bypass_all': False,
+                'bypass_sellability': True,
+                'reason': f'High confidence {confidence_pct:.1%} >= {high_threshold:.1%}'
+            }
         
         return {
             'bypass_all': False,
