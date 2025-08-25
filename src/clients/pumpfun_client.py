@@ -134,11 +134,11 @@ class PumpFunClient:
                 "publicKey": wallet_pubkey,
                 "action": "sell",
                 "mint": mint_address,
-                "amount": token_units,
+                "amount": str(token_units),  # Convert to string like buy
                 "denominatedInSol": "false",  # Amount is in tokens
-                "slippage": slippage_bps / 100,  # Convert bps to percentage
-                "priorityFee": 0.0001,  # High priority for fast execution
-                "pool": "auto"  # Auto-select best exchange
+                "slippage": str(int(slippage_bps / 100)),  # Convert to string like buy
+                "priorityFee": str(0.005),  # Higher priority fee like buy
+                "pool": "auto"
             })
             
             if "error" in response:
