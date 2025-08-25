@@ -26,12 +26,7 @@ class PumpFunClient:
     async def _get_session(self):
         """Get or create aiohttp session"""
         if not self.session:
-            self.session = aiohttp.ClientSession(
-                headers={
-                    "Content-Type": "application/json"
-                    # Note: QuickNode uses API key in URL, not Authorization header
-                }
-            )
+            self.session = aiohttp.ClientSession()
         return self.session
 
     async def _rate_limit(self):
@@ -86,10 +81,10 @@ class PumpFunClient:
                 "publicKey": wallet_pubkey,
                 "action": "buy",
                 "mint": mint_address,
-                "amount": lamports,
-                "denominatedInSol": "true",  # true = spending SOL amount
-                "slippage": int(slippage_bps / 100),  # percentage (200 bps = 2%)
-                "priorityFee": 0.005,
+                "amount": str(lamports),  # Convert to string
+                "denominatedInSol": "true",
+                "slippage": str(int(slippage_bps / 100)),  # Convert to string
+                "priorityFee": str(0.005),  # Convert to string
                 "pool": "auto"
             })
             
@@ -249,7 +244,9 @@ class PumpFunClient:
         await self._rate_limit()
         
         try:
-            async with session.post(url, data=trade_data) as response:
+            # Use JSON format like JavaScript example (not form data like Python)
+            headers = {'Content-Type': 'application/json'}
+            async with session.post(url, json=trade_data, headers=headers) as response:
                 
                 self.logger.info(f"DEBUG: Pump Portal response status: {response.status}")
                 
