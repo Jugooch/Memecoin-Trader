@@ -61,7 +61,8 @@ class TradingConfig:
     database_file: str
     # Fields with defaults must come last
     max_concurrent_positions: int = 3  # Add max concurrent positions
-    notifications: Dict = None  # Add notifications section
+    notifications: Dict = None
+    pumpportal: Dict = None  # Add notifications section
     alpha_weight_min: float = 3.5  # Add alpha weight minimum threshold (conservative default)
     alpha_enhanced: Dict = None  # Add alpha enhanced configuration section
     risk_management: Dict = None  # Add risk management configuration section
@@ -202,6 +203,7 @@ class MemecoinTradingBot:
             logging_file=config_data['logging']['file'],
             database_file=config_data['database']['file'],
             notifications=config_data.get('notifications', {}),  # Add notifications section
+            pumpportal=config_data.get('pumpportal', {}),  # Add pumpportal section for wallet keys
             alpha_weight_min=config_data.get('alpha_weight_min', 3.5),  # Add alpha weight threshold
             alpha_enhanced=config_data.get('alpha_enhanced', {}),  # Add alpha enhanced section
             risk_management=config_data.get('risk_management', {'enabled': True}),  # Add risk management section

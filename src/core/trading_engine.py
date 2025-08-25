@@ -53,8 +53,19 @@ class TradingEngine:
         
         # Initialize transaction signer for live trading (using wallet keys from pumpportal)
         self.transaction_signer = None
+        
+        # Debug logging
+        self.logger.info(f"Checking transaction signer initialization...")
+        self.logger.info(f"Has pumpportal config: {hasattr(config, 'pumpportal') and config.pumpportal is not None}")
+        self.logger.info(f"QuickNode endpoint configured: {bool(getattr(config, 'quicknode_endpoint', None))}")
+        
         if hasattr(config, 'pumpportal') and config.pumpportal:
             wallet_private_key = config.pumpportal.get('wallet_private_key')
+            wallet_public_key = config.pumpportal.get('wallet_public_key')
+            
+            self.logger.info(f"Wallet private key found: {bool(wallet_private_key)}")
+            self.logger.info(f"Wallet public key found: {bool(wallet_public_key)}")
+            
             if wallet_private_key and config.quicknode_endpoint:
                 try:
                     self.transaction_signer = TransactionSigner(
@@ -62,10 +73,19 @@ class TradingEngine:
                         quicknode_api_key=config.quicknode_api_key,
                         private_key_base58=wallet_private_key
                     )
-                    self.logger.info(f"Live trading wallet initialized: {self.transaction_signer.get_wallet_address()[:8]}...")
+                    self.logger.info(f"✅ Live trading wallet initialized: {self.transaction_signer.get_wallet_address()[:8]}...")
                 except Exception as e:
-                    self.logger.error(f"Failed to initialize transaction signer: {e}")
+                    self.logger.error(f"❌ Failed to initialize transaction signer: {e}")
                     self.transaction_signer = None
+            else:
+                missing = []
+                if not wallet_private_key:
+                    missing.append("wallet_private_key")
+                if not config.quicknode_endpoint:
+                    missing.append("quicknode_endpoint")
+                self.logger.error(f"❌ Transaction signer not initialized - missing: {', '.join(missing)}")
+        else:
+            self.logger.error(f"❌ No pumpportal configuration found for live trading")
         
         # Initialize Discord notifier
         webhook_url = None
