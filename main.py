@@ -53,6 +53,7 @@ class TradingConfig:
     initial_capital: float
     max_trades_per_day: int
     min_time_between_trades: int
+    max_concurrent_positions: int = 3  # Add max concurrent positions
     pump_fun_program: str
     pump_fun_api: str
     logging_level: str
@@ -168,6 +169,7 @@ class MemecoinTradingBot:
             initial_capital=config_data['trading']['initial_capital'],
             max_trades_per_day=config_data['trading']['max_trades_per_day'],
             min_time_between_trades=config_data['trading']['min_time_between_trades'],
+            max_concurrent_positions=config_data['trading'].get('max_concurrent_positions', 3),
             pump_fun_program=config_data['pump_fun']['program_address'],
             pump_fun_api=config_data['pump_fun']['api_endpoint'],
             logging_level=config_data['logging']['level'],
@@ -470,7 +472,7 @@ class MemecoinTradingBot:
         
         # Ensure we have distinct wallets (not just one wallet buying multiple times)
         distinct_wallets = len(set(alpha_wallets))
-        min_distinct_wallets = max(self.config.threshold_alpha_buys, 3)  # At least 3 distinct wallets
+        min_distinct_wallets = self.config.threshold_alpha_buys  # Use configured value directly
         
         # Phase 4.2: Check adaptive risk management before proceeding
         can_trade, block_reason = self.risk_manager.can_trade()
@@ -648,21 +650,23 @@ class MemecoinTradingBot:
     
     def _can_trade(self) -> bool:
         """Check if we can execute a new trade with improved throttling"""
-        # Check daily trade limit (cap at 20 max)
-        if self.trades_today >= min(self.config.max_trades_per_day, 20):
+        # Check daily trade limit
+        if self.trades_today >= self.config.max_trades_per_day:
             self.logger.debug(f"Daily trade limit reached: {self.trades_today}")
             return False
         
-        # Check minimum time between trades (at least 2 minutes)
+        # Check minimum time between trades
         if self.last_trade_time:
             time_since_last = time.time() - self.last_trade_time
-            min_interval = max(self.config.min_time_between_trades, 120)
+            # Use configured value directly - no hardcoded minimum for aggressive trading
+            min_interval = self.config.min_time_between_trades
             if time_since_last < min_interval:
                 self.logger.debug(f"Too soon since last trade: {time_since_last:.0f}s < {min_interval}s")
                 return False
         
         # Check max concurrent positions
-        max_concurrent = getattr(self.config, "max_concurrent_positions", 3)
+        # Use configured max concurrent positions
+        max_concurrent = self.config.max_concurrent_positions
         current_positions = len(self.trading_engine.active_positions)
         if current_positions >= max_concurrent:
             self.logger.debug(f"Max concurrent positions reached: {current_positions}/{max_concurrent}")
