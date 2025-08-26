@@ -76,6 +76,107 @@ class TransactionSigner:
             self.logger.error(f"RPC request failed: {e}")
             return {"error": str(e)}
     
+    async def simulate_transaction(self, transaction_b64: str) -> Dict:
+        """Simulate a transaction to get expected results without sending it"""
+        try:
+            if not self.keypair:
+                return {"error": "No keypair available"}
+            
+            # Decode and sign the transaction for simulation
+            transaction_bytes = base64.b64decode(transaction_b64)
+            
+            # Sign it (simulation requires signatures)
+            from solders.transaction import VersionedTransaction
+            from solders.signature import Signature
+            
+            tx = VersionedTransaction.from_bytes(transaction_bytes)
+            tx.sign([self.keypair], tx.message.recent_blockhash)
+            
+            # Simulate the signed transaction
+            result = await self._make_rpc_request(
+                "simulateTransaction",
+                [
+                    base64.b64encode(bytes(tx)).decode('utf-8'),
+                    {
+                        "encoding": "base64",
+                        "commitment": "processed",
+                        "replaceRecentBlockhash": True,  # Use current blockhash for simulation
+                        "accounts": {
+                            "encoding": "jsonParsed"  # Get parsed account data
+                        }
+                    }
+                ]
+            )
+            
+            if "error" in result:
+                return {"success": False, "error": result.get("error")}
+                
+            # Parse simulation results
+            if result and "value" in result:
+                sim_result = result["value"]
+                
+                # Check if simulation succeeded
+                if sim_result.get("err"):
+                    return {"success": False, "error": f"Simulation failed: {sim_result.get('err')}"}
+                
+                # Extract useful data from logs
+                logs = sim_result.get("logs", [])
+                accounts = sim_result.get("accounts", [])
+                
+                # Parse account changes to find token balance changes
+                estimated_tokens = 0
+                wallet_pubkey = str(self.keypair.pubkey()) if self.keypair else None
+                
+                # Look through accounts for token balance changes
+                if accounts and wallet_pubkey:
+                    for i, account in enumerate(accounts):
+                        if account and isinstance(account, dict):
+                            # Check if this is a token account
+                            data = account.get("data")
+                            if data and isinstance(data, dict):
+                                parsed = data.get("parsed")
+                                if parsed and isinstance(parsed, dict):
+                                    account_type = parsed.get("type")
+                                    info = parsed.get("info")
+                                    
+                                    # Look for token accounts owned by our wallet
+                                    if (account_type == "account" and info and isinstance(info, dict)):
+                                        owner = info.get("owner")
+                                        if owner == wallet_pubkey:
+                                            token_amount = info.get("tokenAmount")
+                                            if token_amount and isinstance(token_amount, dict):
+                                                ui_amount = token_amount.get("uiAmount", 0)
+                                                if ui_amount > 0:
+                                                    mint = info.get("mint")
+                                                    self.logger.info(f"📊 Simulation: {ui_amount:,.0f} tokens for mint {mint[:8] if mint else 'unknown'}...")
+                                                    estimated_tokens = max(estimated_tokens, ui_amount)
+                
+                # Also check postTokenBalances for our wallet's token changes
+                if not estimated_tokens and "value" in result:
+                    post_balances = result["value"].get("accounts", [])
+                    # This would need more sophisticated parsing of balance changes
+                    # For now, if we found token amounts above, use those
+                
+                if estimated_tokens > 0:
+                    self.logger.info(f"✅ Simulation extracted {estimated_tokens:,.0f} tokens from account changes")
+                else:
+                    self.logger.warning("⚠️ Simulation successful but no token amounts found in account changes")
+                    self.logger.debug(f"Account data: {accounts[:2] if accounts else 'No accounts'}")
+                
+                return {
+                    "success": True,
+                    "logs": logs[-10:],  # Last 10 logs
+                    "accounts": accounts,
+                    "units_consumed": sim_result.get("unitsConsumed", 0),
+                    "estimated_tokens": estimated_tokens
+                }
+            
+            return {"success": False, "error": "Invalid simulation response"}
+            
+        except Exception as e:
+            self.logger.error(f"Error simulating transaction: {e}")
+            return {"success": False, "error": str(e)}
+    
     async def sign_and_send_transaction(self, transaction_b64: str) -> Dict:
         """
         Sign and send a base64 encoded transaction via QuickNode
@@ -199,14 +300,21 @@ class TransactionSigner:
                 ]
             )
             
-            if "error" not in result and "value" in result:
+            if "error" in result:
+                self.logger.warning(f"RPC error getting token balance: {result.get('error')}")
+                return None
+                
+            if "value" in result:
                 accounts = result.get("value", [])
                 if accounts:
                     # Get the first token account (should only be one per mint)
                     account_info = accounts[0].get("account", {}).get("data", {}).get("parsed", {}).get("info", {})
                     token_amount = account_info.get("tokenAmount", {})
                     ui_amount = token_amount.get("uiAmount", 0)
+                    self.logger.debug(f"Found token balance: {ui_amount} for mint {mint_address[:8]}...")
                     return float(ui_amount)
+                else:
+                    self.logger.debug(f"No token accounts found for mint {mint_address[:8]}... (wallet: {str(self.keypair.pubkey())[:8]}...)")
             return 0.0
             
         except Exception as e:

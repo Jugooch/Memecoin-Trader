@@ -232,7 +232,11 @@ class TradingEngine:
                     verified_amounts['tokens_received'] = current_balance
                     self.logger.info(f"✅ Verified buy: {current_balance:,.0f} tokens from live balance")
                 else:
-                    self.logger.warning(f"⚠️ No tokens found in wallet for {mint[:8]}...")
+                    self.logger.warning(f"⚠️ Token balance query returned {current_balance} for {mint[:8]}...")
+                    # Log more details about the failure
+                    self.logger.warning(f"  Mint: {mint}")
+                    self.logger.warning(f"  TX: {tx_signature[:16]}...")
+                    self.logger.warning(f"  This likely means QuickNode hasn't indexed the ATA yet")
                     
             elif action == 'sell':
                 # For sells, we'll track the token balance change
@@ -538,12 +542,9 @@ class TradingEngine:
             
             sol_amount = usd_amount / sol_price
             
-            # Get current price for reference (restored from working implementation)
-            current_price = await self.moralis.get_current_price(mint_address)
-            if current_price <= 0:
-                return {"success": False, "error": "Could not get current price"}
-            
-            self.logger.info(f"Got current price ${current_price:.8f} for live trade calculations")
+            # We'll get the actual price from transaction simulation instead of Moralis
+            # This removes latency and uses real-time pump.fun pricing
+            self.logger.info(f"Creating transaction for ${usd_amount} ({sol_amount:.4f} SOL)")
             
             # Check wallet balance
             wallet_balance = await self.transaction_signer.get_wallet_balance()
@@ -586,11 +587,23 @@ class TradingEngine:
                 wallet_address = self.transaction_signer.get_wallet_address()
                 
                 if self.use_realtime_positions:
-                    # NEW: Skip slow transaction parsing - realtime positions will update via WebSocket
-                    self.logger.info("⚡ Skipping token parsing - using realtime position tracking")
-                    # Use estimate for immediate position creation (will be corrected by WebSocket)
-                    estimated_tokens = (sol_amount / current_price) * 0.98  # Assume 2% slippage
-                    actual_tokens = estimated_tokens
+                    # Use transaction simulation for accurate token estimation
+                    self.logger.info("⚡ Using realtime position tracking with simulation")
+                    
+                    # Simulate the transaction to get expected token amounts
+                    sim_start = asyncio.get_event_loop().time()
+                    sim_result = await self.transaction_signer.simulate_transaction(transaction_b64)
+                    sim_time = asyncio.get_event_loop().time() - sim_start
+                    
+                    if sim_result.get("success") and sim_result.get("estimated_tokens", 0) > 0:
+                        actual_tokens = sim_result.get("estimated_tokens")
+                        self.logger.info(f"✅ Simulation successful ({sim_time:.3f}s): {actual_tokens:,.0f} tokens")
+                    else:
+                        # REFUSE to create position with bad data
+                        error_msg = sim_result.get("error", "No token amount in simulation")
+                        self.logger.error(f"❌ TRANSACTION SIMULATION FAILED: {error_msg}")
+                        self.logger.error(f"❌ REFUSING to create position without accurate token estimate")
+                        return {"success": False, "error": f"Simulation failed: {error_msg}"}
                 else:
                     # OLD: Get exact tokens via slow transaction log parsing (DEPRECATED)
                     self.logger.info("Getting exact token amount from transaction logs...")

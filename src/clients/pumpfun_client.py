@@ -259,6 +259,9 @@ class PumpFunClient:
                         
                         self.logger.info(f"Received transaction bytes: {len(transaction_bytes)} bytes")
                         
+                        # Log first part of base64 for debugging
+                        self.logger.debug(f"Transaction base64 preview: {transaction_b64[:100]}...")
+                        
                         return {
                             "transaction": transaction_b64,
                             "success": True
