@@ -133,35 +133,17 @@ class TradingEngine:
             except Exception as e:
                 self.logger.warning(f"⚠️ Blockchain analytics not available: {e}")
         
-        # Position tracking - OLD SYSTEM (will be phased out)
+        # Position tracking - Clean blockchain-first approach
         self.active_positions = {}
         self.paper_capital = self.pnl_store.current_equity  # Use P&L store's equity
         self.total_trades = 0
         self.winning_trades = 0
         
-        # NEW: Real-time position tracking system
-        self.realtime_positions = RealtimePositionManager(self.logger)
-        
-        # Set up callbacks for position events
-        self.realtime_positions.on_position_opened = self._on_realtime_position_opened
-        self.realtime_positions.on_position_updated = self._on_realtime_position_updated  
-        self.realtime_positions.on_position_closed = self._on_realtime_position_closed
-        
-        # Feature flag for gradual transition
-        self.use_realtime_positions = getattr(config, 'use_realtime_positions', False)
-        
         # Hybrid safety configuration
         self.safety_hybrid = getattr(config, 'safety_hybrid', {})
         self.use_hybrid_safety = self.safety_hybrid.get('enabled', False)
     
-    def _on_realtime_position_opened(self, position):
-        """Callback when a new position is opened via realtime tracking"""
-        self.logger.info(f"📈 Realtime position opened: {position.mint[:8]}... {position.current_tokens:,.0f} tokens")
-        
-    def _on_realtime_position_updated(self, position):
-        """Callback when a position is updated via realtime tracking"""
-        pnl_sol = position.unrealized_pnl_sol
-        self.logger.info(f"📊 Realtime position updated: {position.mint[:8]}... P&L: {pnl_sol:+.4f} SOL")
+    # Removed realtime position callbacks - using clean verification-first approach
         
     def _on_realtime_position_closed(self, position):
         """Callback when a position is closed via realtime tracking"""
@@ -175,46 +157,40 @@ class TradingEngine:
     
     async def handle_self_trade_event(self, trade_event: Dict) -> None:
         """
-        Handle trade events from our own wallet for immediate position updates.
-        Called by main.py when PumpPortal detects our own trades.
+        🚨 CRITICAL: WSS event triggers QuickNode verification and position creation.
+        This is the ONLY way we know when our transaction went through!
         """
-        if not self.use_realtime_positions:
-            self.logger.debug("Realtime positions disabled, ignoring self-trade event")
-            return
-            
         try:
             mint = trade_event.get('mint')
             action = trade_event.get('action')
             tx_signature = trade_event.get('tx_signature')
             
-            self.logger.info(f"⚡ Processing self-trade: {action} {mint[:8]}...")
+            self.logger.info(f"⚡ WSS detected our {action}: {mint[:8]}... TX: {tx_signature[:16]}...")
             
-            # Get verified amounts from QuickNode transaction details
-            verified_amounts = await self._verify_transaction_amounts(tx_signature, mint, action)
-            
-            # Use verified amounts if available, otherwise use WSS event data  
-            formatted_event = {
-                'mint': mint,
-                'action': action,
-                'tx_signature': tx_signature,
-                'price': trade_event.get('price', 0.0),
-                'tokens_received': verified_amounts.get('tokens_received', 0.0),
-                'tokens_sold': verified_amounts.get('tokens_sold', 0.0),
-                'sol_amount': trade_event.get('sol_amount', 0.0),
-                'sol_received': verified_amounts.get('sol_received', 0.0)
-            }
-            
-            # Log verification status
-            if verified_amounts:
-                self.logger.info(f"✅ WSS event verified with live balance data")
-            else:
-                self.logger.warning(f"⚠️ WSS event processed without verification")
-            
-            # Update realtime positions with verified amounts
-            self.realtime_positions.handle_trade_event(formatted_event)
-            
+            if action == 'buy':
+                # This is the trigger! WSS detected our buy went through
+                # Now start the verification-first position creation
+                symbol = trade_event.get('symbol', 'UNKNOWN')
+                sol_amount = trade_event.get('sol_amount', 0)
+                usd_amount = trade_event.get('usd_amount', sol_amount * 250)  # Rough estimate
+                
+                self.logger.info(f"🚀 WSS buy trigger - starting verification for {symbol}")
+                
+                # Start the verification process (non-blocking)
+                asyncio.create_task(self._create_verified_position(
+                    mint_address=mint,
+                    tx_signature=tx_signature,
+                    sol_amount=sol_amount,
+                    usd_amount=usd_amount,
+                    symbol=symbol
+                ))
+                
+            elif action == 'sell':
+                # Handle sell confirmations if needed
+                self.logger.info(f"✅ WSS confirmed sell: {mint[:8]}...")
+                
         except Exception as e:
-            self.logger.error(f"Error handling self-trade event: {e}")
+            self.logger.error(f"Error handling WSS trade event: {e}")
             self.logger.error(f"Event data: {trade_event}")
     
     async def _verify_transaction_amounts(self, tx_signature: str, mint: str, action: str) -> Dict:
@@ -582,138 +558,29 @@ class TradingEngine:
                 tx_signature = send_result.get("signature")
                 self.logger.info(f"✅ Live buy executed: {symbol} for ${usd_amount} - TX: {tx_signature}")
                 
-                # Get exact tokens received by parsing transaction logs
-                actual_tokens = 0.0
-                wallet_address = self.transaction_signer.get_wallet_address()
+                # 🚀 NEW CLEAN FLOW: Wait for blockchain verification before creating position
+                self.logger.info(f"✅ Transaction sent: {tx_signature} - waiting for QuickNode verification...")
                 
-                if self.use_realtime_positions:
-                    # Use transaction simulation for accurate token estimation
-                    self.logger.info("⚡ Using realtime position tracking with simulation")
-                    
-                    # Simulate the transaction to get expected token amounts
-                    sim_start = asyncio.get_event_loop().time()
-                    sim_result = await self.transaction_signer.simulate_transaction(transaction_b64)
-                    sim_time = asyncio.get_event_loop().time() - sim_start
-                    
-                    if sim_result.get("success") and sim_result.get("estimated_tokens", 0) > 0:
-                        actual_tokens = sim_result.get("estimated_tokens")
-                        self.logger.info(f"✅ Simulation successful ({sim_time:.3f}s): {actual_tokens:,.0f} tokens")
-                    else:
-                        # REFUSE to create position with bad data
-                        error_msg = sim_result.get("error", "No token amount in simulation")
-                        self.logger.error(f"❌ TRANSACTION SIMULATION FAILED: {error_msg}")
-                        self.logger.error(f"❌ REFUSING to create position without accurate token estimate")
-                        return {"success": False, "error": f"Simulation failed: {error_msg}"}
-                else:
-                    # OLD: Get exact tokens via slow transaction log parsing (DEPRECATED)
-                    self.logger.info("Getting exact token amount from transaction logs...")
-                    
-                    # Try a few times to get transaction details (less critical for buys than sells)
-                    for attempt in range(3):
-                        await asyncio.sleep(1 + attempt)  # Progressive delay: 1s, 2s, 3s
-                        
-                        try:
-                            tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
-                            
-                            if tx_details and wallet_address:
-                                actual_tokens = self.transaction_signer.parse_token_transfer_from_logs(
-                                    tx_details, mint_address, wallet_address
-                                )
-                                if actual_tokens > 0:
-                                    self.logger.info(f"Successfully parsed tokens on attempt {attempt + 1}")
-                                    break
-                        except Exception as e:
-                            self.logger.warning(f"Attempt {attempt + 1} to parse transaction failed: {e}")
-                
-                # CRITICAL: Never create positions with estimates - verify on blockchain first
-                if actual_tokens <= 0:
-                    self.logger.error("❌ CRITICAL: Could not verify tokens received from blockchain")
-                    self.logger.error("❌ REFUSING to create phantom position - checking wallet balance instead")
-                    
-                    # Try to get actual balance from blockchain as final check
-                    try:
-                        wallet_balance = await self.transaction_signer.get_token_balance(mint_address)
-                        if wallet_balance > 0:
-                            actual_tokens = wallet_balance
-                            self.logger.info(f"✅ Found {actual_tokens} tokens in wallet balance")
-                        else:
-                            self.logger.error("❌ TRANSACTION FAILED - No tokens in wallet, no position created")
-                            return {"success": False, "error": "Transaction failed - no tokens received"}
-                    except Exception as e:
-                        self.logger.error(f"❌ Could not verify wallet balance: {e}")
-                        return {"success": False, "error": "Transaction verification failed"}
-                
-                self.logger.info(f"Exact tokens received: {actual_tokens}")
-                
-                # Calculate actual fill price from transaction (USD per token)
-                fill_price = usd_amount / actual_tokens if actual_tokens > 0 else current_price
-                self.logger.info(f"Actual fill price: ${fill_price:.8f} (vs market ${current_price:.8f})")
-                
-                position = Position(
-                    mint=mint_address,
-                    entry_price=fill_price,  # Use actual fill price, not market price
-                    amount=actual_tokens,
-                    sol_invested=sol_amount,
-                    entry_time=datetime.now(),
-                    tp_price=fill_price * self.config.tp_multiplier,
-                    sl_price=fill_price * self.config.stop_loss_pct,
-                    peak_price=fill_price,
-                    paper_mode=False,  # This is live trading
-                    tokens_initial=actual_tokens,
-                    cost_usd_remaining=usd_amount,
-                    avg_cost_per_token=fill_price,
-                    buy_tx_signature=tx_signature,  # Store for verification
-                    verified_from_blockchain=not self.use_realtime_positions  # Realtime uses estimates initially
-                )
-                
-                self.active_positions[mint_address] = position
-                
-                # Create initial realtime position with estimate when using realtime mode
-                if self.use_realtime_positions:
-                    initial_event = {
-                        'mint': mint_address,
-                        'action': 'buy',
-                        'tx_signature': tx_signature,
-                        'price': fill_price,
-                        'tokens_received': actual_tokens,
-                        'sol_amount': sol_amount
-                    }
-                    self.realtime_positions.handle_trade_event(initial_event)
-                    self.logger.info(f"📊 Initial realtime position: {mint_address[:8]}... {actual_tokens:,.0f} tokens (estimated)")
-                
-                # Record in P&L store
-                self.pnl_store.add_trade(
-                    action="BUY",
-                    symbol=symbol,
+                # Schedule position creation after verification (non-blocking)
+                asyncio.create_task(self._create_verified_position(
                     mint_address=mint_address,
-                    amount=actual_tokens,
-                    price=fill_price,  # Use actual fill price
-                    usd_value=usd_amount,
-                    paper_mode=False
-                )
+                    tx_signature=tx_signature,
+                    sol_amount=sol_amount,
+                    usd_amount=usd_amount,
+                    symbol=symbol
+                ))
                 
-                # Send Discord notification
-                if self.notifier:
-                    await self.notifier.send_trade_notification(
-                        side="BUY",
-                        symbol=symbol,
-                        mint_address=mint_address,
-                        quantity=actual_tokens,
-                        price=fill_price,  # Use actual fill price
-                        usd_amount=usd_amount,
-                        equity=self.pnl_store.current_equity,
-                        paper_mode=False
-                    )
+                # P&L and notifications will be handled after verification in _create_verified_position
                 
                 return {
                     "success": True,
-                    "price": fill_price,  # Use actual execution price for accurate records
                     "tx_signature": tx_signature,
                     "sol_amount": sol_amount,
                     "usd_amount": usd_amount,
-                    "tokens_received": actual_tokens,
                     "symbol": symbol,
-                    "paper_mode": False
+                    "paper_mode": False,
+                    "status": "verification_pending",
+                    "message": f"Transaction sent, position will be created after QuickNode verification"
                 }
             else:
                 self.logger.error(f"Failed to send transaction: {send_result.get('error')}")
@@ -1485,6 +1352,203 @@ class TradingEngine:
         """Send error notification to Discord"""
         if self.notifier:
             await self.notifier.send_error_notification(message, context)
+
+    async def _create_verified_position(self, mint_address: str, tx_signature: str, 
+                                      sol_amount: float, usd_amount: float, symbol: str):
+        """
+        🚀 NEW CLEAN FLOW: Create position only after QuickNode verification
+        
+        This method:
+        1. Waits for QuickNode to index the transaction 
+        2. Gets verified token amounts from blockchain
+        3. Creates position with accurate data
+        4. Catches up position state (TP/SL checks)
+        5. Sends notifications
+        """
+        try:
+            self.logger.info(f"🔍 Starting verification for {symbol} TX: {tx_signature[:16]}...")
+            
+            # Wait for QuickNode verification with exponential backoff
+            verified_data = await self._wait_for_verification(mint_address, tx_signature)
+            
+            if not verified_data:
+                self.logger.error(f"❌ Verification failed for {symbol} - no position created")
+                await self.send_error_notification(f"Position verification failed: {symbol}", {
+                    'mint': mint_address,
+                    'tx_signature': tx_signature
+                })
+                return
+            
+            # Extract verified data
+            actual_tokens = verified_data['tokens_received']
+            actual_fill_price = usd_amount / actual_tokens
+            
+            self.logger.info(f"✅ Verification complete: {actual_tokens:,.0f} tokens at ${actual_fill_price:.8f}")
+            
+            # Create verified position
+            position = Position(
+                mint=mint_address,
+                entry_price=actual_fill_price,
+                amount=actual_tokens,
+                sol_invested=sol_amount,
+                entry_time=datetime.now(),
+                tp_price=actual_fill_price * self.config.tp_multiplier,
+                sl_price=actual_fill_price * self.config.stop_loss_pct,
+                peak_price=actual_fill_price,
+                paper_mode=False,
+                tokens_initial=actual_tokens,
+                cost_usd_remaining=usd_amount,
+                avg_cost_per_token=actual_fill_price,
+                buy_tx_signature=tx_signature,
+                verified_from_blockchain=True
+            )
+            
+            self.active_positions[mint_address] = position
+            
+            # Record in P&L store
+            self.pnl_store.add_trade(
+                action="BUY",
+                symbol=symbol,
+                mint_address=mint_address,
+                amount=actual_tokens,
+                price=actual_fill_price,
+                usd_value=usd_amount,
+                paper_mode=False
+            )
+            
+            self.logger.info(f"📊 Position created: {symbol} - {actual_tokens:,.0f} tokens")
+            
+            # 🎯 CATCH-UP LOGIC: Check if we should immediately TP/SL based on current price
+            await self._catchup_position_state(mint_address, symbol)
+            
+            # Send success notification
+            if self.notifier:
+                await self.notifier.send_trade_notification(
+                    side="BUY",
+                    symbol=symbol,
+                    mint_address=mint_address,
+                    quantity=actual_tokens,
+                    price=actual_fill_price,
+                    usd_amount=usd_amount,
+                    equity=self.pnl_store.current_equity,
+                    paper_mode=False
+                )
+                
+        except Exception as e:
+            self.logger.error(f"❌ Error in verified position creation: {e}")
+            await self.send_error_notification(f"Position creation error: {symbol}", {
+                'error': str(e),
+                'mint': mint_address,
+                'tx_signature': tx_signature
+            })
+
+    async def _wait_for_verification(self, mint_address: str, tx_signature: str) -> Optional[Dict]:
+        """
+        Wait for QuickNode to index the buy transaction with robust retry logic
+        Returns verified data or None if verification fails
+        """
+        max_attempts = 12  # Up to ~2 minutes total
+        base_delay = 2
+        
+        for attempt in range(max_attempts):
+            try:
+                # Get current token balance from blockchain
+                current_balance = await self.transaction_signer.get_token_balance(mint_address)
+                
+                if current_balance and current_balance > 0:
+                    self.logger.info(f"✅ Verification successful on attempt {attempt + 1}: {current_balance:,.0f} tokens")
+                    return {
+                        'tokens_received': current_balance,
+                        'verified_at': datetime.now(),
+                        'verification_attempts': attempt + 1
+                    }
+                
+                if attempt < max_attempts - 1:
+                    # Exponential backoff with jitter
+                    delay = min(base_delay * (1.5 ** attempt), 15)  # Cap at 15s
+                    self.logger.info(f"⏳ Attempt {attempt + 1}/{max_attempts}: No tokens yet, retrying in {delay:.1f}s...")
+                    await asyncio.sleep(delay)
+                    
+            except Exception as e:
+                self.logger.warning(f"⚠️ Verification attempt {attempt + 1} failed: {e}")
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(base_delay * (1.2 ** attempt))
+        
+        self.logger.error(f"❌ Verification failed after {max_attempts} attempts")
+        return None
+
+    async def _catchup_position_state(self, mint_address: str, symbol: str):
+        """
+        🎯 Catch-up logic: Check if position should immediately TP/SL based on current market price
+        This handles the case where price moved significantly during the verification delay
+        """
+        try:
+            if mint_address not in self.active_positions:
+                return
+                
+            position = self.active_positions[mint_address]
+            current_price = await self.moralis.get_current_price(mint_address, fresh=True)
+            
+            if current_price <= 0:
+                self.logger.warning(f"⚠️ Cannot get current price for catchup: {symbol}")
+                return
+            
+            # Update peak price if needed
+            if current_price > position.peak_price:
+                position.peak_price = current_price
+                self.logger.info(f"📈 New peak: {symbol} ${current_price:.8f}")
+            
+            # Calculate current P&L
+            current_pnl_pct = ((current_price - position.entry_price) / position.entry_price) * 100
+            
+            self.logger.info(f"🎯 Catchup check: {symbol} entry=${position.entry_price:.8f}, "
+                           f"current=${current_price:.8f}, P&L={current_pnl_pct:+.1f}%")
+            
+            # Check TP conditions
+            tp_threshold_pct = ((position.tp_price - position.entry_price) / position.entry_price) * 100
+            
+            if current_pnl_pct >= tp_threshold_pct:
+                self.logger.info(f"🎯 CATCHUP TP TRIGGER: {symbol} hit {current_pnl_pct:+.1f}% (TP at {tp_threshold_pct:+.1f}%)")
+                
+                # Execute TP1 (use your existing TP percentages)
+                tp1_percentage = 0.45  # 45% as mentioned in your strategy
+                
+                sell_result = await self.sell_token(
+                    mint_address=mint_address,
+                    percentage=tp1_percentage,
+                    paper_mode=False,
+                    symbol=symbol,
+                    exit_reason="catchup_tp1"
+                )
+                
+                if sell_result.get("success"):
+                    position.tp1_hit_time = datetime.now()
+                    position.tp1_percentage_sold = tp1_percentage
+                    self.logger.info(f"✅ Catchup TP1 executed: {symbol} sold {tp1_percentage*100:.0f}%")
+                else:
+                    self.logger.error(f"❌ Catchup TP1 failed: {sell_result.get('error')}")
+            
+            # Check SL conditions
+            sl_threshold_pct = ((position.sl_price - position.entry_price) / position.entry_price) * 100
+            
+            if current_pnl_pct <= sl_threshold_pct:
+                self.logger.warning(f"🎯 CATCHUP SL TRIGGER: {symbol} hit {current_pnl_pct:+.1f}% (SL at {sl_threshold_pct:+.1f}%)")
+                
+                sell_result = await self.sell_token(
+                    mint_address=mint_address,
+                    percentage=1.0,  # Full position
+                    paper_mode=False,
+                    symbol=symbol,
+                    exit_reason="catchup_stop_loss"
+                )
+                
+                if sell_result.get("success"):
+                    self.logger.info(f"✅ Catchup SL executed: {symbol} position closed")
+                else:
+                    self.logger.error(f"❌ Catchup SL failed: {sell_result.get('error')}")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error in catchup logic for {symbol}: {e}")
     
     async def send_summary(self):
         """Send portfolio summary to Discord with blockchain-verified data"""
