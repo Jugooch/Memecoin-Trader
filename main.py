@@ -367,7 +367,7 @@ class MemecoinTradingBot:
                                         # This is our own trade - update positions immediately
                                         self_trade_event = self.realtime_client.pumpportal_client.handle_self_trade_event(event)
                                         if self_trade_event:
-                                            self.trading_engine.handle_self_trade_event(self_trade_event)
+                                            await self.trading_engine.handle_self_trade_event(self_trade_event)
                                             self.logger.info(f"⚡ Self-trade processed: {self_trade_event['action']} {mint[:8]}...")
                                         else:
                                             self.logger.error(f"❌ DEBUG: Self-trade event parsing failed for {mint[:8]}...")

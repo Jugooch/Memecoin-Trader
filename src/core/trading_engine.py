@@ -173,7 +173,7 @@ class TradingEngine:
         if pnl_sol > 0:
             self.winning_trades += 1
     
-    def handle_self_trade_event(self, trade_event: Dict) -> None:
+    async def handle_self_trade_event(self, trade_event: Dict) -> None:
         """
         Handle trade events from our own wallet for immediate position updates.
         Called by main.py when PumpPortal detects our own trades.
@@ -183,26 +183,71 @@ class TradingEngine:
             return
             
         try:
-            # Convert PumpPortal event format to realtime position format
+            mint = trade_event.get('mint')
+            action = trade_event.get('action')
+            tx_signature = trade_event.get('tx_signature')
+            
+            self.logger.info(f"⚡ Processing self-trade: {action} {mint[:8]}...")
+            
+            # Get verified amounts from QuickNode transaction details
+            verified_amounts = await self._verify_transaction_amounts(tx_signature, mint, action)
+            
             formatted_event = {
-                'mint': trade_event.get('mint'),
-                'action': trade_event.get('action'),
-                'tx_signature': trade_event.get('tx_signature'),
-                'price': trade_event.get('price', 0.0),
-                'tokens_received': trade_event.get('tokens_amount', 0.0) if trade_event.get('action') == 'buy' else 0.0,
-                'tokens_sold': trade_event.get('tokens_amount', 0.0) if trade_event.get('action') == 'sell' else 0.0,
-                'sol_amount': trade_event.get('sol_amount', 0.0),
-                'sol_received': trade_event.get('sol_amount', 0.0) if trade_event.get('action') == 'sell' else 0.0
+                'mint': mint,
+                'action': action,
+                'tx_signature': tx_signature,
+                'price': verified_amounts.get('price', trade_event.get('price', 0.0)),
+                'tokens_received': verified_amounts.get('tokens_received', 0.0),
+                'tokens_sold': verified_amounts.get('tokens_sold', 0.0),
+                'sol_amount': verified_amounts.get('sol_amount', trade_event.get('sol_amount', 0.0)),
+                'sol_received': verified_amounts.get('sol_received', 0.0)
             }
             
-            self.logger.info(f"⚡ Processing self-trade: {formatted_event['action']} {formatted_event['mint'][:8]}...")
-            
-            # Update realtime positions immediately
+            # Update realtime positions with verified amounts
             self.realtime_positions.handle_trade_event(formatted_event)
             
         except Exception as e:
             self.logger.error(f"Error handling self-trade event: {e}")
             self.logger.error(f"Event data: {trade_event}")
+    
+    async def _verify_transaction_amounts(self, tx_signature: str, mint: str, action: str) -> Dict:
+        """Verify transaction amounts from QuickNode for realtime position accuracy"""
+        try:
+            if not self.transaction_signer:
+                return {}
+                
+            # Get transaction details from QuickNode
+            tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
+            if not tx_details:
+                return {}
+                
+            wallet_address = self.transaction_signer.get_wallet_address()
+            if not wallet_address:
+                return {}
+                
+            verified_amounts = {}
+            
+            if action == 'buy':
+                # Parse token amount received
+                tokens_received = self.transaction_signer.parse_token_transfer_from_logs(
+                    tx_details, mint, wallet_address
+                )
+                verified_amounts['tokens_received'] = tokens_received
+                self.logger.info(f"✅ Verified buy: {tokens_received:,.0f} tokens from QuickNode")
+                
+            elif action == 'sell':
+                # Parse SOL amount received
+                sol_received = self.transaction_signer.parse_sol_change_from_logs(
+                    tx_details, wallet_address
+                )
+                verified_amounts['sol_received'] = abs(sol_received) if sol_received > 0 else 0.0
+                self.logger.info(f"✅ Verified sell: {verified_amounts['sol_received']:.4f} SOL from QuickNode")
+                
+            return verified_amounts
+            
+        except Exception as e:
+            self.logger.warning(f"Transaction verification failed for {tx_signature[:8]}...: {e}")
+            return {}
     
     async def _get_verified_token_balance(self, mint_address: str, position: Position) -> float:
         """
@@ -612,6 +657,19 @@ class TradingEngine:
                 )
                 
                 self.active_positions[mint_address] = position
+                
+                # Create initial realtime position with estimate when using realtime mode
+                if self.use_realtime_positions:
+                    initial_event = {
+                        'mint': mint_address,
+                        'action': 'buy',
+                        'tx_signature': tx_signature,
+                        'price': fill_price,
+                        'tokens_received': actual_tokens,
+                        'sol_amount': sol_amount
+                    }
+                    self.realtime_positions.handle_trade_event(initial_event)
+                    self.logger.info(f"📊 Initial realtime position: {mint_address[:8]}... {actual_tokens:,.0f} tokens (estimated)")
                 
                 # Record in P&L store
                 self.pnl_store.add_trade(
