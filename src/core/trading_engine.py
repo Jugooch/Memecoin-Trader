@@ -764,47 +764,17 @@ class TradingEngine:
                 self.logger.error("Wallet public key not configured")
                 return {"success": False, "error": "Wallet public key not configured"}
             
-            # NEW: Fast balance check using realtime positions (when enabled)
-            if self.use_realtime_positions:
-                can_sell, tokens_to_sell = self.realtime_positions.can_sell(mint_address, percentage)
-                
-                if not can_sell:
-                    self.logger.error(f"❌ SELL FAILED: Realtime position check failed (tokens to sell: {tokens_to_sell})")
-                    return {"success": False, "error": f"Cannot sell - insufficient tokens: {tokens_to_sell}"}
-                
-                self.logger.info(f"⚡ Fast sell check: {tokens_to_sell:,.0f} tokens available for sale")
-                actual_balance = tokens_to_sell / percentage if percentage > 0 else tokens_to_sell
-                
-            else:
-                # OLD: Smart blockchain verification with ATA indexing awareness (SLOW)
-                actual_balance = await self._get_verified_token_balance(mint_address, position)
-            
-            if actual_balance <= 0:
-                self.logger.error(f"❌ SELL FAILED: Verified balance is {actual_balance}")
-                
-                # Provide actionable error message
-                if position.amount > 0:
-                    self.logger.error(f"💡 ISSUE: Position shows {position.amount} tokens but blockchain verification failed")
-                    self.logger.error(f"🔧 ACTION: Check QuickNode connectivity and ATA indexing status")
-                    error_msg = f"Blockchain verification failed (position: {position.amount}, verified: {actual_balance})"
-                else:
-                    error_msg = f"No tokens to sell: {actual_balance}"
-                
-                return {"success": False, "error": error_msg}
-            
-            # Use verified balance (blockchain truth with fallbacks)
-            tokens_to_sell = actual_balance * percentage
-            
-            # Update position amount to match verified reality
-            if abs(position.amount - actual_balance) > 0.01:
-                self.logger.warning(f"Position sync: tracking {position.amount}, verified {actual_balance}")
-                position.amount = actual_balance
+            # Use internal tracking for sell calculations (fast, no blockchain calls)
+            tokens_to_sell = position.amount * percentage
             
             if tokens_to_sell <= 0:
-                self.logger.error(f"No tokens to sell: actual balance {actual_balance}, percentage {percentage}")
-                return {"success": False, "error": "No tokens to sell"}
+                self.logger.error(f"No tokens to sell: internal balance {position.amount}, percentage {percentage}")
+                return {"success": False, "error": "No tokens to sell - position empty"}
             
-            self.logger.info(f"Selling {percentage*100:.1f}% of position: {tokens_to_sell} tokens (blockchain verified: {actual_balance})")
+            # Conservative sell amount accounting for slippage (1.5% buffer)
+            conservative_sell_amount = tokens_to_sell * 0.985
+            
+            self.logger.info(f"Selling {percentage*100:.1f}% of position: {tokens_to_sell:.0f} tokens (internal tracking), conservative amount: {conservative_sell_amount:.0f}")
             
             # Get current price for logging
             current_price = await self.moralis.get_current_price(mint_address, fresh=True)
@@ -814,13 +784,13 @@ class TradingEngine:
             # Create sell transaction
             self.logger.info(f"Creating live sell transaction: {percentage*100:.0f}% of {symbol} position ({tokens_to_sell:.2f} tokens)")
             
-            # Tightened sell slippage for better fills
-            slippage_bps = 150  # 1.5% slippage - tightened from 3%
+            # Use 1.5% slippage to match our conservative tracking
+            slippage_bps = 150  # 1.5% slippage
             
             tx_result = await self.pumpfun.create_sell_transaction(
                 wallet_pubkey=wallet_pubkey,
                 mint_address=mint_address,
-                token_amount=tokens_to_sell,
+                token_amount=conservative_sell_amount,
                 slippage_bps=slippage_bps
             )
             
@@ -881,7 +851,7 @@ class TradingEngine:
                 # Calculate cost basis using actual SOL invested (more accurate)
                 if hasattr(position, 'sol_invested') and position.sol_invested > 0:
                     # Calculate cost basis from actual SOL invested
-                    percentage_sold = tokens_to_sell / position.tokens_initial if position.tokens_initial > 0 else 1.0
+                    percentage_sold = conservative_sell_amount / position.tokens_initial if position.tokens_initial > 0 else 1.0
                     sol_cost_basis = position.sol_invested * percentage_sold
                     
                     # Convert to USD using current SOL price
@@ -889,13 +859,13 @@ class TradingEngine:
                     
                     if sol_price_usd is None:
                         self.logger.error("Cannot get SOL price - using position tracking for cost basis")
-                        cost_basis_usd = tokens_to_sell * position.avg_cost_per_token
+                        cost_basis_usd = conservative_sell_amount * position.avg_cost_per_token
                     else:
                         cost_basis_usd = sol_cost_basis * sol_price_usd
                         self.logger.info(f"Cost basis from SOL: {sol_cost_basis:.6f} SOL (${cost_basis_usd:.2f} at ${sol_price_usd}/SOL)")
                 else:
                     # Fallback to position tracking
-                    cost_basis_usd = tokens_to_sell * position.avg_cost_per_token
+                    cost_basis_usd = conservative_sell_amount * position.avg_cost_per_token
                     self.logger.warning(f"Using position tracking for cost basis: ${cost_basis_usd:.2f}")
                 
                 if actual_sol_received > 0:
@@ -930,7 +900,7 @@ class TradingEngine:
                 if self.use_realtime_positions:
                     # NEW: Realtime positions are updated automatically via WebSocket
                     # Just update the old position system for compatibility
-                    position.amount = max(0, position.amount - tokens_to_sell)
+                    position.amount = max(0, position.amount - conservative_sell_amount)
                     position.cost_usd_remaining -= cost_basis_usd
                     self.logger.info(f"⚡ Position updated via realtime tracking")
                 else:
@@ -943,7 +913,7 @@ class TradingEngine:
                 
                 # Also update SOL invested amount if we have it
                 if hasattr(position, 'sol_invested') and position.sol_invested > 0:
-                    percentage_sold = tokens_to_sell / position.tokens_initial if position.tokens_initial > 0 else 1.0
+                    percentage_sold = conservative_sell_amount / position.tokens_initial if position.tokens_initial > 0 else 1.0
                     sol_sold = position.sol_invested * percentage_sold
                     position.sol_invested -= sol_sold
                     self.logger.info(f"Updated SOL invested: -{sol_sold:.6f} SOL (remaining: {position.sol_invested:.6f} SOL)")

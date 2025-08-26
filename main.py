@@ -1365,7 +1365,49 @@ class MemecoinTradingBot:
                             self.logger.info(f"📊 Partial exit: {sell_percentage*100:.0f}% sold, "
                                           f"Remaining: {remaining_tokens:.0f} tokens")
                     else:
-                        self.logger.error(f"❌ Exit failed: {sell_result.get('error')}")
+                        error_msg = sell_result.get('error', '')
+                        self.logger.error(f"❌ Exit failed: {error_msg}")
+                        
+                        # Error-triggered reconciliation for balance mismatches
+                        if any(phrase in error_msg.lower() for phrase in ['not enough', 'insufficient', 'balance']):
+                            self.logger.warning("🔄 Balance error detected - triggering reconciliation")
+                            try:
+                                # Get verified blockchain balance
+                                blockchain_balance = await self.trading_engine._get_verified_token_balance(mint_address, position)
+                                
+                                if blockchain_balance != position.amount:
+                                    old_balance = position.amount
+                                    position.amount = blockchain_balance
+                                    
+                                    self.logger.warning(f"📊 Position reconciled: {old_balance:.0f} → {blockchain_balance:.0f} tokens")
+                                    
+                                    # Handle upside surprises (more tokens than expected)
+                                    if blockchain_balance > old_balance:
+                                        extra_tokens = blockchain_balance - old_balance
+                                        self.logger.info(f"🎉 Upside surprise: Found {extra_tokens:.0f} extra tokens!")
+                                        
+                                        # Determine current trading stage and continue appropriately
+                                        if position.tp1_hit_time and position.tp2_hit_time:
+                                            self.logger.info(f"📈 Post-TP2 stage: Extra tokens will be managed by trailing stops")
+                                        elif position.tp1_hit_time:
+                                            self.logger.info(f"📈 Post-TP1 stage: Extra tokens will participate in TP2/TP3 strategy")
+                                        else:
+                                            self.logger.info(f"📈 Pre-TP1 stage: Extra tokens will participate in full TP strategy")
+                                        
+                                    # Preserve trading state (don't reset TP levels)
+                                    current_stage = "TP3+" if position.tp3_hit_time else "TP2+" if position.tp2_hit_time else "TP1+" if position.tp1_hit_time else "Pre-TP1"
+                                    self.logger.info(f"✅ Trading state preserved - continuing from {current_stage} stage")
+                                    
+                                    # Retry the sell if we now have sufficient balance
+                                    if blockchain_balance > 0:
+                                        self.logger.info("🔄 Retrying sell with reconciled balance")
+                                        # The next loop iteration will attempt the sell again
+                                else:
+                                    self.logger.info("✅ Position balance already accurate")
+                                    
+                            except Exception as e:
+                                self.logger.error(f"❌ Reconciliation failed: {e}")
+                                # Continue without reconciliation
                 
                 # Log position status every 30 seconds for monitoring
                 if int(time.time()) % 30 == 0:
