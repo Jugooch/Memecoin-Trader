@@ -377,21 +377,27 @@ class TradingEngine:
                 tx_signature = send_result.get("signature")
                 self.logger.info(f"✅ Live buy executed: {symbol} for ${usd_amount} - TX: {tx_signature}")
                 
-                # Create position tracking using same logic as paper trading
-                estimated_tokens = usd_amount / current_price
+                # Get actual token balance after successful trade
+                actual_tokens = await self.transaction_signer.get_token_balance(mint_address)
+                if actual_tokens is None or actual_tokens <= 0:
+                    self.logger.warning(f"Could not get token balance after trade, using fallback")
+                    actual_tokens = 1_000_000  # Fallback for position tracking
+                
+                self.logger.info(f"Actual tokens received: {actual_tokens}")
+                
                 position = Position(
                     mint=mint_address,
                     entry_price=current_price,
-                    amount=estimated_tokens,
+                    amount=actual_tokens,
                     sol_invested=sol_amount,
                     entry_time=datetime.now(),
                     tp_price=current_price * self.config.tp_multiplier,
                     sl_price=current_price * self.config.stop_loss_pct,
                     peak_price=current_price,
                     paper_mode=False,  # This is live trading
-                    tokens_initial=estimated_tokens,
+                    tokens_initial=actual_tokens,
                     cost_usd_remaining=usd_amount,
-                    avg_cost_per_token=usd_amount / estimated_tokens
+                    avg_cost_per_token=usd_amount / actual_tokens if actual_tokens > 0 else 0
                 )
                 
                 self.active_positions[mint_address] = position
@@ -401,7 +407,7 @@ class TradingEngine:
                     action="BUY",
                     symbol=symbol,
                     mint_address=mint_address,
-                    amount=estimated_tokens,
+                    amount=actual_tokens,
                     price=current_price,
                     usd_value=usd_amount,
                     paper_mode=False
