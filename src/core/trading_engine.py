@@ -455,23 +455,43 @@ class TradingEngine:
                 # Get exact tokens received by parsing transaction logs (most accurate)
                 self.logger.info("Getting exact token amount from transaction logs...")
                 
-                # Wait a moment for transaction to be indexed
-                await asyncio.sleep(2)
-                
-                # Get transaction details and parse the actual token transfer
-                tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
+                actual_tokens = 0.0
                 wallet_address = self.transaction_signer.get_wallet_address()
                 
-                actual_tokens = 0.0
-                if tx_details and wallet_address:
-                    actual_tokens = self.transaction_signer.parse_token_transfer_from_logs(
-                        tx_details, mint_address, wallet_address
-                    )
+                # Try a few times to get transaction details (less critical for buys than sells)
+                for attempt in range(3):
+                    await asyncio.sleep(1 + attempt)  # Progressive delay: 1s, 2s, 3s
+                    
+                    try:
+                        tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
+                        
+                        if tx_details and wallet_address:
+                            actual_tokens = self.transaction_signer.parse_token_transfer_from_logs(
+                                tx_details, mint_address, wallet_address
+                            )
+                            if actual_tokens > 0:
+                                self.logger.info(f"Successfully parsed tokens on attempt {attempt + 1}")
+                                break
+                    except Exception as e:
+                        self.logger.warning(f"Attempt {attempt + 1} to parse transaction failed: {e}")
                 
-                # Fallback to estimated if parsing fails
+                # CRITICAL: Never create positions with estimates - verify on blockchain first
                 if actual_tokens <= 0:
-                    self.logger.warning("Could not parse exact tokens from logs, using price-based estimate")
-                    actual_tokens = usd_amount / current_price
+                    self.logger.error("❌ CRITICAL: Could not verify tokens received from blockchain")
+                    self.logger.error("❌ REFUSING to create phantom position - checking wallet balance instead")
+                    
+                    # Try to get actual balance from blockchain as final check
+                    try:
+                        wallet_balance = await self.transaction_signer.get_token_balance(mint_address)
+                        if wallet_balance > 0:
+                            actual_tokens = wallet_balance
+                            self.logger.info(f"✅ Found {actual_tokens} tokens in wallet balance")
+                        else:
+                            self.logger.error("❌ TRANSACTION FAILED - No tokens in wallet, no position created")
+                            return {"success": False, "error": "Transaction failed - no tokens received"}
+                    except Exception as e:
+                        self.logger.error(f"❌ Could not verify wallet balance: {e}")
+                        return {"success": False, "error": "Transaction verification failed"}
                 
                 self.logger.info(f"Exact tokens received: {actual_tokens}")
                 
@@ -534,7 +554,8 @@ class TradingEngine:
                 }
             else:
                 self.logger.error(f"Failed to send transaction: {send_result.get('error')}")
-                return send_result
+                # CRITICAL: Do not create position if buy failed
+                return {"success": False, "error": send_result.get('error', 'Transaction failed')}
             
         except Exception as e:
             self.logger.error(f"Error in real buy execution: {e}")

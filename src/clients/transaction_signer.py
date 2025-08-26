@@ -246,6 +246,11 @@ class TransactionSigner:
     def parse_token_transfer_from_logs(self, transaction_data: Dict, mint_address: str, wallet_address: str) -> float:
         """Parse transaction logs to extract exact token transfer amount"""
         try:
+            # Check if we got valid transaction data
+            if not transaction_data:
+                self.logger.warning("No transaction data provided to parse")
+                return 0.0
+                
             # Get the transaction meta and logs
             meta = transaction_data.get("meta", {})
             
