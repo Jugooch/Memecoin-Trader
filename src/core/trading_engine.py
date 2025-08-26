@@ -1469,6 +1469,19 @@ class TradingEngine:
             
             self.logger.info(f"📊 Position created: {symbol} - {actual_tokens:,.0f} tokens")
             
+            # Register position with realtime system if enabled
+            if self.use_realtime_positions:
+                trade_event = {
+                    'mint': mint_address,
+                    'action': 'buy',
+                    'tx_signature': tx_signature,
+                    'price': actual_fill_price,
+                    'tokens_received': actual_tokens,
+                    'sol_amount': sol_amount
+                }
+                self.realtime_positions.handle_trade_event(trade_event)
+                self.logger.info(f"📊 Position registered with realtime system: {symbol}")
+            
             # 🎯 CATCH-UP LOGIC: Check if we should immediately TP/SL based on current price
             await self._catchup_position_state(mint_address, symbol)
             
