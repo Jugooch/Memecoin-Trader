@@ -169,20 +169,29 @@ class TradingEngine:
             
             if action == 'buy':
                 # This is the trigger! WSS detected our buy went through
-                # Now start the verification-first position creation
-                symbol = trade_event.get('symbol', 'UNKNOWN')
-                sol_amount = trade_event.get('sol_amount', 0)
-                usd_amount = trade_event.get('usd_amount', sol_amount * 250)  # Rough estimate
+                self.logger.info(f"🚀 WSS buy trigger received for {mint[:8]}...")
                 
-                self.logger.info(f"🚀 WSS buy trigger - starting verification for {symbol}")
+                # Get stored transaction data (prevents duplicates and ensures accurate pricing)
+                if not hasattr(self, '_pending_transactions'):
+                    self._pending_transactions = {}
                 
-                # Start the verification process (non-blocking)
+                tx_data = self._pending_transactions.get(tx_signature)
+                if not tx_data:
+                    self.logger.warning(f"⚠️ No pending transaction data for {tx_signature[:16]}... - ignoring WSS event")
+                    return
+                
+                # Remove from pending (prevents duplicate processing)
+                del self._pending_transactions[tx_signature]
+                
+                self.logger.info(f"🚀 WSS buy trigger - starting verification for {tx_data['symbol']}")
+                
+                # Start the verification process with accurate data
                 asyncio.create_task(self._create_verified_position(
-                    mint_address=mint,
+                    mint_address=tx_data['mint_address'],
                     tx_signature=tx_signature,
-                    sol_amount=sol_amount,
-                    usd_amount=usd_amount,
-                    symbol=symbol
+                    sol_amount=tx_data['sol_amount'],
+                    usd_amount=tx_data['usd_amount'],
+                    symbol=tx_data['symbol']
                 ))
                 
             elif action == 'sell':
@@ -558,29 +567,34 @@ class TradingEngine:
                 tx_signature = send_result.get("signature")
                 self.logger.info(f"✅ Live buy executed: {symbol} for ${usd_amount} - TX: {tx_signature}")
                 
-                # 🚀 NEW CLEAN FLOW: Wait for blockchain verification before creating position
-                self.logger.info(f"✅ Transaction sent: {tx_signature} - waiting for QuickNode verification...")
+                # 🚀 NEW CLEAN FLOW: ONLY wait for WSS trigger, no immediate verification
+                self.logger.info(f"✅ Transaction sent: {tx_signature} - waiting for WSS confirmation...")
                 
-                # Schedule position creation after verification (non-blocking)
-                asyncio.create_task(self._create_verified_position(
-                    mint_address=mint_address,
-                    tx_signature=tx_signature,
-                    sol_amount=sol_amount,
-                    usd_amount=usd_amount,
-                    symbol=symbol
-                ))
+                # Store pending transaction data for WSS trigger
+                if not hasattr(self, '_pending_transactions'):
+                    self._pending_transactions = {}
+                
+                self._pending_transactions[tx_signature] = {
+                    'mint_address': mint_address,
+                    'sol_amount': sol_amount,
+                    'usd_amount': usd_amount,
+                    'symbol': symbol,
+                    'timestamp': datetime.now()
+                }
                 
                 # P&L and notifications will be handled after verification in _create_verified_position
                 
                 return {
                     "success": True,
+                    "price": 0.0,  # Temporary - real price will be set after verification
                     "tx_signature": tx_signature,
                     "sol_amount": sol_amount,
                     "usd_amount": usd_amount,
+                    "tokens_received": 0.0,  # Temporary - real tokens will be set after verification
                     "symbol": symbol,
                     "paper_mode": False,
                     "status": "verification_pending",
-                    "message": f"Transaction sent, position will be created after QuickNode verification"
+                    "message": f"Transaction sent, position will be created after WSS confirmation"
                 }
             else:
                 self.logger.error(f"Failed to send transaction: {send_result.get('error')}")
@@ -1381,7 +1395,28 @@ class TradingEngine:
             
             # Extract verified data
             actual_tokens = verified_data['tokens_received']
+            
+            # Safety check: Prevent division by zero
+            if actual_tokens <= 0:
+                self.logger.error(f"❌ Invalid token amount: {actual_tokens} - cannot create position")
+                await self.send_error_notification(f"Invalid token verification: {symbol}", {
+                    'mint': mint_address,
+                    'tx_signature': tx_signature,
+                    'tokens_received': actual_tokens
+                })
+                return
+                
             actual_fill_price = usd_amount / actual_tokens
+            
+            # Safety check: Prevent zero entry price
+            if actual_fill_price <= 0:
+                self.logger.error(f"❌ Invalid fill price: ${actual_fill_price} - cannot create position")
+                await self.send_error_notification(f"Invalid fill price: {symbol}", {
+                    'mint': mint_address,
+                    'tx_signature': tx_signature,
+                    'fill_price': actual_fill_price
+                })
+                return
             
             self.logger.info(f"✅ Verification complete: {actual_tokens:,.0f} tokens at ${actual_fill_price:.8f}")
             
@@ -1493,12 +1528,17 @@ class TradingEngine:
                 self.logger.warning(f"⚠️ Cannot get current price for catchup: {symbol}")
                 return
             
+            # Safety check: Prevent division by zero
+            if position.entry_price <= 0:
+                self.logger.error(f"❌ Invalid entry price {position.entry_price} - skipping catchup for {symbol}")
+                return
+            
             # Update peak price if needed
             if current_price > position.peak_price:
                 position.peak_price = current_price
                 self.logger.info(f"📈 New peak: {symbol} ${current_price:.8f}")
             
-            # Calculate current P&L
+            # Calculate current P&L (now safe from division by zero)
             current_pnl_pct = ((current_price - position.entry_price) / position.entry_price) * 100
             
             self.logger.info(f"🎯 Catchup check: {symbol} entry=${position.entry_price:.8f}, "

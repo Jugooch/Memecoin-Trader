@@ -1188,50 +1188,114 @@ class MemecoinTradingBot:
             )
             
             if result['success']:
-                # Create trade record with enhanced analytics
-                trade_record = {
-                    'mint': mint_address,
-                    'action': 'BUY',
-                    'amount': trade_amount,
-                    'base_amount': base_trade_amount,
-                    'price': result['price'],
-                    'sol_amount': result.get('sol_amount', 0),
-                    'tokens_amount': result.get('tokens_received', 0),
-                    'timestamp': time.time(),  # Use unix timestamp for in-memory
-                    'paper_mode': self.config.paper_mode,
-                    'confidence_score': confidence_score,
-                    'investment_multiplier': investment_multiplier,
-                    'wallet_tiers': wallet_tiers or {},
-                    'metadata': {
-                        'symbol': metadata.get('symbol', 'UNKNOWN'),
-                        'name': metadata.get('name', 'Unknown Token')
+                # Handle async position creation (verification_pending status)
+                if result.get('status') == 'verification_pending':
+                    self.logger.info(f"✅ Trade initiated: {symbol} for ${trade_amount} - waiting for position creation")
+                    
+                    # Create trade record with temp values for now
+                    trade_record = {
+                        'mint': mint_address,
+                        'action': 'BUY',
+                        'amount': trade_amount,
+                        'base_amount': base_trade_amount,
+                        'price': result['price'],  # Temp value
+                        'sol_amount': result['sol_amount'],
+                        'tokens_amount': result['tokens_received'],  # Temp value
+                        'timestamp': time.time(),
+                        'paper_mode': self.config.paper_mode,
+                        'confidence_score': confidence_score,
+                        'investment_multiplier': investment_multiplier,
+                        'wallet_tiers': wallet_tiers or {},
+                        'metadata': {
+                            'symbol': metadata.get('symbol', 'UNKNOWN'),
+                            'name': metadata.get('name', 'Unknown Token')
+                        },
+                        'status': 'verification_pending'
                     }
-                }
-                
-                # Add to in-memory trade history
-                self.recent_trades.append(trade_record)
-                self._cleanup_old_trades()  # Clean up old trades from memory
-                
-                # Try to record in database (but don't fail if it doesn't work)
-                try:
-                    db_record = trade_record.copy()
-                    db_record['timestamp'] = datetime.now()  # Database expects datetime
-                    await self.database.record_trade(db_record)
-                except Exception as db_error:
-                    self.logger.warning(f"Failed to save trade to database: {db_error}")
-                    # Continue anyway - we have it in memory
-                
-                self.trades_today += 1
-                self.last_trade_time = time.time()
-                
-                # Mark token as traded in cache
-                self._record_token_status(mint_address, 'traded', f'Invested ${trade_amount:.2f}')
-                
-                # Start monitoring for exit conditions
-                asyncio.create_task(self.monitor_position(mint_address, result, metadata))
+                    
+                    # Add to in-memory trade history with temp values
+                    self.recent_trades.append(trade_record)
+                    self._cleanup_old_trades()
+                    
+                    self.trades_today += 1
+                    self.last_trade_time = time.time()
+                    
+                    # Mark token as traded in cache
+                    self._record_token_status(mint_address, 'traded', f'Invested ${trade_amount:.2f} (verifying...)')
+                    
+                    # Start monitoring - it will wait for position to be created
+                    asyncio.create_task(self.monitor_position_async(mint_address, result, metadata))
+                    
+                else:
+                    # Legacy path for paper trading or already-verified positions
+                    trade_record = {
+                        'mint': mint_address,
+                        'action': 'BUY',
+                        'amount': trade_amount,
+                        'base_amount': base_trade_amount,
+                        'price': result['price'],
+                        'sol_amount': result['sol_amount'],
+                        'tokens_amount': result['tokens_received'],
+                        'timestamp': time.time(),
+                        'paper_mode': self.config.paper_mode,
+                        'confidence_score': confidence_score,
+                        'investment_multiplier': investment_multiplier,
+                        'wallet_tiers': wallet_tiers or {},
+                        'metadata': {
+                            'symbol': metadata.get('symbol', 'UNKNOWN'),
+                            'name': metadata.get('name', 'Unknown Token')
+                        }
+                    }
+                    
+                    self.recent_trades.append(trade_record)
+                    self._cleanup_old_trades()
+                    
+                    # Try to record in database
+                    try:
+                        db_record = trade_record.copy()
+                        db_record['timestamp'] = datetime.now()
+                        await self.database.record_trade(db_record)
+                    except Exception as db_error:
+                        self.logger.warning(f"Failed to save trade to database: {db_error}")
+                    
+                    self.trades_today += 1
+                    self.last_trade_time = time.time()
+                    
+                    self._record_token_status(mint_address, 'traded', f'Invested ${trade_amount:.2f}')
+                    
+                    # Start immediate monitoring (position already exists)
+                    asyncio.create_task(self.monitor_position(mint_address, result, metadata))
                 
         except Exception as e:
             self.logger.error(f"Trade execution failed: {e}")
+
+    async def monitor_position_async(self, mint_address: str, entry_data: Dict, metadata: Dict = None):
+        """Monitor position with async position creation - waits for verification to complete"""
+        symbol = metadata.get('symbol', 'UNKNOWN') if metadata else 'UNKNOWN'
+        
+        self.logger.info(f"🔍 Waiting for position creation: {symbol} ({mint_address[:8]}...)")
+        
+        # Wait for position to be created (with timeout)
+        max_wait_time = 120  # 2 minutes max wait
+        wait_interval = 2    # Check every 2 seconds
+        waited = 0
+        
+        while waited < max_wait_time:
+            if mint_address in self.trading_engine.active_positions:
+                self.logger.info(f"✅ Position created for {symbol} after {waited}s - starting monitoring")
+                # Position exists, now use regular monitoring
+                await self.monitor_position(mint_address, entry_data, metadata)
+                return
+            
+            await asyncio.sleep(wait_interval)
+            waited += wait_interval
+            
+            if waited % 20 == 0:  # Log every 20 seconds
+                self.logger.info(f"⏳ Still waiting for {symbol} position creation ({waited}s/{max_wait_time}s)")
+        
+        # Timeout - position was never created
+        self.logger.error(f"❌ Position creation timeout for {symbol} after {max_wait_time}s")
+        self.logger.error(f"❌ This usually means QuickNode verification failed")
 
     async def monitor_position(self, mint_address: str, entry_data: Dict, metadata: Dict = None):
         """Monitor position using sophisticated exit strategy from trading_engine"""
