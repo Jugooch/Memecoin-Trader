@@ -1387,7 +1387,7 @@ class MemecoinTradingBot:
         last_alpha_checks = 0
         
         while self.running:
-            await asyncio.sleep(300)  # Every 5 minutes
+            await asyncio.sleep(120)  # Every 2 minutes (optimized with caching)
             
             # Calculate activity since last summary
             tokens_this_period = self.tokens_processed - last_tokens_processed
@@ -1395,11 +1395,11 @@ class MemecoinTradingBot:
             
             # Get recent trades from the last 5 minutes from in-memory storage
             try:
-                # Filter trades from last 5 minutes
-                five_min_ago = time.time() - 300
+                # Filter trades from last 2 minutes
+                two_min_ago = time.time() - 120
                 period_trades = [
                     trade for trade in self.recent_trades
-                    if trade.get('timestamp', 0) > five_min_ago
+                    if trade.get('timestamp', 0) > two_min_ago
                 ]
                 
                 # Prepare enhanced trade summary
@@ -1520,9 +1520,9 @@ class MemecoinTradingBot:
                     
                     self.logger.info(summary)
                     
-                    # Send Discord summary if there was significant activity
-                    if tokens_this_period > 10 or period_trades:
-                        await self.trading_engine.send_summary()
+                    # Send Discord summary more frequently with caching
+                    # Always send summary (caching makes it cheap)
+                    await self.trading_engine.send_summary()
                         
                 else:
                     self.logger.info(f"Bot running - monitoring pump.fun launches. Alpha wallets: {len(active_wallets)}/{total_wallets} active")

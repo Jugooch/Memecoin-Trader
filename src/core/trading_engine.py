@@ -12,6 +12,7 @@ from datetime import datetime
 from src.clients.pumpfun_client import PumpFunClient
 from src.clients.moralis_client import MoralisClient
 from src.clients.transaction_signer import TransactionSigner
+from src.clients.blockchain_analytics import BlockchainAnalytics
 from src.utils.discord_notifier import DiscordNotifier
 from src.utils.pnl_store import PnLStore
 
@@ -118,6 +119,18 @@ class TradingEngine:
             path="data/pnl_state.json",
             initial_capital=config.initial_capital
         )
+        
+        # Initialize blockchain analytics for accurate P&L (Discord notifications only)
+        self.blockchain_analytics = None
+        if config.quicknode_endpoint and self.transaction_signer:
+            try:
+                self.blockchain_analytics = BlockchainAnalytics(
+                    rpc_endpoint=config.quicknode_endpoint,
+                    api_key=config.quicknode_api_key
+                )
+                self.logger.info("✅ Blockchain analytics initialized for accurate P&L tracking")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Blockchain analytics not available: {e}")
         
         # Position tracking
         self.active_positions = {}
@@ -1269,16 +1282,58 @@ class TradingEngine:
             await self.notifier.send_error_notification(message, context)
     
     async def send_summary(self):
-        """Send portfolio summary to Discord"""
-        if self.notifier:
-            summary = self.pnl_store.get_summary()
-            await self.notifier.send_summary(
-                equity=summary["equity"],
-                daily_pnl=summary["daily_pnl"],
-                total_trades=summary["total_trades"],
-                win_rate=summary["win_rate"],
-                active_positions=len(self.active_positions)
-            )
+        """Send portfolio summary to Discord with blockchain-verified data"""
+        if not self.notifier:
+            return
+            
+        # Try to get blockchain-verified data if available (non-blocking)
+        if self.blockchain_analytics and self.transaction_signer:
+            try:
+                # Get wallet address
+                wallet_address = self.transaction_signer.get_wallet_address()
+                
+                # Fetch blockchain data asynchronously (with timeout to prevent blocking)
+                blockchain_task = asyncio.create_task(
+                    self.blockchain_analytics.get_accurate_portfolio_stats(wallet_address)
+                )
+                
+                # Wait max 5 seconds for blockchain data
+                try:
+                    blockchain_data = await asyncio.wait_for(blockchain_task, timeout=5.0)
+                    
+                    # Calculate win rate from today's trades
+                    wins = self.pnl_store.data.get("winning_trades", 0)
+                    losses = self.pnl_store.data.get("losing_trades", 0) 
+                    total_trades = wins + losses
+                    win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
+                    
+                    # Use blockchain-verified data for Discord
+                    await self.notifier.send_summary(
+                        equity=blockchain_data["current_equity_usd"],
+                        daily_pnl=blockchain_data["net_usd_change"],
+                        total_trades=total_trades,
+                        win_rate=win_rate,
+                        active_positions=len(self.active_positions)
+                    )
+                    
+                    self.logger.info(f"📊 Sent blockchain-verified summary: ${blockchain_data['net_usd_change']:+.2f} P&L")
+                    return
+                    
+                except asyncio.TimeoutError:
+                    self.logger.warning("⚠️ Blockchain data fetch timed out, using local data")
+                    
+            except Exception as e:
+                self.logger.warning(f"⚠️ Could not fetch blockchain data: {e}")
+        
+        # Fallback to local P&L store data
+        summary = self.pnl_store.get_summary()
+        await self.notifier.send_summary(
+            equity=summary["equity"],
+            daily_pnl=summary["daily_pnl"],
+            total_trades=summary["total_trades"],
+            win_rate=summary["win_rate"],
+            active_positions=len(self.active_positions)
+        )
     
     def get_position_tier_status(self, position: Position) -> Dict:
         """
@@ -1344,5 +1399,7 @@ class TradingEngine:
         """Cleanup resources"""
         if self.notifier:
             await self.notifier.close()
+        if self.blockchain_analytics:
+            await self.blockchain_analytics.close()
         await self.pumpfun.close()
         await self.moralis.close()

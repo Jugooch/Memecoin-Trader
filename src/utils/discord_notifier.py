@@ -128,7 +128,7 @@ class DiscordNotifier:
                                      realized_pnl: Optional[float] = None,
                                      confidence_score: Optional[float] = None,
                                      paper_mode: bool = True) -> bool:
-        """Send a formatted trade notification"""
+        """Send a formatted trade notification with blockchain verification"""
         
         # Choose color based on side
         if side.upper() == "BUY":
@@ -198,9 +198,13 @@ class DiscordNotifier:
         # Choose emoji based on P&L
         pnl_emoji = "📈" if daily_pnl >= 0 else "📉"
         
+        # Calculate P&L percentage
+        starting_equity = equity - daily_pnl
+        pnl_pct = (daily_pnl / starting_equity * 100) if starting_equity > 0 else 0
+        
         fields = {
             "Equity": f"${equity:.2f}",
-            "Daily P&L": f"{pnl_emoji} ${daily_pnl:+.2f}",
+            "Daily P&L": f"{pnl_emoji} ${daily_pnl:+.2f} ({pnl_pct:+.1f}%)",
             "Total Trades": str(total_trades),
             "Win Rate": f"{win_rate:.1f}%",
             "Active Positions": str(active_positions)
@@ -301,14 +305,22 @@ class DiscordNotifier:
                                 best_trade: Optional[float] = None,
                                 worst_trade: Optional[float] = None,
                                 top_wallet: Optional[str] = None,
-                                top_wallet_wr: Optional[float] = None) -> bool:
-        """Send comprehensive daily summary"""
+                                top_wallet_wr: Optional[float] = None,
+                                sol_balance: Optional[float] = None,
+                                sol_in: Optional[float] = None,
+                                sol_out: Optional[float] = None,
+                                fees_paid: Optional[float] = None) -> bool:
+        """Send comprehensive daily summary with blockchain data"""
         
         win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
         pnl_emoji = "📈" if daily_pnl >= 0 else "📉"
         
+        # Calculate P&L percentage
+        starting_equity = equity - daily_pnl
+        pnl_pct = (daily_pnl / starting_equity * 100) if starting_equity > 0 else 0
+        
         fields = {
-            "P&L": f"{pnl_emoji} ${daily_pnl:+.2f} ({daily_pnl/equity*100:+.1f}%)" if equity > 0 else f"{pnl_emoji} ${daily_pnl:+.2f}",
+            "P&L": f"{pnl_emoji} ${daily_pnl:+.2f} ({pnl_pct:+.1f}%)",
             "Trades": f"{total_trades} ({wins}W, {losses}L)",
             "Win Rate": f"{win_rate:.1f}%",
             "Equity": f"${equity:.2f}"
