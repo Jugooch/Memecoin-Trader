@@ -350,8 +350,8 @@ class TradingEngine:
             # Create buy transaction via QuickNode pump-fun API
             self.logger.info(f"Creating live buy transaction: ${usd_amount} ({sol_amount:.4f} SOL) for {symbol}")
             
-            # Use 60% slippage to ensure fills on competitive tokens
-            slippage_bps = 6000  # 60% slippage for pump.fun tokens
+            # Back to more reasonable slippage - test if unit fix solved the problem
+            slippage_bps = 2000  # 20% slippage - original setting
             
             tx_result = await self.pumpfun.create_buy_transaction(
                 wallet_pubkey=wallet_pubkey,
@@ -419,7 +419,7 @@ class TradingEngine:
                         side="BUY",
                         symbol=symbol,
                         mint_address=mint_address,
-                        quantity=estimated_tokens,
+                        quantity=actual_tokens,
                         price=current_price,
                         usd_amount=usd_amount,
                         equity=self.pnl_store.current_equity,
@@ -432,7 +432,7 @@ class TradingEngine:
                     "tx_signature": tx_signature,
                     "sol_amount": sol_amount,
                     "usd_amount": usd_amount,
-                    "estimated_tokens": estimated_tokens,
+                    "tokens_received": actual_tokens,
                     "symbol": symbol,
                     "paper_mode": False
                 }

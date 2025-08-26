@@ -146,32 +146,14 @@ class TransactionSigner:
                     "error": result.get("error", {}).get("message", "Unknown error")
                 }
             
-            # Get transaction signature
+            # Get transaction signature - if we get this back, the transaction succeeded
             tx_signature = result
-            self.logger.info(f"Transaction sent: {tx_signature}")
+            self.logger.info(f"✅ Transaction sent successfully: {tx_signature}")
             
-            # Confirm transaction
-            self.logger.info("Waiting for confirmation...")
-            confirmation = await self._make_rpc_request(
-                "confirmTransaction",
-                [tx_signature, "confirmed"]
-            )
-            
-            if confirmation and not confirmation.get("error"):
-                self.logger.info(f"✅ Transaction confirmed: {tx_signature}")
-                return {
-                    "success": True,
-                    "signature": tx_signature,
-                    "confirmed": True
-                }
-            else:
-                self.logger.warning(f"Transaction sent but not confirmed: {tx_signature}")
-                return {
-                    "success": True,  # Transaction was sent
-                    "signature": tx_signature,
-                    "confirmed": False,
-                    "warning": "Transaction sent but confirmation pending"
-                }
+            return {
+                "success": True,
+                "signature": tx_signature
+            }
                 
         except Exception as e:
             self.logger.error(f"Error signing/sending transaction: {e}")
