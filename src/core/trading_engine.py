@@ -425,8 +425,8 @@ class TradingEngine:
             # Create buy transaction via QuickNode pump-fun API
             self.logger.info(f"Creating live buy transaction: ${usd_amount} ({sol_amount:.4f} SOL) for {symbol}")
             
-            # Back to more reasonable slippage - test if unit fix solved the problem
-            slippage_bps = 200  # 2% slippage - original setting
+            # Tightened slippage for better fills and more accurate P&L
+            slippage_bps = 100  # 1% slippage - tightened from 2%
             
             tx_result = await self.pumpfun.create_buy_transaction(
                 wallet_pubkey=wallet_pubkey,
@@ -721,8 +721,8 @@ class TradingEngine:
             # Create sell transaction
             self.logger.info(f"Creating live sell transaction: {percentage*100:.0f}% of {symbol} position ({tokens_to_sell:.2f} tokens)")
             
-            # Use conservative slippage for sells
-            slippage_bps = 300  # 3% slippage for pump.fun sells
+            # Tightened sell slippage for better fills
+            slippage_bps = 150  # 1.5% slippage - tightened from 3%
             
             tx_result = await self.pumpfun.create_sell_transaction(
                 wallet_pubkey=wallet_pubkey,

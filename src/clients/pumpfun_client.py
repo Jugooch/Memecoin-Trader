@@ -84,7 +84,7 @@ class PumpFunClient:
                 "amount": sol_decimal,  # Send SOL as decimal (0.0064), not lamports!
                 "denominatedInSol": "true",
                 "slippage": int(slippage_bps / 100),  # Send as number, not string!
-                "priorityFee": 0.001,  # Lower fee for alpha-following strategy (~$0.25)
+                "priorityFee": 0.003,  # Higher priority fee for faster execution (~$0.75)
                 "pool": "auto"  # Let it decide - now that we have proper price calculations
             })
             
@@ -135,7 +135,7 @@ class PumpFunClient:
                 "amount": token_amount,  # Raw token count, not smallest units!
                 "denominatedInSol": "false",  # Amount is in tokens
                 "slippage": int(slippage_bps / 100),  # Send as number, not string!
-                "priorityFee": 0.001,  # Lower fee for alpha-following strategy (~$0.25)
+                "priorityFee": 0.003,  # Higher priority fee for faster execution (~$0.75)
                 "pool": "auto"  # Let it decide - now that we have proper price calculations
             })
             
