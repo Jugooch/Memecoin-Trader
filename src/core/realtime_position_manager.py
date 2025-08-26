@@ -70,18 +70,36 @@ class RealtimePositionManager:
             self.logger.error(f"Error handling trade event: {e}")
     
     def _handle_buy_event(self, event: Dict) -> None:
-        """Handle buy trade event - create new position"""
+        """Handle buy trade event - create or update position"""
         mint = event['mint']
         tx_signature = event.get('tx_signature', f"ws_{mint}_{int(datetime.now().timestamp())}")
+        tokens_received = event.get('tokens_received', 0.0)
         
-        # Create position immediately based on WebSocket event
+        # Check if position already exists (from initial estimate)
+        if mint in self.positions:
+            existing_position = self.positions[mint]
+            # Update with verified data if we have it, otherwise keep existing
+            if tokens_received > 0:
+                if tokens_received != existing_position.current_tokens:
+                    self.logger.info(f"🔄 Position updated: {mint[:8]}... {existing_position.current_tokens:,.0f} → {tokens_received:,.0f} tokens (verified)")
+                    existing_position.current_tokens = tokens_received
+                    existing_position.last_update = datetime.now()
+                    if self.on_position_updated:
+                        self.on_position_updated(existing_position)
+                else:
+                    self.logger.debug(f"✅ Position confirmed: {mint[:8]}... {existing_position.current_tokens:,.0f} tokens (verified)")
+            else:
+                self.logger.debug(f"⚡ Position unchanged: {mint[:8]}... keeping {existing_position.current_tokens:,.0f} tokens (no new data)")
+            return
+        
+        # Create new position if none exists
         position = RealtimePosition(
             mint=mint,
             entry_time=datetime.now(),
             entry_price=event.get('price', 0.0),
             sol_invested=event.get('sol_amount', 0.0),
             buy_tx_signature=tx_signature,
-            current_tokens=event.get('tokens_received', 0.0),
+            current_tokens=tokens_received,
             last_update=datetime.now()
         )
         
