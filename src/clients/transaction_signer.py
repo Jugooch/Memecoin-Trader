@@ -299,10 +299,15 @@ class TransactionSigner:
                 # Try versioned transaction format
                 account_keys = transaction_data.get("transaction", {}).get("message", {}).get("staticAccountKeys", [])
             
-            # Find our wallet's account index
+            # Find our wallet's account index - handle both string and dict formats
             wallet_index = -1
             for i, account_key in enumerate(account_keys):
-                if account_key == wallet_address:
+                # Handle jsonParsed format (dict) vs json format (string)
+                key_to_compare = account_key
+                if isinstance(account_key, dict):
+                    key_to_compare = account_key.get('pubkey', '')
+                    
+                if key_to_compare == wallet_address:
                     wallet_index = i
                     break
             
