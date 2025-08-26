@@ -265,7 +265,7 @@ class TradingEngine:
             symbol=symbol,
             mint_address=mint_address,
             amount=tokens_received,
-            price=price,
+            price=fill_price,  # Use actual fill price for consistency
             usd_value=usd_amount,
             paper_mode=True
         )
@@ -277,18 +277,18 @@ class TradingEngine:
                 symbol=symbol,
                 mint_address=mint_address,
                 quantity=tokens_received,
-                price=price,
+                price=fill_price,  # Use actual fill price for consistency
                 usd_amount=usd_amount,
                 equity=self.pnl_store.current_equity,
                 confidence_score=confidence_score,
                 paper_mode=True
             )
         
-        self.logger.info(f"Paper buy executed: {tokens_received} tokens at ${price}")
+        self.logger.info(f"Paper buy executed: {tokens_received} tokens at ${fill_price:.8f} (market: ${price:.8f})")
         
         return {
             "success": True,
-            "price": price,
+            "price": fill_price,  # Return actual fill price for consistency
             "tokens_received": tokens_received,
             "sol_amount": sol_amount,
             "usd_amount": usd_amount,
@@ -393,19 +393,23 @@ class TradingEngine:
                 
                 self.logger.info(f"Exact tokens received: {actual_tokens}")
                 
+                # Calculate actual fill price from transaction (USD per token)
+                fill_price = usd_amount / actual_tokens if actual_tokens > 0 else current_price
+                self.logger.info(f"Actual fill price: ${fill_price:.8f} (vs market ${current_price:.8f})")
+                
                 position = Position(
                     mint=mint_address,
-                    entry_price=current_price,
+                    entry_price=fill_price,  # Use actual fill price, not market price
                     amount=actual_tokens,
                     sol_invested=sol_amount,
                     entry_time=datetime.now(),
-                    tp_price=current_price * self.config.tp_multiplier,
-                    sl_price=current_price * self.config.stop_loss_pct,
-                    peak_price=current_price,
+                    tp_price=fill_price * self.config.tp_multiplier,
+                    sl_price=fill_price * self.config.stop_loss_pct,
+                    peak_price=fill_price,
                     paper_mode=False,  # This is live trading
                     tokens_initial=actual_tokens,
                     cost_usd_remaining=usd_amount,
-                    avg_cost_per_token=usd_amount / actual_tokens if actual_tokens > 0 else 0
+                    avg_cost_per_token=fill_price
                 )
                 
                 self.active_positions[mint_address] = position
@@ -416,7 +420,7 @@ class TradingEngine:
                     symbol=symbol,
                     mint_address=mint_address,
                     amount=actual_tokens,
-                    price=current_price,
+                    price=fill_price,  # Use actual fill price
                     usd_value=usd_amount,
                     paper_mode=False
                 )
@@ -428,7 +432,7 @@ class TradingEngine:
                         symbol=symbol,
                         mint_address=mint_address,
                         quantity=actual_tokens,
-                        price=current_price,
+                        price=fill_price,  # Use actual fill price
                         usd_amount=usd_amount,
                         equity=self.pnl_store.current_equity,
                         paper_mode=False
@@ -436,6 +440,7 @@ class TradingEngine:
                 
                 return {
                     "success": True,
+                    "price": fill_price,  # Use actual execution price for accurate records
                     "tx_signature": tx_signature,
                     "sol_amount": sol_amount,
                     "usd_amount": usd_amount,
@@ -637,12 +642,16 @@ class TradingEngine:
             if send_result.get("success"):
                 tx_signature = send_result.get("signature")
                 pnl_pct = ((current_price / position.entry_price) - 1) * 100
-                estimated_sol = tx_result.get("estimated_sol", 0)
                 
                 self.logger.info(f"✅ Live sell executed: {percentage*100:.0f}% of {symbol} at {pnl_pct:+.1f}% P&L - TX: {tx_signature}")
                 
-                # Update position using same logic as paper trading
+                # Get actual USD value using current market price (like paper trading)
                 cost_basis_usd = tokens_to_sell * position.avg_cost_per_token
+                usd_value = tokens_to_sell * current_price  # Use actual market price, not SOL conversion
+                profit_usd = usd_value - cost_basis_usd
+                profit_pct = (profit_usd / cost_basis_usd) * 100 if cost_basis_usd > 0 else 0
+                
+                self.logger.info(f"Sell P&L: ${cost_basis_usd:.2f} cost → ${usd_value:.2f} received = ${profit_usd:+.2f} ({profit_pct:+.1f}%)")
                 
                 # Update position with proper accounting (same as paper trading)
                 position.amount -= tokens_to_sell
@@ -655,13 +664,6 @@ class TradingEngine:
                 # Remove position if fully sold
                 if position.amount <= 0:
                     del self.active_positions[mint_address]
-                
-                # Calculate profit
-                sol_price = getattr(self.config, "paper_trading", {}).get("sol_price_estimate", 140)
-                usd_value = estimated_sol * sol_price
-                cost_basis = position.cost_usd_remaining * percentage
-                profit_usd = usd_value - cost_basis
-                profit_pct = (profit_usd / cost_basis) * 100 if cost_basis > 0 else 0
                 
                 # Update P&L
                 self.pnl_store.add_trade(
@@ -699,11 +701,12 @@ class TradingEngine:
                 
                 return {
                     "success": True,
+                    "price": current_price,  # Add missing price key for consistency
                     "tx_signature": tx_signature,
                     "tokens_sold": tokens_to_sell,
-                    "estimated_sol": estimated_sol,
-                    "usd_value": usd_value,
-                    "profit_usd": profit_usd,
+                    "usd_received": usd_value,  # Renamed for clarity
+                    "usd_value": usd_value,     # Keep both for compatibility
+                    "profit": profit_usd,       # Match paper trading format
                     "profit_pct": profit_pct,
                     "symbol": symbol,
                     "paper_mode": False
