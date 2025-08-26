@@ -87,16 +87,16 @@ class TransactionSigner:
             
             # Sign it (simulation requires signatures)
             from solders.transaction import VersionedTransaction
-            from solders.signature import Signature
             
             tx = VersionedTransaction.from_bytes(transaction_bytes)
-            tx.sign([self.keypair], tx.message.recent_blockhash)
+            # For VersionedTransaction, create a new signed version
+            signed_tx = VersionedTransaction(tx.message, [self.keypair])
             
             # Simulate the signed transaction
             result = await self._make_rpc_request(
                 "simulateTransaction",
                 [
-                    base64.b64encode(bytes(tx)).decode('utf-8'),
+                    base64.b64encode(bytes(signed_tx)).decode('utf-8'),
                     {
                         "encoding": "base64",
                         "commitment": "processed",
