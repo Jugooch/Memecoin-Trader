@@ -127,14 +127,12 @@ class PumpFunClient:
     async def create_sell_transaction(self, wallet_pubkey: str, mint_address: str, token_amount: float, slippage_bps: int = 100) -> Dict:
         """Create a sell transaction via Pump Portal Local Trading API"""
         try:
-            # Convert token amount to smallest unit (assuming 6 decimals for most tokens)
-            token_units = int(token_amount * 1_000_000)
-            
+            # Use raw token amount (not converted to smallest units) when denominatedInSol=false
             response = await self._make_pump_portal_local_request({
                 "publicKey": wallet_pubkey,
                 "action": "sell",
                 "mint": mint_address,
-                "amount": token_units,  # Send as number, not string!
+                "amount": token_amount,  # Raw token count, not smallest units!
                 "denominatedInSol": "false",  # Amount is in tokens
                 "slippage": int(slippage_bps / 100),  # Send as number, not string!
                 "priorityFee": 0.005,  # Back to original lower fee (~$1.25)
