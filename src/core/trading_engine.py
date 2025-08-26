@@ -753,18 +753,37 @@ class TradingEngine:
                 # Get actual SOL received from transaction logs (most accurate)
                 self.logger.info("Getting exact SOL received from transaction logs...")
                 
-                # Wait a moment for transaction to be indexed
-                await asyncio.sleep(2)
-                
-                # Get transaction details and parse actual SOL received
-                tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
-                wallet_address = self.transaction_signer.get_wallet_address()
-                
+                # Enhanced retry logic for transaction parsing
                 actual_sol_received = 0.0
-                if tx_details and wallet_address:
-                    actual_sol_received = self.transaction_signer.parse_sol_change_from_logs(
-                        tx_details, wallet_address
-                    )
+                max_retries = 5
+                retry_delays = [1, 2, 2, 3, 5]  # Progressive delays
+                
+                wallet_address = self.transaction_signer.get_wallet_address()
+                for attempt in range(max_retries):
+                    try:
+                        # Wait before checking (progressive delays)
+                        await asyncio.sleep(retry_delays[attempt])
+                        
+                        tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
+                        
+                        if tx_details and wallet_address:
+                            actual_sol_received = self.transaction_signer.parse_sol_change_from_logs(
+                                tx_details, wallet_address
+                            )
+                            if actual_sol_received > 0:
+                                self.logger.info(f"✅ Parsed actual SOL received: {actual_sol_received:.6f} SOL (attempt {attempt+1})")
+                                break
+                            else:
+                                self.logger.warning(f"Attempt {attempt+1}: SOL parsing returned 0")
+                        else:
+                            self.logger.warning(f"Attempt {attempt+1}: Transaction not fully indexed yet")
+                    except Exception as e:
+                        self.logger.warning(f"Attempt {attempt+1} failed: {e}")
+                
+                if actual_sol_received <= 0:
+                    self.logger.error("❌ CRITICAL: Failed to parse actual SOL after all retries - DO NOT TRUST P&L")
+                    # NEVER use market estimate for sells - better to report unknown P&L
+                    actual_sol_received = 0.0
                 
                 # Calculate actual USD value using real-time SOL price
                 cost_basis_usd = tokens_to_sell * position.avg_cost_per_token
@@ -774,15 +793,18 @@ class TradingEngine:
                     sol_price_usd = getattr(self.config, "paper_trading", {}).get("sol_price_estimate", 250)
                     usd_value = actual_sol_received * sol_price_usd
                     self.logger.info(f"Actual SOL received: {actual_sol_received:.6f} SOL (${usd_value:.2f} at ${sol_price_usd}/SOL)")
+                    
+                    profit_usd = usd_value - cost_basis_usd
+                    profit_pct = (profit_usd / cost_basis_usd) * 100 if cost_basis_usd > 0 else 0
+                    
+                    self.logger.info(f"VERIFIED Sell P&L: ${cost_basis_usd:.2f} cost → ${usd_value:.2f} received = ${profit_usd:+.2f} ({profit_pct:+.1f}%)")
                 else:
-                    # Fallback to market price estimate if parsing fails
-                    self.logger.warning("Could not parse actual SOL received, using market price estimate")
-                    usd_value = tokens_to_sell * current_price
-                
-                profit_usd = usd_value - cost_basis_usd
-                profit_pct = (profit_usd / cost_basis_usd) * 100 if cost_basis_usd > 0 else 0
-                
-                self.logger.info(f"Sell P&L: ${cost_basis_usd:.2f} cost → ${usd_value:.2f} received = ${profit_usd:+.2f} ({profit_pct:+.1f}%)")
+                    # CRITICAL: Cannot determine actual P&L
+                    self.logger.error("⚠️ CANNOT VERIFY ACTUAL P&L - Transaction parsing failed")
+                    self.logger.error("⚠️ Discord P&L will show UNKNOWN - check wallet manually")
+                    usd_value = 0  # Don't report fake values
+                    profit_usd = None  # Mark as unknown
+                    profit_pct = 0
                 
                 # Update position using post-transaction balance verification
                 remaining_balance = await self._get_post_transaction_balance(mint_address)

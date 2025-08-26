@@ -430,14 +430,19 @@ class MemecoinTradingBot:
         
         self.logger.info(f"Initial alpha signal: {len(initial_alpha_buyers)} wallets detected for {mint_address[:8]}... from real-time data")
         
-        # Token maturity check - wait a bit for Moralis to index the token
-        token_age = time.time() - token_detected_time
-        min_token_age = self.config.min_token_age_seconds
-        
-        if token_age < min_token_age:
-            wait_time = min_token_age - token_age
-            self.logger.info(f"Token {mint_address[:8]}... is too new ({token_age:.1f}s), waiting {wait_time:.1f}s for Moralis indexing")
-            await asyncio.sleep(wait_time)
+        # ULTRA FAST EXECUTION: Skip ALL Moralis waits in aggressive mode
+        # Speed > Safety when following alpha wallets
+        if self.config.get('ultra_fast_execution', True):  # Default to true for aggressive
+            self.logger.info(f"⚡ ULTRA FAST: No Moralis wait - executing in {time.time() - token_detected_time:.1f}s")
+        else:
+            # Legacy wait mode (not recommended)
+            token_age = time.time() - token_detected_time
+            min_token_age = self.config.min_token_age_seconds
+            
+            if token_age < min_token_age:
+                wait_time = min_token_age - token_age
+                self.logger.info(f"Token {mint_address[:8]}... is too new ({token_age:.1f}s), waiting {wait_time:.1f}s for Moralis indexing")
+                await asyncio.sleep(wait_time)
         
         # Now check Moralis, but be more lenient with liquidity for alpha-signaled tokens
         try:

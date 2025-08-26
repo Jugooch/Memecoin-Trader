@@ -152,6 +152,9 @@ class DiscordNotifier:
         if realized_pnl is not None:
             pnl_emoji = "📈" if realized_pnl >= 0 else "📉"
             fields["Realized P&L"] = f"{pnl_emoji} ${realized_pnl:.2f}"
+        elif side == "SELL":
+            # For sells without verified P&L, show warning
+            fields["Realized P&L"] = "⚠️ UNVERIFIED - Check Wallet"
             
         fields["Equity"] = f"💰 ${equity:.2f}"
         
