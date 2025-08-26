@@ -85,7 +85,7 @@ class PumpFunClient:
                 "denominatedInSol": "true",
                 "slippage": int(slippage_bps / 100),  # Send as number, not string!
                 "priorityFee": 0.012,  # Send as number, not string! (~$3)
-                "pool": "raydium"  # Force Raydium - tokens graduate too fast for pump curve
+                "pool": "auto"  # Let it decide - now that we have proper price calculations
             })
             
             if "error" in response:
@@ -138,7 +138,7 @@ class PumpFunClient:
                 "denominatedInSol": "false",  # Amount is in tokens
                 "slippage": int(slippage_bps / 100),  # Send as number, not string!
                 "priorityFee": 0.012,  # Send as number, not string! (~$3)
-                "pool": "raydium"  # Force Raydium - tokens graduate too fast for pump curve
+                "pool": "auto"  # Let it decide - now that we have proper price calculations
             })
             
             if "error" in response:

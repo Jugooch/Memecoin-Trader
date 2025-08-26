@@ -327,10 +327,19 @@ class TradingEngine:
             sol_price = getattr(self.config, "paper_trading", {}).get("sol_price_estimate", 140)
             sol_amount = usd_amount / sol_price
             
-            # Skip Moralis price check for speed - trust the alpha signal
-            # For S-tier wallets, speed > safety validation  
-            self.logger.info("⚡ SPEED MODE: Skipping Moralis price validation for faster execution")
-            current_price = 0.000001  # Dummy price for reference
+            # Get actual price for proper calculations (like paper trading does)
+            # For very new tokens, Moralis might need a moment to index
+            current_price = await self.moralis.get_current_price(mint_address, fresh=True)
+            if current_price <= 0:
+                self.logger.info("Price not available yet, waiting 2 seconds for Moralis indexing...")
+                await asyncio.sleep(2)  # Minimal wait just for price data
+                current_price = await self.moralis.get_current_price(mint_address, fresh=True)
+                
+            if current_price <= 0:
+                self.logger.error(f"Failed to get current price for {mint_address} even after wait")
+                return {"success": False, "error": "Could not get current price for live trading"}
+            
+            self.logger.info(f"Got current price ${current_price:.8f} for live trade calculations")
             
             # Check wallet balance
             wallet_balance = await self.transaction_signer.get_wallet_balance()
@@ -368,8 +377,8 @@ class TradingEngine:
                 tx_signature = send_result.get("signature")
                 self.logger.info(f"✅ Live buy executed: {symbol} for ${usd_amount} - TX: {tx_signature}")
                 
-                # Create position tracking
-                estimated_tokens = sol_amount * (10**9) / current_price  # Rough estimate
+                # Create position tracking using same logic as paper trading
+                estimated_tokens = usd_amount / current_price
                 position = Position(
                     mint=mint_address,
                     entry_price=current_price,
