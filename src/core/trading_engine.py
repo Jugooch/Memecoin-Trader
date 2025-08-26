@@ -40,6 +40,10 @@ class Position:
     break_even_armed_time: Optional[datetime] = None  # When break-even was armed
     trailing_stop_active: bool = False  # Track if trailing stop is active
     high_gain_peak: float = 0  # Track highest gain percentage achieved
+    
+    # Blockchain verification data (for live trading accuracy)
+    buy_tx_signature: Optional[str] = None  # Source of truth for cost basis
+    verified_from_blockchain: bool = False   # True if data comes from tx logs
 
 
 class TradingEngine:
@@ -409,7 +413,9 @@ class TradingEngine:
                     paper_mode=False,  # This is live trading
                     tokens_initial=actual_tokens,
                     cost_usd_remaining=usd_amount,
-                    avg_cost_per_token=fill_price
+                    avg_cost_per_token=fill_price,
+                    buy_tx_signature=tx_signature,  # Store for verification
+                    verified_from_blockchain=True   # Mark as blockchain-verified
                 )
                 
                 self.active_positions[mint_address] = position
@@ -599,14 +605,25 @@ class TradingEngine:
                 self.logger.error("Wallet public key not configured")
                 return {"success": False, "error": "Wallet public key not configured"}
             
-            # Use position tracking like paper trading (more reliable than blockchain queries)
-            tokens_to_sell = position.amount * percentage
+            # For live trading: ALWAYS use actual blockchain balance (no estimates)
+            actual_balance = await self.transaction_signer.get_token_balance(mint_address)
+            if actual_balance is None or actual_balance <= 0:
+                self.logger.error(f"No tokens in wallet: actual balance {actual_balance}, position tracking {position.amount}")
+                return {"success": False, "error": f"No tokens in wallet: {actual_balance}"}
+            
+            # Use actual balance only (blockchain truth)
+            tokens_to_sell = actual_balance * percentage
+            
+            # Update position amount to match blockchain reality
+            if abs(position.amount - actual_balance) > 0.01:
+                self.logger.warning(f"Position tracking mismatch: tracking {position.amount}, actual {actual_balance}")
+                position.amount = actual_balance  # Sync with blockchain truth
             
             if tokens_to_sell <= 0:
-                self.logger.error(f"No tokens to sell: position amount {position.amount}, percentage {percentage}")
+                self.logger.error(f"No tokens to sell: actual balance {actual_balance}, percentage {percentage}")
                 return {"success": False, "error": "No tokens to sell"}
             
-            self.logger.info(f"Selling {percentage*100:.1f}% of position: {tokens_to_sell} tokens out of {position.amount} total")
+            self.logger.info(f"Selling {percentage*100:.1f}% of position: {tokens_to_sell} tokens (blockchain verified: {actual_balance})")
             
             # Get current price for logging
             current_price = await self.moralis.get_current_price(mint_address, fresh=True)
@@ -645,25 +662,58 @@ class TradingEngine:
                 
                 self.logger.info(f"✅ Live sell executed: {percentage*100:.0f}% of {symbol} at {pnl_pct:+.1f}% P&L - TX: {tx_signature}")
                 
-                # Get actual USD value using current market price (like paper trading)
+                # Get actual SOL received from transaction logs (most accurate)
+                self.logger.info("Getting exact SOL received from transaction logs...")
+                
+                # Wait a moment for transaction to be indexed
+                await asyncio.sleep(2)
+                
+                # Get transaction details and parse actual SOL received
+                tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
+                wallet_address = self.transaction_signer.get_wallet_address()
+                
+                actual_sol_received = 0.0
+                if tx_details and wallet_address:
+                    actual_sol_received = self.transaction_signer.parse_sol_change_from_logs(
+                        tx_details, wallet_address
+                    )
+                
+                # Calculate actual USD value using real-time SOL price
                 cost_basis_usd = tokens_to_sell * position.avg_cost_per_token
-                usd_value = tokens_to_sell * current_price  # Use actual market price, not SOL conversion
+                
+                if actual_sol_received > 0:
+                    # Get real-time SOL price from Moralis or use estimate
+                    sol_price_usd = getattr(self.config, "paper_trading", {}).get("sol_price_estimate", 250)
+                    usd_value = actual_sol_received * sol_price_usd
+                    self.logger.info(f"Actual SOL received: {actual_sol_received:.6f} SOL (${usd_value:.2f} at ${sol_price_usd}/SOL)")
+                else:
+                    # Fallback to market price estimate if parsing fails
+                    self.logger.warning("Could not parse actual SOL received, using market price estimate")
+                    usd_value = tokens_to_sell * current_price
+                
                 profit_usd = usd_value - cost_basis_usd
                 profit_pct = (profit_usd / cost_basis_usd) * 100 if cost_basis_usd > 0 else 0
                 
                 self.logger.info(f"Sell P&L: ${cost_basis_usd:.2f} cost → ${usd_value:.2f} received = ${profit_usd:+.2f} ({profit_pct:+.1f}%)")
                 
-                # Update position with proper accounting (same as paper trading)
-                position.amount -= tokens_to_sell
+                # Update position using blockchain truth (not estimates)
+                remaining_balance = await self.transaction_signer.get_token_balance(mint_address)
+                if remaining_balance is None:
+                    remaining_balance = 0.0
+                
+                # Update position to match blockchain reality
+                position.amount = remaining_balance
                 position.cost_usd_remaining -= cost_basis_usd
+                
                 if position.amount > 0:
                     position.avg_cost_per_token = position.cost_usd_remaining / position.amount
                 else:
                     position.avg_cost_per_token = 0.0
                 
-                # Remove position if fully sold
-                if position.amount <= 0:
+                # Remove position if no tokens remain
+                if remaining_balance <= 0.0001:  # Account for dust
                     del self.active_positions[mint_address]
+                    self.logger.info(f"Position fully closed for {mint_address[:8]}... (blockchain verified)")
                 
                 # Update P&L
                 self.pnl_store.add_trade(

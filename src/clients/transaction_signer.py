@@ -283,6 +283,54 @@ class TransactionSigner:
             self.logger.error(f"Error parsing token transfer from logs: {e}")
             return 0.0
 
+    def parse_sol_change_from_logs(self, transaction_data: Dict, wallet_address: str) -> float:
+        """Parse transaction logs to extract exact SOL balance change"""
+        try:
+            # Get the transaction meta
+            meta = transaction_data.get("meta", {})
+            
+            # Parse pre and post balances for SOL (account balances, not token balances)
+            post_balances = meta.get("postBalances", [])
+            pre_balances = meta.get("preBalances", [])
+            
+            # Get account keys to match wallet address
+            account_keys = transaction_data.get("transaction", {}).get("message", {}).get("accountKeys", [])
+            if not account_keys:
+                # Try versioned transaction format
+                account_keys = transaction_data.get("transaction", {}).get("message", {}).get("staticAccountKeys", [])
+            
+            # Find our wallet's account index
+            wallet_index = -1
+            for i, account_key in enumerate(account_keys):
+                if account_key == wallet_address:
+                    wallet_index = i
+                    break
+            
+            if wallet_index == -1:
+                self.logger.warning(f"Wallet address {wallet_address} not found in transaction accounts")
+                return 0.0
+            
+            # Get pre and post SOL balances for our wallet
+            if wallet_index < len(pre_balances) and wallet_index < len(post_balances):
+                pre_balance_lamports = pre_balances[wallet_index]
+                post_balance_lamports = post_balances[wallet_index]
+                
+                # Convert lamports to SOL
+                pre_balance_sol = pre_balance_lamports / 1_000_000_000
+                post_balance_sol = post_balance_lamports / 1_000_000_000
+                
+                sol_change = post_balance_sol - pre_balance_sol
+                
+                self.logger.info(f"Parsed SOL change: {sol_change:+.6f} SOL ({pre_balance_sol:.6f} → {post_balance_sol:.6f})")
+                return sol_change
+            else:
+                self.logger.warning(f"Balance indices out of range: wallet_index={wallet_index}, pre_len={len(pre_balances)}, post_len={len(post_balances)}")
+                return 0.0
+                
+        except Exception as e:
+            self.logger.error(f"Error parsing SOL change from logs: {e}")
+            return 0.0
+
     async def close(self):
         """Close the HTTP session"""
         if self.session:
