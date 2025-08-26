@@ -673,8 +673,7 @@ class TradingEngine:
                     amount=tokens_to_sell,
                     price=current_price,
                     usd_value=usd_value,
-                    paper_mode=False,
-                    profit=profit_usd
+                    paper_mode=False
                 )
                 
                 # Update win rate
