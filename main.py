@@ -358,6 +358,10 @@ class MemecoinTradingBot:
                                 timestamp = event.get('timestamp')
                                 
                                 if mint and trader:
+                                    # DEBUG: Log trader info for debugging self-trade detection
+                                    if our_wallet and (trader == our_wallet or trader[:8] == our_wallet[:8]):
+                                        self.logger.info(f"🔍 DEBUG: Our wallet event detected - trader={trader[:8]}..., our_wallet={our_wallet[:8]}..., is_buy={is_buy}, mint={mint[:8]}...")
+                                    
                                     # NEW: Check if this is OUR trade first
                                     if our_wallet and trader == our_wallet:
                                         # This is our own trade - update positions immediately
@@ -365,6 +369,8 @@ class MemecoinTradingBot:
                                         if self_trade_event:
                                             self.trading_engine.handle_self_trade_event(self_trade_event)
                                             self.logger.info(f"⚡ Self-trade processed: {self_trade_event['action']} {mint[:8]}...")
+                                        else:
+                                            self.logger.error(f"❌ DEBUG: Self-trade event parsing failed for {mint[:8]}...")
                                     
                                     # Check if this is from an alpha wallet (existing logic)
                                     elif is_buy and trader in self.wallet_tracker.watched_wallets:
