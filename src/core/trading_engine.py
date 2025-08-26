@@ -128,6 +128,84 @@ class TradingEngine:
         # Hybrid safety configuration
         self.safety_hybrid = getattr(config, 'safety_hybrid', {})
         self.use_hybrid_safety = self.safety_hybrid.get('enabled', False)
+    
+    async def _get_verified_token_balance(self, mint_address: str, position: Position) -> float:
+        """
+        Get token balance with smart ATA indexing awareness.
+        Handles the delay between token purchase and ATA indexing.
+        """
+        # Try blockchain query first
+        blockchain_balance = await self.transaction_signer.get_token_balance(mint_address)
+        
+        # If blockchain query succeeds and returns tokens, use it
+        if blockchain_balance is not None and blockchain_balance > 0:
+            return blockchain_balance
+        
+        # If blockchain returns 0, but position tracking shows tokens, check timing
+        position_balance = position.amount
+        if position_balance > 0:
+            # Check if this is a recent buy (ATA might not be indexed yet)
+            seconds_since_buy = (datetime.now() - position.entry_time).total_seconds()
+            
+            if seconds_since_buy < 60:  # Within 1 minute of buy
+                self.logger.warning(f"🔄 ATA Indexing Issue: blockchain={blockchain_balance}, position={position_balance}")
+                self.logger.warning(f"🕒 Recent buy ({seconds_since_buy:.0f}s ago) - retrying with delays...")
+                
+                # Retry with exponential backoff and detailed diagnostics
+                for attempt in range(4):  # More attempts for critical operation
+                    delay = min(2 ** attempt, 8)  # Cap at 8 second delay
+                    await asyncio.sleep(delay)
+                    
+                    self.logger.info(f"🔍 Balance query attempt {attempt + 2} (after {delay}s delay)...")
+                    retry_balance = await self.transaction_signer.get_token_balance(mint_address)
+                    
+                    if retry_balance is not None and retry_balance > 0:
+                        self.logger.info(f"✅ Success! Found {retry_balance} tokens on attempt {attempt + 2}")
+                        return retry_balance
+                    
+                    self.logger.warning(f"⏳ Attempt {attempt + 2}: still {retry_balance} tokens")
+                
+                # After all retries failed - this is a critical system issue
+                self.logger.error(f"🚨 SYSTEM FAILURE: All blockchain queries failed for {mint_address[:8]}...")
+                self.logger.error(f"📊 Position data: {position_balance} tokens, buy_tx: {position.buy_tx_signature}")
+                self.logger.error(f"⛔ SELL BLOCKED: Cannot verify token balance after {seconds_since_buy:.0f}s")
+                
+                # Send critical error notification
+                if hasattr(self, 'notifier') and self.notifier:
+                    await self.notifier.send_error_notification(
+                        "🚨 CRITICAL: Blockchain verification failed",
+                        {"mint": mint_address[:8], "seconds_since_buy": seconds_since_buy}
+                    )
+                
+                return 0  # Force safe failure
+            
+            else:
+                # Older position, blockchain should be accurate
+                self.logger.error(f"Position-blockchain mismatch: position {position_balance}, blockchain {blockchain_balance}")
+                return blockchain_balance if blockchain_balance is not None else 0
+        
+        # Both blockchain and position show 0 tokens
+        return 0.0
+    
+    async def _get_post_transaction_balance(self, mint_address: str) -> float:
+        """
+        Get token balance after a transaction with retry logic.
+        Used after sells to verify remaining balance.
+        """
+        # Try multiple times with delays (transaction might need time to settle)
+        for attempt in range(4):
+            balance = await self.transaction_signer.get_token_balance(mint_address)
+            
+            if balance is not None:
+                return balance
+            
+            if attempt < 3:  # Don't sleep on last attempt
+                await asyncio.sleep(1 + attempt)  # 1s, 2s, 3s delays
+                self.logger.warning(f"Post-transaction balance query attempt {attempt + 1} failed, retrying...")
+        
+        # If all attempts failed, return 0 (assume fully sold)
+        self.logger.warning("All post-transaction balance queries failed, assuming 0")
+        return 0.0
 
     async def buy_token(self, mint_address: str, usd_amount: float, paper_mode: bool = True, symbol: str = "UNKNOWN", confidence_score: float = None) -> Dict:
         """Execute a buy order for a token"""
@@ -605,19 +683,29 @@ class TradingEngine:
                 self.logger.error("Wallet public key not configured")
                 return {"success": False, "error": "Wallet public key not configured"}
             
-            # For live trading: ALWAYS use actual blockchain balance (no estimates)
-            actual_balance = await self.transaction_signer.get_token_balance(mint_address)
-            if actual_balance is None or actual_balance <= 0:
-                self.logger.error(f"No tokens in wallet: actual balance {actual_balance}, position tracking {position.amount}")
-                return {"success": False, "error": f"No tokens in wallet: {actual_balance}"}
+            # Smart blockchain verification with ATA indexing awareness
+            actual_balance = await self._get_verified_token_balance(mint_address, position)
             
-            # Use actual balance only (blockchain truth)
+            if actual_balance <= 0:
+                self.logger.error(f"❌ SELL FAILED: Verified balance is {actual_balance}")
+                
+                # Provide actionable error message
+                if position.amount > 0:
+                    self.logger.error(f"💡 ISSUE: Position shows {position.amount} tokens but blockchain verification failed")
+                    self.logger.error(f"🔧 ACTION: Check QuickNode connectivity and ATA indexing status")
+                    error_msg = f"Blockchain verification failed (position: {position.amount}, verified: {actual_balance})"
+                else:
+                    error_msg = f"No tokens to sell: {actual_balance}"
+                
+                return {"success": False, "error": error_msg}
+            
+            # Use verified balance (blockchain truth with fallbacks)
             tokens_to_sell = actual_balance * percentage
             
-            # Update position amount to match blockchain reality
+            # Update position amount to match verified reality
             if abs(position.amount - actual_balance) > 0.01:
-                self.logger.warning(f"Position tracking mismatch: tracking {position.amount}, actual {actual_balance}")
-                position.amount = actual_balance  # Sync with blockchain truth
+                self.logger.warning(f"Position sync: tracking {position.amount}, verified {actual_balance}")
+                position.amount = actual_balance
             
             if tokens_to_sell <= 0:
                 self.logger.error(f"No tokens to sell: actual balance {actual_balance}, percentage {percentage}")
@@ -696,12 +784,10 @@ class TradingEngine:
                 
                 self.logger.info(f"Sell P&L: ${cost_basis_usd:.2f} cost → ${usd_value:.2f} received = ${profit_usd:+.2f} ({profit_pct:+.1f}%)")
                 
-                # Update position using blockchain truth (not estimates)
-                remaining_balance = await self.transaction_signer.get_token_balance(mint_address)
-                if remaining_balance is None:
-                    remaining_balance = 0.0
+                # Update position using post-transaction balance verification
+                remaining_balance = await self._get_post_transaction_balance(mint_address)
                 
-                # Update position to match blockchain reality
+                # Update position to match verified reality
                 position.amount = remaining_balance
                 position.cost_usd_remaining -= cost_basis_usd
                 
