@@ -219,6 +219,70 @@ class TransactionSigner:
             return str(self.keypair.pubkey())
         return None
     
+    async def get_transaction_details(self, tx_signature: str) -> Dict:
+        """Get transaction details including logs to parse actual token amounts"""
+        try:
+            result = await self._make_rpc_request(
+                "getTransaction",
+                [
+                    tx_signature,
+                    {
+                        "encoding": "jsonParsed",
+                        "maxSupportedTransactionVersion": 0
+                    }
+                ]
+            )
+            
+            if "error" not in result and result:
+                return result
+            else:
+                self.logger.error(f"Failed to get transaction details: {result.get('error', 'Unknown error')}")
+                return {}
+                
+        except Exception as e:
+            self.logger.error(f"Error getting transaction details: {e}")
+            return {}
+    
+    def parse_token_transfer_from_logs(self, transaction_data: Dict, mint_address: str, wallet_address: str) -> float:
+        """Parse transaction logs to extract exact token transfer amount"""
+        try:
+            # Get the transaction meta and logs
+            meta = transaction_data.get("meta", {})
+            
+            # Parse postTokenBalances to see the balance change
+            post_balances = meta.get("postTokenBalances", [])
+            pre_balances = meta.get("preTokenBalances", [])
+            
+            # Find our wallet's token account for this mint
+            post_balance = 0
+            pre_balance = 0
+            
+            for balance in post_balances:
+                if (balance.get("mint") == mint_address and 
+                    balance.get("owner") == wallet_address):
+                    post_balance = float(balance.get("uiTokenAmount", {}).get("uiAmount", 0))
+                    break
+            
+            for balance in pre_balances:
+                if (balance.get("mint") == mint_address and 
+                    balance.get("owner") == wallet_address):
+                    pre_balance = float(balance.get("uiTokenAmount", {}).get("uiAmount", 0))
+                    break
+            
+            # Calculate the actual tokens received
+            tokens_received = post_balance - pre_balance
+            
+            if tokens_received > 0:
+                self.logger.info(f"Parsed token transfer: {tokens_received} tokens received")
+                return tokens_received
+            else:
+                self.logger.warning(f"No positive token transfer found in transaction logs")
+                return 0.0
+                
+        except Exception as e:
+            self.logger.error(f"Error parsing token transfer from logs: {e}")
+            return 0.0
+
     async def close(self):
         """Close the HTTP session"""
         if self.session:

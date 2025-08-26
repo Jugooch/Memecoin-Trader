@@ -327,17 +327,10 @@ class TradingEngine:
             sol_price = getattr(self.config, "paper_trading", {}).get("sol_price_estimate", 140)
             sol_amount = usd_amount / sol_price
             
-            # Get actual price for proper calculations (like paper trading does)
-            # For very new tokens, Moralis might need a moment to index
-            current_price = await self.moralis.get_current_price(mint_address, fresh=True)
+            # Get current price for reference (restored from working implementation)
+            current_price = await self.moralis.get_current_price(mint_address)
             if current_price <= 0:
-                self.logger.info("Price not available yet, waiting 2 seconds for Moralis indexing...")
-                await asyncio.sleep(2)  # Minimal wait just for price data
-                current_price = await self.moralis.get_current_price(mint_address, fresh=True)
-                
-            if current_price <= 0:
-                self.logger.error(f"Failed to get current price for {mint_address} even after wait")
-                return {"success": False, "error": "Could not get current price for live trading"}
+                return {"success": False, "error": "Could not get current price"}
             
             self.logger.info(f"Got current price ${current_price:.8f} for live trade calculations")
             
@@ -377,13 +370,28 @@ class TradingEngine:
                 tx_signature = send_result.get("signature")
                 self.logger.info(f"✅ Live buy executed: {symbol} for ${usd_amount} - TX: {tx_signature}")
                 
-                # Get actual token balance after successful trade
-                actual_tokens = await self.transaction_signer.get_token_balance(mint_address)
-                if actual_tokens is None or actual_tokens <= 0:
-                    self.logger.warning(f"Could not get token balance after trade, using fallback")
-                    actual_tokens = 1_000_000  # Fallback for position tracking
+                # Get exact tokens received by parsing transaction logs (most accurate)
+                self.logger.info("Getting exact token amount from transaction logs...")
                 
-                self.logger.info(f"Actual tokens received: {actual_tokens}")
+                # Wait a moment for transaction to be indexed
+                await asyncio.sleep(2)
+                
+                # Get transaction details and parse the actual token transfer
+                tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
+                wallet_address = self.transaction_signer.get_wallet_address()
+                
+                actual_tokens = 0.0
+                if tx_details and wallet_address:
+                    actual_tokens = self.transaction_signer.parse_token_transfer_from_logs(
+                        tx_details, mint_address, wallet_address
+                    )
+                
+                # Fallback to estimated if parsing fails
+                if actual_tokens <= 0:
+                    self.logger.warning("Could not parse exact tokens from logs, using price-based estimate")
+                    actual_tokens = usd_amount / current_price
+                
+                self.logger.info(f"Exact tokens received: {actual_tokens}")
                 
                 position = Position(
                     mint=mint_address,
