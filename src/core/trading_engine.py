@@ -133,17 +133,35 @@ class TradingEngine:
             except Exception as e:
                 self.logger.warning(f"⚠️ Blockchain analytics not available: {e}")
         
-        # Position tracking - Clean blockchain-first approach
+        # Position tracking - OLD SYSTEM (will be phased out)
         self.active_positions = {}
         self.paper_capital = self.pnl_store.current_equity  # Use P&L store's equity
         self.total_trades = 0
         self.winning_trades = 0
         
+        # NEW: Real-time position tracking system
+        self.realtime_positions = RealtimePositionManager(self.logger)
+        
+        # Set up callbacks for position events
+        self.realtime_positions.on_position_opened = self._on_realtime_position_opened
+        self.realtime_positions.on_position_updated = self._on_realtime_position_updated  
+        self.realtime_positions.on_position_closed = self._on_realtime_position_closed
+        
+        # Feature flag for gradual transition
+        self.use_realtime_positions = getattr(config, 'use_realtime_positions', False)
+        
         # Hybrid safety configuration
         self.safety_hybrid = getattr(config, 'safety_hybrid', {})
         self.use_hybrid_safety = self.safety_hybrid.get('enabled', False)
     
-    # Removed realtime position callbacks - using clean verification-first approach
+    def _on_realtime_position_opened(self, position):
+        """Callback when a new position is opened via realtime tracking"""
+        self.logger.info(f"📈 Realtime position opened: {position.mint[:8]}... {position.current_tokens:,.0f} tokens")
+        
+    def _on_realtime_position_updated(self, position):
+        """Callback when a position is updated via realtime tracking"""
+        pnl_sol = position.unrealized_pnl_sol
+        self.logger.info(f"📊 Realtime position updated: {position.mint[:8]}... P&L: {pnl_sol:+.4f} SOL")
         
     def _on_realtime_position_closed(self, position):
         """Callback when a position is closed via realtime tracking"""
@@ -239,8 +257,7 @@ class TradingEngine:
         """
         DEPRECATED: Get token balance with smart ATA indexing awareness.
         
-        This function is being phased out in favor of real-time WebSocket position tracking.
-        When use_realtime_positions=True, this slow blockchain polling is bypassed.
+        This function is being phased out in favor of verification-first position creation.
         
         Handles the delay between token purchase and ATA indexing.
         """
@@ -301,8 +318,7 @@ class TradingEngine:
         """
         DEPRECATED: Get token balance after a transaction with retry logic.
         
-        This function is being phased out in favor of real-time WebSocket position tracking.
-        When use_realtime_positions=True, this slow blockchain polling is bypassed.
+        This function is being phased out in favor of verification-first position creation.
         
         Used after sells to verify remaining balance.
         """
@@ -762,22 +778,22 @@ class TradingEngine:
             else:
                 # OLD: Smart blockchain verification with ATA indexing awareness (SLOW)
                 actual_balance = await self._get_verified_token_balance(mint_address, position)
+            
+            if actual_balance <= 0:
+                self.logger.error(f"❌ SELL FAILED: Verified balance is {actual_balance}")
                 
-                if actual_balance <= 0:
-                    self.logger.error(f"❌ SELL FAILED: Verified balance is {actual_balance}")
-                    
-                    # Provide actionable error message
-                    if position.amount > 0:
-                        self.logger.error(f"💡 ISSUE: Position shows {position.amount} tokens but blockchain verification failed")
-                        self.logger.error(f"🔧 ACTION: Check QuickNode connectivity and ATA indexing status")
-                        error_msg = f"Blockchain verification failed (position: {position.amount}, verified: {actual_balance})"
-                    else:
-                        error_msg = f"No tokens to sell: {actual_balance}"
-                    
-                    return {"success": False, "error": error_msg}
+                # Provide actionable error message
+                if position.amount > 0:
+                    self.logger.error(f"💡 ISSUE: Position shows {position.amount} tokens but blockchain verification failed")
+                    self.logger.error(f"🔧 ACTION: Check QuickNode connectivity and ATA indexing status")
+                    error_msg = f"Blockchain verification failed (position: {position.amount}, verified: {actual_balance})"
+                else:
+                    error_msg = f"No tokens to sell: {actual_balance}"
                 
-                # Use verified balance (blockchain truth with fallbacks)
-                tokens_to_sell = actual_balance * percentage
+                return {"success": False, "error": error_msg}
+            
+            # Use verified balance (blockchain truth with fallbacks)
+            tokens_to_sell = actual_balance * percentage
             
             # Update position amount to match verified reality
             if abs(position.amount - actual_balance) > 0.01:
