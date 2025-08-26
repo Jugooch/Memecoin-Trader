@@ -341,8 +341,8 @@ class TradingEngine:
             # Create buy transaction via QuickNode pump-fun API
             self.logger.info(f"Creating live buy transaction: ${usd_amount} ({sol_amount:.4f} SOL) for {symbol}")
             
-            # Use conservative slippage for live trading
-            slippage_bps = 2000  # 20% slippage for pump.fun tokens (extreme competition)
+            # Use 60% slippage to ensure fills on competitive tokens
+            slippage_bps = 6000  # 60% slippage for pump.fun tokens
             
             tx_result = await self.pumpfun.create_buy_transaction(
                 wallet_pubkey=wallet_pubkey,
