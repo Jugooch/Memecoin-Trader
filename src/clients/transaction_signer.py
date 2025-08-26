@@ -233,7 +233,7 @@ class TransactionSigner:
                 ]
             )
             
-            if "error" not in result and result:
+            if result and "error" not in result:
                 return result
             else:
                 self.logger.error(f"Failed to get transaction details: {result.get('error', 'Unknown error')}")

@@ -431,8 +431,7 @@ class TradingEngine:
                         price=current_price,
                         usd_amount=usd_amount,
                         equity=self.pnl_store.current_equity,
-                        paper_mode=False,
-                        tx_signature=tx_signature
+                        paper_mode=False
                     )
                 
                 return {
@@ -595,14 +594,14 @@ class TradingEngine:
                 self.logger.error("Wallet public key not configured")
                 return {"success": False, "error": "Wallet public key not configured"}
             
-            # Get actual token balance from blockchain
-            token_balance = await self.transaction_signer.get_token_balance(mint_address)
-            if token_balance is None or token_balance <= 0:
-                self.logger.error(f"No token balance found for {mint_address}")
+            # Use position tracking like paper trading (more reliable than blockchain queries)
+            tokens_to_sell = position.amount * percentage
+            
+            if tokens_to_sell <= 0:
+                self.logger.error(f"No tokens to sell: position amount {position.amount}, percentage {percentage}")
                 return {"success": False, "error": "No tokens to sell"}
             
-            # Calculate token amount to sell
-            tokens_to_sell = token_balance * percentage
+            self.logger.info(f"Selling {percentage*100:.1f}% of position: {tokens_to_sell} tokens out of {position.amount} total")
             
             # Get current price for logging
             current_price = await self.moralis.get_current_price(mint_address, fresh=True)
@@ -642,13 +641,20 @@ class TradingEngine:
                 
                 self.logger.info(f"✅ Live sell executed: {percentage*100:.0f}% of {symbol} at {pnl_pct:+.1f}% P&L - TX: {tx_signature}")
                 
-                # Update position
-                if percentage >= 0.99:  # Full exit
-                    del self.active_positions[mint_address]
+                # Update position using same logic as paper trading
+                cost_basis_usd = tokens_to_sell * position.avg_cost_per_token
+                
+                # Update position with proper accounting (same as paper trading)
+                position.amount -= tokens_to_sell
+                position.cost_usd_remaining -= cost_basis_usd
+                if position.amount > 0:
+                    position.avg_cost_per_token = position.cost_usd_remaining / position.amount
                 else:
-                    # Update remaining position
-                    position.amount *= (1 - percentage)
-                    position.cost_usd_remaining *= (1 - percentage)
+                    position.avg_cost_per_token = 0.0
+                
+                # Remove position if fully sold
+                if position.amount <= 0:
+                    del self.active_positions[mint_address]
                 
                 # Calculate profit
                 sol_price = getattr(self.config, "paper_trading", {}).get("sol_price_estimate", 140)
