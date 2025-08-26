@@ -46,16 +46,20 @@ class PumpPortalClient:
         Returns formatted event for position manager.
         """
         try:
+            # Determine if this is a buy or sell based on the event structure
+            # The event has either 'buyer' or 'seller' field populated
+            is_buy = trade_event.get('buyer') is not None
+            
             return {
                 'type': 'self_trade',
-                'action': 'buy' if trade_event.get('isBuy', False) else 'sell',
+                'action': 'buy' if is_buy else 'sell',
                 'mint': trade_event.get('mint'),
                 'tokens_amount': float(trade_event.get('tokenAmount', 0)),
                 'sol_amount': float(trade_event.get('solAmount', 0)),
                 'price': float(trade_event.get('price', 0)),
                 'tx_signature': trade_event.get('signature'),
                 'timestamp': datetime.now(),
-                'trader': trade_event.get('traderPublicKey')
+                'trader': trade_event.get('buyer') or trade_event.get('seller')
             }
         except Exception as e:
             self.logger.error(f"Error parsing self-trade event: {e}")
