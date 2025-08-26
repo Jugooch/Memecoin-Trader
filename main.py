@@ -90,6 +90,7 @@ class TradingConfig:
     tp2_multiplier: float = 1.50
     tp3_multiplier: float = 2.00
     multi_tier_exits: Dict = None
+    ultra_fast_execution: bool = False  # Skip all Moralis waits when True
 
 
 class MemecoinTradingBot:
@@ -432,7 +433,7 @@ class MemecoinTradingBot:
         
         # ULTRA FAST EXECUTION: Skip ALL Moralis waits in aggressive mode
         # Speed > Safety when following alpha wallets
-        if self.config.get('ultra_fast_execution', True):  # Default to true for aggressive
+        if self.config.ultra_fast_execution:
             self.logger.info(f"⚡ ULTRA FAST: No Moralis wait - executing in {time.time() - token_detected_time:.1f}s")
         else:
             # Legacy wait mode (not recommended)
