@@ -177,10 +177,10 @@ class PnLStore:
     
     @property
     def current_equity(self) -> float:
-        """Get current total equity (capital + realized P&L)"""
+        """Get current total equity (current capital + unrealized P&L from positions)"""
         return round(
-            self.data["starting_capital"] + 
-            self.data.get("realized_pnl", 0.0),
+            self.data["current_capital"] + 
+            self.data.get("unrealized_pnl", 0.0),
             2
         )
     
