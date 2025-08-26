@@ -81,10 +81,10 @@ class PumpFunClient:
                 "publicKey": wallet_pubkey,
                 "action": "buy",
                 "mint": mint_address,
-                "amount": str(lamports),  # Convert to string
+                "amount": lamports,  # Send as number, not string!
                 "denominatedInSol": "true",
-                "slippage": str(int(slippage_bps / 100)),  # Convert to string
-                "priorityFee": str(0.005),  # Convert to string
+                "slippage": int(slippage_bps / 100),  # Send as number, not string!
+                "priorityFee": 0.012,  # Send as number, not string! (~$3)
                 "pool": "auto"
             })
             
@@ -134,10 +134,10 @@ class PumpFunClient:
                 "publicKey": wallet_pubkey,
                 "action": "sell",
                 "mint": mint_address,
-                "amount": str(token_units),  # Convert to string like buy
+                "amount": token_units,  # Send as number, not string!
                 "denominatedInSol": "false",  # Amount is in tokens
-                "slippage": str(int(slippage_bps / 100)),  # Convert to string like buy
-                "priorityFee": str(0.005),  # Higher priority fee like buy
+                "slippage": int(slippage_bps / 100),  # Send as number, not string!
+                "priorityFee": 0.012,  # Send as number, not string! (~$3)
                 "pool": "auto"
             })
             
