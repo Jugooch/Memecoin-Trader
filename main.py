@@ -91,6 +91,7 @@ class TradingConfig:
     tp3_multiplier: float = 2.00
     multi_tier_exits: Dict = None
     ultra_fast_execution: bool = False  # Skip all Moralis waits when True
+    use_realtime_positions: bool = False  # Enable real-time position tracking via WebSocket
 
 
 class MemecoinTradingBot:
@@ -227,7 +228,8 @@ class MemecoinTradingBot:
             # Dynamic TP configuration
             tp2_multiplier=config_data.get('tp2_multiplier', 1.50),
             tp3_multiplier=config_data.get('tp3_multiplier', 2.00),
-            multi_tier_exits=config_data.get('multi_tier_exits', {})
+            multi_tier_exits=config_data.get('multi_tier_exits', {}),
+            use_realtime_positions=config_data.get('use_realtime_positions', False)
         )
 
     def _get_realtime_config(self) -> Dict:
@@ -461,53 +463,61 @@ class MemecoinTradingBot:
                 self.logger.info(f"Token {mint_address[:8]}... is too new ({token_age:.1f}s), waiting {wait_time:.1f}s for Moralis indexing")
                 await asyncio.sleep(wait_time)
         
-        # Now check Moralis, but be more lenient with liquidity for alpha-signaled tokens
-        try:
-            # If Moralis is rate limited, skip this token entirely (safer approach)
-            if self.moralis.rate_limited:
-                self.logger.debug(f"Moralis rate limited - skipping {mint_address[:8]}...")
-                self._record_token_status(mint_address, 'rate_limited', 'Moralis API rate limited')
-                return
+        # ULTRA FAST MODE: Skip all Moralis calls when enabled
+        if self.config.ultra_fast_execution:
+            self.logger.info(f"⚡ ULTRA FAST: Skipping Moralis calls - alpha signal only for {mint_address[:8]}...")
+            # Create dummy data for compatibility
+            liquidity = {'total_liquidity_usd': 999999999, 'pools': [{'address': 'dummy'}], 'pool_count': 1}
+            metadata = {'name': 'ULTRA_FAST_TOKEN', 'symbol': 'UF', 'decimals': 9}
+        else:
+            # Regular Moralis checks for non-ultra-fast mode
+            try:
+                # If Moralis is rate limited, skip this token entirely (safer approach)
+                if self.moralis.rate_limited:
+                    self.logger.debug(f"Moralis rate limited - skipping {mint_address[:8]}...")
+                    self._record_token_status(mint_address, 'rate_limited', 'Moralis API rate limited')
+                    return
+                    
+                liquidity = await self.moralis.get_token_liquidity(mint_address)
                 
-            liquidity = await self.moralis.get_token_liquidity(mint_address)
-            
-            # For alpha-signaled tokens, we can accept zero liquidity (new tokens)
-            # The alpha signal is our primary filter now
-            if not liquidity:
-                self.logger.info(f"No liquidity data yet for alpha-signaled token {mint_address[:8]}... - proceeding with alpha signal alone")
-                liquidity = {'total_liquidity_usd': 0, 'pools': [], 'pool_count': 0}
-            
-            # Try to get metadata, but don't block on it for new tokens
-            metadata = await self.moralis.get_token_metadata(mint_address)
-            if not metadata:
-                self.logger.debug(f"No metadata yet for {mint_address[:8]}... (proceeding with alpha signal)")
-                metadata = {}  # Empty dict for safe access
-            
-            # Modified filter check - more lenient for alpha-signaled tokens
+                # For alpha-signaled tokens, we can accept zero liquidity (new tokens)
+                # The alpha signal is our primary filter now
+                if not liquidity:
+                    self.logger.info(f"No liquidity data yet for alpha-signaled token {mint_address[:8]}... - proceeding with alpha signal alone")
+                    liquidity = {'total_liquidity_usd': 0, 'pools': [], 'pool_count': 0}
+                
+                # Try to get metadata, but don't block on it for new tokens
+                metadata = await self.moralis.get_token_metadata(mint_address)
+                if not metadata:
+                    self.logger.debug(f"No metadata yet for {mint_address[:8]}... (proceeding with alpha signal)")
+                    metadata = {}  # Empty dict for safe access
+                    
+            except Exception as e:
+                # Only log 404s at debug level since they're common for new tokens
+                if "404" in str(e) or "not found" in str(e).lower():
+                    self.logger.debug(f"Token {mint_address} metadata not available (likely too new)")
+                    self._record_token_status(mint_address, 'no_alpha', 'Metadata not ready')  # Allow quick retry
+                else:
+                    self.logger.error(f"Failed to get token data for {mint_address}: {e}")
+                    self._record_token_status(mint_address, 'error', str(e))
+                return
+
+        # Modified filter check - more lenient for alpha-signaled tokens (skip in ultra fast mode)
+        if not self.config.ultra_fast_execution:
             if not self._passes_filters_with_alpha(metadata, liquidity, deployer, len(initial_alpha_buyers)):
                 # Only log failures at debug level to reduce noise
                 self.logger.debug(f"Token {mint_address} failed filters despite alpha signal")
                 self._record_token_status(mint_address, 'failed_filters', 'Failed safety/liquidity filters')
                 return
-            
-            # Get wallet status for enhanced logging
-            active_wallets = self.wallet_tracker.get_active_wallets()
-            total_wallets = len(self.wallet_tracker.watched_wallets)
-            
-            # If we get here, token has alpha signal - now it's worth detailed checking
-            metadata_status = "with metadata" if metadata else "metadata-pending"
-            liquidity_status = f"${liquidity.get('total_liquidity_usd', 0):,.0f}" if liquidity.get('total_liquidity_usd', 0) > 0 else "pending"
-            self.logger.info(f"Alpha-signaled token {mint_address[:8]}... proceeding to detailed check (liquidity: {liquidity_status}, {metadata_status})")
-                
-        except Exception as e:
-            # Only log 404s at debug level since they're common for new tokens
-            if "404" in str(e) or "not found" in str(e).lower():
-                self.logger.debug(f"Token {mint_address} metadata not available (likely too new)")
-                self._record_token_status(mint_address, 'no_alpha', 'Metadata not ready')  # Allow quick retry
-            else:
-                self.logger.error(f"Failed to get token data for {mint_address}: {e}")
-                self._record_token_status(mint_address, 'error', str(e))
-            return
+
+        # Get wallet status for enhanced logging
+        active_wallets = self.wallet_tracker.get_active_wallets()
+        total_wallets = len(self.wallet_tracker.watched_wallets)
+        
+        # If we get here, token has alpha signal - now it's worth detailed checking
+        metadata_status = "with metadata" if metadata else "metadata-pending"
+        liquidity_status = f"${liquidity.get('total_liquidity_usd', 0):,.0f}" if liquidity.get('total_liquidity_usd', 0) > 0 else "pending"
+        self.logger.info(f"Alpha-signaled token {mint_address[:8]}... proceeding to detailed check (liquidity: {liquidity_status}, {metadata_status})")
         
         # Track alpha wallet activity with enhanced analysis
         self.alpha_checks_performed += 1
@@ -1403,7 +1413,7 @@ class MemecoinTradingBot:
         last_alpha_checks = 0
         
         while self.running:
-            await asyncio.sleep(120)  # Every 2 minutes (optimized with caching)
+            await asyncio.sleep(900)  # Every 15 minutes (reduced QuickNode calls)
             
             # Calculate activity since last summary
             tokens_this_period = self.tokens_processed - last_tokens_processed
@@ -1494,7 +1504,7 @@ class MemecoinTradingBot:
                 
                 # Build summary message
                 if tokens_this_period > 0 or alpha_checks_this_period > 0 or period_trades:
-                    summary = f"5min Summary: {tokens_this_period} tokens scanned, " \
+                    summary = f"15min Summary: {tokens_this_period} tokens scanned, " \
                              f"{alpha_checks_this_period} alpha checks, " \
                              f"{len(period_trades)} trades executed, " \
                              f"${self.current_capital:.2f} capital"
@@ -1552,13 +1562,13 @@ class MemecoinTradingBot:
                 try:
                     active_count = len(self.wallet_tracker.get_active_wallets())
                     total_count = len(self.wallet_tracker.watched_wallets)
-                    self.logger.info(f"5min Summary: {tokens_this_period} tokens scanned, "
+                    self.logger.info(f"15min Summary: {tokens_this_period} tokens scanned, "
                                    f"{alpha_checks_this_period} alpha checks, "
                                    f"{self.trades_today} trades today, "
                                    f"${self.current_capital:.2f} capital, "
                                    f"{active_count}/{total_count} wallets active")
                 except:
-                    self.logger.info(f"5min Summary: {tokens_this_period} tokens scanned, "
+                    self.logger.info(f"15min Summary: {tokens_this_period} tokens scanned, "
                                    f"{alpha_checks_this_period} alpha checks, "
                                    f"{self.trades_today} trades today, "
                                    f"${self.current_capital:.2f} capital")
