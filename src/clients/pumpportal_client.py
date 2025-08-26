@@ -32,6 +32,35 @@ class PumpPortalClient:
         # Store watched wallets for reconnection
         self.watched_wallets = []
         
+        # Store our own trading wallet for position tracking
+        self.self_wallet = None
+        
+    def add_self_wallet_monitoring(self, trading_wallet_address: str):
+        """Add our own wallet to subscription for real-time position tracking"""
+        self.self_wallet = trading_wallet_address
+        self.logger.info(f"Added self-wallet monitoring: {trading_wallet_address[:8]}...")
+        
+    def handle_self_trade_event(self, trade_event: Dict) -> Optional[Dict]:
+        """
+        Parse trade events from our own wallet for immediate position updates.
+        Returns formatted event for position manager.
+        """
+        try:
+            return {
+                'type': 'self_trade',
+                'action': 'buy' if trade_event.get('isBuy', False) else 'sell',
+                'mint': trade_event.get('mint'),
+                'tokens_amount': float(trade_event.get('tokenAmount', 0)),
+                'sol_amount': float(trade_event.get('solAmount', 0)),
+                'price': float(trade_event.get('price', 0)),
+                'tx_signature': trade_event.get('signature'),
+                'timestamp': datetime.now(),
+                'trader': trade_event.get('traderPublicKey')
+            }
+        except Exception as e:
+            self.logger.error(f"Error parsing self-trade event: {e}")
+            return None
+        
     async def initialize(self):
         """Initialize the WebSocket connection with proper cleanup"""
         try:
@@ -112,10 +141,22 @@ class PumpPortalClient:
                         ]
                         
                         # Try different approaches for trade subscription
-                        if self.watched_wallets and len(self.watched_wallets) > 0:
-                            # Subscribe to trades from specific wallets (alpha wallets)
-                            subscriptions.append({"method": "subscribeAccountTrade", "keys": self.watched_wallets})  # Already limited to 100
-                            self.logger.info(f"Subscribing to trades from {len(self.watched_wallets)} alpha wallets")
+                        all_wallets = []
+                        
+                        # Add alpha wallets
+                        if self.watched_wallets:
+                            all_wallets.extend(self.watched_wallets)
+                            
+                        # Add our own wallet for position tracking
+                        if self.self_wallet and self.self_wallet not in all_wallets:
+                            all_wallets.append(self.self_wallet)
+                        
+                        if all_wallets:
+                            # Subscribe to trades from alpha wallets + our wallet
+                            subscriptions.append({"method": "subscribeAccountTrade", "keys": all_wallets[:100]})  # Limit to 100
+                            alpha_count = len(self.watched_wallets) if self.watched_wallets else 0
+                            self_count = 1 if self.self_wallet else 0
+                            self.logger.info(f"Subscribing to trades from {alpha_count} alpha wallets + {self_count} self wallet")
                         else:
                             # Try to subscribe to all token trades
                             subscriptions.append({"method": "subscribeTokenTrade", "keys": []})

@@ -324,6 +324,14 @@ class MemecoinTradingBot:
                     # This ensures we always use the latest wallet list after rotation
                     watched_wallets = list(self.wallet_tracker.watched_wallets)
                     self.logger.info(f"Using {len(watched_wallets)} current watched wallets for PumpPortal subscription")
+                    
+                    # NEW: Add our own wallet for position tracking
+                    our_wallet = None
+                    if self.trading_engine.transaction_signer:
+                        our_wallet = self.trading_engine.transaction_signer.get_wallet_address()
+                        if our_wallet:
+                            self.realtime_client.pumpportal_client.add_self_wallet_monitoring(our_wallet)
+                            self.logger.info(f"🔍 Added self-wallet monitoring: {our_wallet[:8]}...")
                     async for event in self.realtime_client.pumpportal_client.subscribe_all_events(watched_wallets):
                         event_count += 1
                         if event_count <= 3:  # Log first few events
@@ -347,9 +355,17 @@ class MemecoinTradingBot:
                                 is_buy = event.get('buyer') is not None
                                 timestamp = event.get('timestamp')
                                 
-                                if mint and trader and is_buy:
-                                    # Check if this is from an alpha wallet
-                                    if trader in self.wallet_tracker.watched_wallets:
+                                if mint and trader:
+                                    # NEW: Check if this is OUR trade first
+                                    if our_wallet and trader == our_wallet:
+                                        # This is our own trade - update positions immediately
+                                        self_trade_event = self.realtime_client.pumpportal_client.handle_self_trade_event(event)
+                                        if self_trade_event:
+                                            self.trading_engine.handle_self_trade_event(self_trade_event)
+                                            self.logger.info(f"⚡ Self-trade processed: {self_trade_event['action']} {mint[:8]}...")
+                                    
+                                    # Check if this is from an alpha wallet (existing logic)
+                                    elif is_buy and trader in self.wallet_tracker.watched_wallets:
                                         # Record this alpha wallet buy for real-time detection
                                         self.wallet_tracker.record_realtime_alpha_buy(trader, mint, timestamp)
                                         self.logger.info(f"REALTIME ALPHA: {trader[:8]}... bought {mint[:8]}... (via PumpPortal)")

@@ -15,6 +15,7 @@ from src.clients.transaction_signer import TransactionSigner
 from src.clients.blockchain_analytics import BlockchainAnalytics
 from src.utils.discord_notifier import DiscordNotifier
 from src.utils.pnl_store import PnLStore
+from .realtime_position_manager import RealtimePositionManager
 
 
 @dataclass
@@ -132,19 +133,84 @@ class TradingEngine:
             except Exception as e:
                 self.logger.warning(f"⚠️ Blockchain analytics not available: {e}")
         
-        # Position tracking
+        # Position tracking - OLD SYSTEM (will be phased out)
         self.active_positions = {}
         self.paper_capital = self.pnl_store.current_equity  # Use P&L store's equity
         self.total_trades = 0
         self.winning_trades = 0
         
+        # NEW: Real-time position tracking system
+        self.realtime_positions = RealtimePositionManager(self.logger)
+        
+        # Set up callbacks for position events
+        self.realtime_positions.on_position_opened = self._on_realtime_position_opened
+        self.realtime_positions.on_position_updated = self._on_realtime_position_updated  
+        self.realtime_positions.on_position_closed = self._on_realtime_position_closed
+        
+        # Feature flag for gradual transition
+        self.use_realtime_positions = getattr(config, 'use_realtime_positions', False)
+        
         # Hybrid safety configuration
         self.safety_hybrid = getattr(config, 'safety_hybrid', {})
         self.use_hybrid_safety = self.safety_hybrid.get('enabled', False)
     
+    def _on_realtime_position_opened(self, position):
+        """Callback when a new position is opened via realtime tracking"""
+        self.logger.info(f"📈 Realtime position opened: {position.mint[:8]}... {position.current_tokens:,.0f} tokens")
+        
+    def _on_realtime_position_updated(self, position):
+        """Callback when a position is updated via realtime tracking"""
+        pnl_sol = position.unrealized_pnl_sol
+        self.logger.info(f"📊 Realtime position updated: {position.mint[:8]}... P&L: {pnl_sol:+.4f} SOL")
+        
+    def _on_realtime_position_closed(self, position):
+        """Callback when a position is closed via realtime tracking"""
+        pnl_sol = position.unrealized_pnl_sol
+        self.logger.info(f"🏁 Realtime position closed: {position.mint[:8]}... Final P&L: {pnl_sol:+.4f} SOL")
+        
+        # Update trading statistics
+        self.total_trades += 1
+        if pnl_sol > 0:
+            self.winning_trades += 1
+    
+    def handle_self_trade_event(self, trade_event: Dict) -> None:
+        """
+        Handle trade events from our own wallet for immediate position updates.
+        Called by main.py when PumpPortal detects our own trades.
+        """
+        if not self.use_realtime_positions:
+            self.logger.debug("Realtime positions disabled, ignoring self-trade event")
+            return
+            
+        try:
+            # Convert PumpPortal event format to realtime position format
+            formatted_event = {
+                'mint': trade_event.get('mint'),
+                'action': trade_event.get('action'),
+                'tx_signature': trade_event.get('tx_signature'),
+                'price': trade_event.get('price', 0.0),
+                'tokens_received': trade_event.get('tokens_amount', 0.0) if trade_event.get('action') == 'buy' else 0.0,
+                'tokens_sold': trade_event.get('tokens_amount', 0.0) if trade_event.get('action') == 'sell' else 0.0,
+                'sol_amount': trade_event.get('sol_amount', 0.0),
+                'sol_received': trade_event.get('sol_amount', 0.0) if trade_event.get('action') == 'sell' else 0.0
+            }
+            
+            self.logger.info(f"⚡ Processing self-trade: {formatted_event['action']} {formatted_event['mint'][:8]}...")
+            
+            # Update realtime positions immediately
+            self.realtime_positions.handle_trade_event(formatted_event)
+            
+        except Exception as e:
+            self.logger.error(f"Error handling self-trade event: {e}")
+            self.logger.error(f"Event data: {trade_event}")
+    
     async def _get_verified_token_balance(self, mint_address: str, position: Position) -> float:
         """
-        Get token balance with smart ATA indexing awareness.
+        DEPRECATED: Get token balance with smart ATA indexing awareness.
+        
+        This function is being phased out in favor of real-time WebSocket position tracking.
+        When use_realtime_positions=True, this slow blockchain polling is bypassed.
+        
         Handles the delay between token purchase and ATA indexing.
         """
         # Try blockchain query first
@@ -202,7 +268,11 @@ class TradingEngine:
     
     async def _get_post_transaction_balance(self, mint_address: str) -> float:
         """
-        Get token balance after a transaction with retry logic.
+        DEPRECATED: Get token balance after a transaction with retry logic.
+        
+        This function is being phased out in favor of real-time WebSocket position tracking.
+        When use_realtime_positions=True, this slow blockchain polling is bypassed.
+        
         Used after sells to verify remaining balance.
         """
         # Try multiple times with delays (transaction might need time to settle)
@@ -469,28 +539,36 @@ class TradingEngine:
                 tx_signature = send_result.get("signature")
                 self.logger.info(f"✅ Live buy executed: {symbol} for ${usd_amount} - TX: {tx_signature}")
                 
-                # Get exact tokens received by parsing transaction logs (most accurate)
-                self.logger.info("Getting exact token amount from transaction logs...")
-                
+                # Get exact tokens received by parsing transaction logs
                 actual_tokens = 0.0
                 wallet_address = self.transaction_signer.get_wallet_address()
                 
-                # Try a few times to get transaction details (less critical for buys than sells)
-                for attempt in range(3):
-                    await asyncio.sleep(1 + attempt)  # Progressive delay: 1s, 2s, 3s
+                if self.use_realtime_positions:
+                    # NEW: Skip slow transaction parsing - realtime positions will update via WebSocket
+                    self.logger.info("⚡ Skipping token parsing - using realtime position tracking")
+                    # Use estimate for immediate position creation (will be corrected by WebSocket)
+                    estimated_tokens = (sol_amount / current_price) * 0.98  # Assume 2% slippage
+                    actual_tokens = estimated_tokens
+                else:
+                    # OLD: Get exact tokens via slow transaction log parsing (DEPRECATED)
+                    self.logger.info("Getting exact token amount from transaction logs...")
                     
-                    try:
-                        tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
+                    # Try a few times to get transaction details (less critical for buys than sells)
+                    for attempt in range(3):
+                        await asyncio.sleep(1 + attempt)  # Progressive delay: 1s, 2s, 3s
                         
-                        if tx_details and wallet_address:
-                            actual_tokens = self.transaction_signer.parse_token_transfer_from_logs(
-                                tx_details, mint_address, wallet_address
-                            )
-                            if actual_tokens > 0:
-                                self.logger.info(f"Successfully parsed tokens on attempt {attempt + 1}")
-                                break
-                    except Exception as e:
-                        self.logger.warning(f"Attempt {attempt + 1} to parse transaction failed: {e}")
+                        try:
+                            tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
+                            
+                            if tx_details and wallet_address:
+                                actual_tokens = self.transaction_signer.parse_token_transfer_from_logs(
+                                    tx_details, mint_address, wallet_address
+                                )
+                                if actual_tokens > 0:
+                                    self.logger.info(f"Successfully parsed tokens on attempt {attempt + 1}")
+                                    break
+                        except Exception as e:
+                            self.logger.warning(f"Attempt {attempt + 1} to parse transaction failed: {e}")
                 
                 # CRITICAL: Never create positions with estimates - verify on blockchain first
                 if actual_tokens <= 0:
@@ -530,7 +608,7 @@ class TradingEngine:
                     cost_usd_remaining=usd_amount,
                     avg_cost_per_token=fill_price,
                     buy_tx_signature=tx_signature,  # Store for verification
-                    verified_from_blockchain=True   # Mark as blockchain-verified
+                    verified_from_blockchain=not self.use_realtime_positions  # Realtime uses estimates initially
                 )
                 
                 self.active_positions[mint_address] = position
@@ -721,24 +799,36 @@ class TradingEngine:
                 self.logger.error("Wallet public key not configured")
                 return {"success": False, "error": "Wallet public key not configured"}
             
-            # Smart blockchain verification with ATA indexing awareness
-            actual_balance = await self._get_verified_token_balance(mint_address, position)
-            
-            if actual_balance <= 0:
-                self.logger.error(f"❌ SELL FAILED: Verified balance is {actual_balance}")
+            # NEW: Fast balance check using realtime positions (when enabled)
+            if self.use_realtime_positions:
+                can_sell, tokens_to_sell = self.realtime_positions.can_sell(mint_address, percentage)
                 
-                # Provide actionable error message
-                if position.amount > 0:
-                    self.logger.error(f"💡 ISSUE: Position shows {position.amount} tokens but blockchain verification failed")
-                    self.logger.error(f"🔧 ACTION: Check QuickNode connectivity and ATA indexing status")
-                    error_msg = f"Blockchain verification failed (position: {position.amount}, verified: {actual_balance})"
-                else:
-                    error_msg = f"No tokens to sell: {actual_balance}"
+                if not can_sell:
+                    self.logger.error(f"❌ SELL FAILED: Realtime position check failed (tokens to sell: {tokens_to_sell})")
+                    return {"success": False, "error": f"Cannot sell - insufficient tokens: {tokens_to_sell}"}
                 
-                return {"success": False, "error": error_msg}
-            
-            # Use verified balance (blockchain truth with fallbacks)
-            tokens_to_sell = actual_balance * percentage
+                self.logger.info(f"⚡ Fast sell check: {tokens_to_sell:,.0f} tokens available for sale")
+                actual_balance = tokens_to_sell / percentage if percentage > 0 else tokens_to_sell
+                
+            else:
+                # OLD: Smart blockchain verification with ATA indexing awareness (SLOW)
+                actual_balance = await self._get_verified_token_balance(mint_address, position)
+                
+                if actual_balance <= 0:
+                    self.logger.error(f"❌ SELL FAILED: Verified balance is {actual_balance}")
+                    
+                    # Provide actionable error message
+                    if position.amount > 0:
+                        self.logger.error(f"💡 ISSUE: Position shows {position.amount} tokens but blockchain verification failed")
+                        self.logger.error(f"🔧 ACTION: Check QuickNode connectivity and ATA indexing status")
+                        error_msg = f"Blockchain verification failed (position: {position.amount}, verified: {actual_balance})"
+                    else:
+                        error_msg = f"No tokens to sell: {actual_balance}"
+                    
+                    return {"success": False, "error": error_msg}
+                
+                # Use verified balance (blockchain truth with fallbacks)
+                tokens_to_sell = actual_balance * percentage
             
             # Update position amount to match verified reality
             if abs(position.amount - actual_balance) > 0.01:
@@ -871,12 +961,20 @@ class TradingEngine:
                     profit_usd = None  # Mark as unknown
                     profit_pct = 0
                 
-                # Update position using post-transaction balance verification
-                remaining_balance = await self._get_post_transaction_balance(mint_address)
-                
-                # Update position to match verified reality
-                position.amount = remaining_balance
-                position.cost_usd_remaining -= cost_basis_usd
+                # Update position tracking
+                if self.use_realtime_positions:
+                    # NEW: Realtime positions are updated automatically via WebSocket
+                    # Just update the old position system for compatibility
+                    position.amount = max(0, position.amount - tokens_to_sell)
+                    position.cost_usd_remaining -= cost_basis_usd
+                    self.logger.info(f"⚡ Position updated via realtime tracking")
+                else:
+                    # OLD: Update position using post-transaction balance verification (SLOW)
+                    remaining_balance = await self._get_post_transaction_balance(mint_address)
+                    
+                    # Update position to match verified reality
+                    position.amount = remaining_balance
+                    position.cost_usd_remaining -= cost_basis_usd
                 
                 # Also update SOL invested amount if we have it
                 if hasattr(position, 'sol_invested') and position.sol_invested > 0:
@@ -891,9 +989,10 @@ class TradingEngine:
                     position.avg_cost_per_token = 0.0
                 
                 # Remove position if no tokens remain
-                if remaining_balance <= 0.0001:  # Account for dust
+                if position.amount <= 0.0001:  # Account for dust
                     del self.active_positions[mint_address]
-                    self.logger.info(f"Position fully closed for {mint_address[:8]}... (blockchain verified)")
+                    tracking_method = "realtime" if self.use_realtime_positions else "blockchain verified"
+                    self.logger.info(f"Position fully closed for {mint_address[:8]}... ({tracking_method})")
                 
                 # Update P&L
                 self.pnl_store.add_trade(

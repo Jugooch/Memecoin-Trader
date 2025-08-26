@@ -104,6 +104,11 @@ trading_mode: "simulation"    # Options: "simulation", "alerts", "auto"
 # alerts = Generate buy/sell alerts for manual execution  
 # auto = Fully automated trading (requires QuickNode)
 
+# EXPERIMENTAL: Real-time position tracking (NEW FEATURE)
+# When enabled, positions are updated immediately from WebSocket events
+# instead of waiting for blockchain polling (5-15 second improvement)
+use_realtime_positions: false  # Set to true to enable real-time position tracking
+
 # Trading limits
 trading:
   initial_capital: 500.0      # Starting capital ($) - optimized for $15-25 trades
