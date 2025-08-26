@@ -691,11 +691,8 @@ class TradingEngine:
                         price=current_price,
                         usd_amount=usd_value,
                         equity=self.pnl_store.current_equity,
-                        paper_mode=False,
-                        profit=profit_usd,
-                        profit_pct=profit_pct,
-                        exit_reason=exit_reason,
-                        tx_signature=tx_signature
+                        realized_pnl=profit_usd,  # Use realized_pnl parameter for profit
+                        paper_mode=False
                     )
                 
                 return {
