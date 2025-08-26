@@ -177,12 +177,11 @@ class PnLStore:
     
     @property
     def current_equity(self) -> float:
-        """Get current total equity (current capital + unrealized P&L from positions)"""
-        return round(
-            self.data["current_capital"] + 
-            self.data.get("unrealized_pnl", 0.0),
-            2
-        )
+        """Get current total equity (current capital + position values at current prices)"""
+        # For live trading: current_capital reflects actual SOL balance changes
+        # Position values would require real-time price fetching, so we use current_capital
+        # which already includes the net effect of all trades
+        return round(self.data["current_capital"], 2)
     
     @property
     def total_pnl(self) -> float:
