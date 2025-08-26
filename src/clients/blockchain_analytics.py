@@ -162,10 +162,14 @@ class BlockchainAnalytics:
                 return []
                 
             data = response.json()
-            if "result" not in data:
+            if "result" not in data or not data["result"]:
+                self.logger.info("No transaction signatures found")
                 return []
                 
             signatures = data["result"]
+            if not isinstance(signatures, list):
+                self.logger.warning(f"Unexpected signatures format: {type(signatures)}")
+                return []
             
             # Filter to last 24 hours
             cutoff_time = datetime.utcnow() - timedelta(hours=24)
@@ -173,12 +177,15 @@ class BlockchainAnalytics:
             
             today_sigs = []
             for sig_info in signatures:
+                if not isinstance(sig_info, dict):
+                    continue
                 if sig_info.get("blockTime", 0) >= cutoff_timestamp:
-                    today_sigs.append(sig_info["signature"])
+                    today_sigs.append(sig_info)  # Keep the full sig_info object
                 else:
                     break  # Signatures are ordered by time, so we can break early
             
             if not today_sigs:
+                self.logger.info("No transactions found in the last 24 hours")
                 return []
             
             # Get transaction details, using cache for already-fetched transactions
@@ -187,6 +194,9 @@ class BlockchainAnalytics:
             
             # Check which signatures we need to fetch
             for sig_info in today_sigs[:50]:  # Look at up to 50 most recent
+                if not isinstance(sig_info, dict) or "signature" not in sig_info:
+                    continue
+                    
                 sig = sig_info["signature"]
                 if sig in self._tx_cache:
                     # Use cached transaction
@@ -279,6 +289,27 @@ class BlockchainAnalytics:
             
             # Get today's transactions (optimized)
             transactions = await self.get_wallet_transactions_today(wallet_address)
+            
+            # Handle case where there are no transactions
+            if not transactions:
+                self.logger.info("No transactions found today - wallet balance unchanged")
+                # Return current balance as both starting and ending (no P&L)
+                return {
+                    "current_balance_sol": round(current_balance, 4),
+                    "starting_balance_sol": round(current_balance, 4),
+                    "net_sol_change": 0.0,
+                    "net_usd_change": 0.0,
+                    "total_sol_in": 0.0,
+                    "total_sol_out": 0.0,
+                    "fees_paid_sol": 0.0,
+                    "fees_paid_usd": 0.0,
+                    "transaction_count": 0,
+                    "swap_count": 0,
+                    "buy_trades": 0,
+                    "sell_trades": 0,
+                    "current_equity_usd": round(current_balance * sol_price, 2),
+                    "sol_price": round(sol_price, 2)
+                }
             
             # Track SOL movements for accurate P&L
             total_sol_in = 0.0
@@ -375,7 +406,7 @@ class BlockchainAnalytics:
             # Clean up old cached transactions (keep only last 100)
             if len(self._tx_cache) > 100:
                 # Keep only the 100 most recent
-                recent_sigs = [sig["signature"] for sig in today_sigs[:100]]
+                recent_sigs = [sig["signature"] if isinstance(sig, dict) else sig for sig in today_sigs[:100]]
                 self._tx_cache = {k: v for k, v in self._tx_cache.items() if k in recent_sigs}
             
             return result
