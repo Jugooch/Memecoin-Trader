@@ -1462,7 +1462,7 @@ class MemecoinTradingBot:
                         trade_summary += f"\n  Period P&L: {profits:+.2f}%"
                 
                 # Add latency information
-                recent_latencies = [l for l in self.execution_latencies if l['timestamp'] > five_min_ago]
+                recent_latencies = [l for l in self.execution_latencies if l['timestamp'] > two_min_ago]
                 if recent_latencies:
                     avg_total_latency = sum(l['total_latency'] for l in recent_latencies) / len(recent_latencies)
                     avg_alpha_latency = sum(l['alpha_check_latency'] for l in recent_latencies) / len(recent_latencies)

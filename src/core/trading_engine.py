@@ -418,8 +418,12 @@ class TradingEngine:
                 self.logger.error("Wallet public key not configured in pumpportal section")
                 return {"success": False, "error": "Wallet public key not configured"}
             
-            # Convert USD to SOL with dynamic sizing for liquidity constraints
-            sol_price = getattr(self.config, "paper_trading", {}).get("sol_price_estimate", 140)
+            # Convert USD to SOL using real-time price
+            sol_price = await self._get_sol_price()
+            if sol_price is None:
+                self.logger.error("Cannot get SOL price for buy calculation")
+                return {"success": False, "error": "Cannot get SOL price"}
+            
             sol_amount = usd_amount / sol_price
             
             # Get current price for reference (restored from working implementation)
@@ -819,19 +823,46 @@ class TradingEngine:
                     # NEVER use market estimate for sells - better to report unknown P&L
                     actual_sol_received = 0.0
                 
-                # Calculate actual USD value using real-time SOL price
-                cost_basis_usd = tokens_to_sell * position.avg_cost_per_token
+                # Calculate cost basis using actual SOL invested (more accurate)
+                if hasattr(position, 'sol_invested') and position.sol_invested > 0:
+                    # Calculate cost basis from actual SOL invested
+                    percentage_sold = tokens_to_sell / position.tokens_initial if position.tokens_initial > 0 else 1.0
+                    sol_cost_basis = position.sol_invested * percentage_sold
+                    
+                    # Convert to USD using current SOL price
+                    sol_price_usd = await self._get_sol_price()
+                    
+                    if sol_price_usd is None:
+                        self.logger.error("Cannot get SOL price - using position tracking for cost basis")
+                        cost_basis_usd = tokens_to_sell * position.avg_cost_per_token
+                    else:
+                        cost_basis_usd = sol_cost_basis * sol_price_usd
+                        self.logger.info(f"Cost basis from SOL: {sol_cost_basis:.6f} SOL (${cost_basis_usd:.2f} at ${sol_price_usd}/SOL)")
+                else:
+                    # Fallback to position tracking
+                    cost_basis_usd = tokens_to_sell * position.avg_cost_per_token
+                    self.logger.warning(f"Using position tracking for cost basis: ${cost_basis_usd:.2f}")
                 
                 if actual_sol_received > 0:
-                    # Get real-time SOL price from Moralis or use estimate
-                    sol_price_usd = getattr(self.config, "paper_trading", {}).get("sol_price_estimate", 250)
-                    usd_value = actual_sol_received * sol_price_usd
-                    self.logger.info(f"Actual SOL received: {actual_sol_received:.6f} SOL (${usd_value:.2f} at ${sol_price_usd}/SOL)")
+                    # Get real-time SOL price from blockchain analytics
+                    sol_price_usd = await self._get_sol_price()
                     
-                    profit_usd = usd_value - cost_basis_usd
-                    profit_pct = (profit_usd / cost_basis_usd) * 100 if cost_basis_usd > 0 else 0
+                    if sol_price_usd is None:
+                        self.logger.error("Cannot get SOL price for P&L calculation - marking as unverified")
+                        usd_value = 0
+                        profit_usd = None  # Mark as unknown
+                        profit_pct = 0
+                    else:
+                        usd_value = actual_sol_received * sol_price_usd
+                        self.logger.info(f"Actual SOL received: {actual_sol_received:.6f} SOL (${usd_value:.2f} at ${sol_price_usd}/SOL)")
+                        
+                        profit_usd = usd_value - cost_basis_usd
+                        profit_pct = (profit_usd / cost_basis_usd) * 100 if cost_basis_usd > 0 else 0
                     
-                    self.logger.info(f"VERIFIED Sell P&L: ${cost_basis_usd:.2f} cost → ${usd_value:.2f} received = ${profit_usd:+.2f} ({profit_pct:+.1f}%)")
+                    if profit_usd is not None:
+                        self.logger.info(f"VERIFIED Sell P&L: ${cost_basis_usd:.2f} cost → ${usd_value:.2f} received = ${profit_usd:+.2f} ({profit_pct:+.1f}%)")
+                    else:
+                        self.logger.warning(f"UNVERIFIED Sell P&L: Cannot calculate without SOL price")
                 else:
                     # CRITICAL: Cannot determine actual P&L
                     self.logger.error("⚠️ CANNOT VERIFY ACTUAL P&L - Transaction parsing failed")
@@ -846,6 +877,13 @@ class TradingEngine:
                 # Update position to match verified reality
                 position.amount = remaining_balance
                 position.cost_usd_remaining -= cost_basis_usd
+                
+                # Also update SOL invested amount if we have it
+                if hasattr(position, 'sol_invested') and position.sol_invested > 0:
+                    percentage_sold = tokens_to_sell / position.tokens_initial if position.tokens_initial > 0 else 1.0
+                    sol_sold = position.sol_invested * percentage_sold
+                    position.sol_invested -= sol_sold
+                    self.logger.info(f"Updated SOL invested: -{sol_sold:.6f} SOL (remaining: {position.sol_invested:.6f} SOL)")
                 
                 if position.amount > 0:
                     position.avg_cost_per_token = position.cost_usd_remaining / position.amount
@@ -870,7 +908,7 @@ class TradingEngine:
                 
                 # Update win rate
                 self.total_trades += 1
-                if profit_usd > 0:
+                if profit_usd is not None and profit_usd > 0:
                     self.winning_trades += 1
                 
                 # Send Discord notification
@@ -1394,6 +1432,13 @@ class TradingEngine:
         # Everything else: Full safety checks
         self.logger.info(f"🛡️  SAFE EXECUTION: Full safety checks ({wallet_confidence:.0f}%, {signal_strength:.1f} signal)")
         return "none"
+    
+    async def _get_sol_price(self) -> Optional[float]:
+        """Get current SOL price in USD"""
+        if self.blockchain_analytics:
+            price = await self.blockchain_analytics.get_sol_price()
+            return price if price > 0 else None
+        return None
     
     async def cleanup(self):
         """Cleanup resources"""
