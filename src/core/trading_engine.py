@@ -42,6 +42,7 @@ class Position:
     break_even_armed_time: Optional[datetime] = None  # When break-even was armed
     trailing_stop_active: bool = False  # Track if trailing stop is active
     high_gain_peak: float = 0  # Track highest gain percentage achieved
+    is_selling: bool = False  # Prevent race conditions in sell operations
     
     # Blockchain verification data (for live trading accuracy)
     buy_tx_signature: Optional[str] = None  # Source of truth for cost basis
@@ -747,6 +748,14 @@ class TradingEngine:
             
             position = self.active_positions[mint_address]
             
+            # Prevent race conditions - check if position is already being sold
+            if hasattr(position, 'is_selling') and position.is_selling:
+                self.logger.warning(f"🔒 Sell blocked - {symbol} position already being sold")
+                return {"success": False, "error": "Position already being sold"}
+            
+            # Mark as selling to prevent concurrent sells
+            position.is_selling = True
+            
             # Check if we have transaction signer
             if not self.transaction_signer:
                 self.logger.error("Transaction signer not initialized for live trading")
@@ -796,11 +805,13 @@ class TradingEngine:
             
             if not tx_result.get("success"):
                 self.logger.error(f"Failed to create sell transaction: {tx_result.get('error')}")
+                position.is_selling = False  # Reset selling flag on failure
                 return tx_result
             
             # Get the base64 transaction
             transaction_b64 = tx_result.get("transaction")
             if not transaction_b64:
+                position.is_selling = False  # Reset selling flag on failure
                 return {"success": False, "error": "No transaction returned"}
             
             # Sign and send transaction
@@ -928,6 +939,9 @@ class TradingEngine:
                     del self.active_positions[mint_address]
                     tracking_method = "realtime" if self.use_realtime_positions else "blockchain verified"
                     self.logger.info(f"Position fully closed for {mint_address[:8]}... ({tracking_method})")
+                else:
+                    # Reset selling flag for partial sells
+                    position.is_selling = False
                 
                 # Update P&L
                 self.pnl_store.add_trade(
@@ -973,10 +987,14 @@ class TradingEngine:
                 }
             else:
                 self.logger.error(f"Failed to send sell transaction: {send_result.get('error')}")
+                position.is_selling = False  # Reset selling flag on failure
                 return send_result
             
         except Exception as e:
             self.logger.error(f"Error in real sell execution: {e}")
+            # Reset selling flag on exception
+            if mint_address in self.active_positions:
+                self.active_positions[mint_address].is_selling = False
             return {"success": False, "error": str(e)}
 
     async def check_exit_conditions(self, mint_address: str, current_price: float = 0) -> Optional[tuple]:
@@ -1573,6 +1591,15 @@ class TradingEngine:
             if current_pnl_pct <= sl_threshold_pct:
                 self.logger.warning(f"🎯 CATCHUP SL TRIGGER: {symbol} hit {current_pnl_pct:+.1f}% (SL at {sl_threshold_pct:+.1f}%)")
                 
+                # Mark position as selling to prevent race conditions
+                if hasattr(position, 'is_selling'):
+                    if position.is_selling:
+                        self.logger.info(f"🔒 Catchup SL skipped - {symbol} already being sold")
+                        return
+                    position.is_selling = True
+                else:
+                    position.is_selling = True
+                
                 sell_result = await self.sell_token(
                     mint_address=mint_address,
                     percentage=1.0,  # Full position
@@ -1585,6 +1612,8 @@ class TradingEngine:
                     self.logger.info(f"✅ Catchup SL executed: {symbol} position closed")
                 else:
                     self.logger.error(f"❌ Catchup SL failed: {sell_result.get('error')}")
+                    # Reset selling flag on failure
+                    position.is_selling = False
             
         except Exception as e:
             self.logger.error(f"❌ Error in catchup logic for {symbol}: {e}")
