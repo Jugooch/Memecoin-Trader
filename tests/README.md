@@ -9,6 +9,7 @@ tests/
 ├── unit/           # Isolated component tests
 ├── integration/    # Multi-component interaction tests  
 ├── performance/    # Memory, latency, throughput tests
+├── manual/         # Manual testing scripts and tools
 ├── fixtures/       # Test data and mocks
 └── reports/        # Test results and coverage reports
 ```
@@ -107,6 +108,12 @@ Trade executed: paper_mode=True, fees=$0.73, slippage=0.5%
 
 ### Performance Tests (`tests/performance/`)
 Tests system resource usage and performance metrics.
+
+### Manual Tests (`tests/manual/`)
+Scripts for manual testing and debugging, including:
+- `manual_sell_gdp.py` - Manual token selling script
+- `test_bitquery_rotation.py` - Bitquery API rotation testing
+- `test_discord.py` - Discord notification testing
 
 **Example**: `test_memory_usage.py`
 ```python

@@ -151,7 +151,7 @@ memecoin-trader/
 ### Recent Improvements (Repository Cleanup)
 
 **🗑️ Removed Legacy/Duplicate Files:**
-- `config/config.example.yml` - Outdated config template (use `config.yml.example`)
+- `config/config.yml.example` - Configuration template with all latest settings
 - `src/discovery/alpha_finder.py` - Basic discovery system (superseded by v2)
 
 **🆕 Added Shared Infrastructure:**
