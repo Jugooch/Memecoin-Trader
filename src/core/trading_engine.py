@@ -16,6 +16,7 @@ from src.clients.blockchain_analytics import BlockchainAnalytics
 from src.utils.discord_notifier import DiscordNotifier
 from src.utils.pnl_store import PnLStore
 from .realtime_position_manager import RealtimePositionManager
+from .pool_calculator import PoolCalculator
 
 
 @dataclass
@@ -151,6 +152,9 @@ class TradingEngine:
         # Feature flag for gradual transition
         self.use_realtime_positions = getattr(config, 'use_realtime_positions', False)
         
+        # Pool calculator for immediate position creation
+        self.pool_calculator = PoolCalculator()
+        
         # Hybrid safety configuration
         self.safety_hybrid = getattr(config, 'safety_hybrid', {})
         self.use_hybrid_safety = self.safety_hybrid.get('enabled', False)
@@ -204,14 +208,22 @@ class TradingEngine:
                 
                 self.logger.info(f"🚀 WSS buy trigger - starting verification for {tx_data['symbol']}")
                 
-                # Start the verification process with accurate data
-                asyncio.create_task(self._create_verified_position(
-                    mint_address=tx_data['mint_address'],
-                    tx_signature=tx_signature,
-                    sol_amount=tx_data['sol_amount'],
-                    usd_amount=tx_data['usd_amount'],
-                    symbol=tx_data['symbol']
-                ))
+                # Start reconciliation (verify and adjust if needed)
+                if tx_data.get('has_immediate_position'):
+                    asyncio.create_task(self._reconcile_position(
+                        mint_address=tx_data['mint_address'],
+                        tx_signature=tx_signature,
+                        symbol=tx_data['symbol']
+                    ))
+                else:
+                    # Fallback to old verification flow if no immediate position
+                    asyncio.create_task(self._create_verified_position(
+                        mint_address=tx_data['mint_address'],
+                        tx_signature=tx_signature,
+                        sol_amount=tx_data['sol_amount'],
+                        usd_amount=tx_data['usd_amount'],
+                        symbol=tx_data['symbol']
+                    ))
                 
             elif action == 'sell':
                 # Handle sell confirmations if needed
@@ -584,10 +596,52 @@ class TradingEngine:
                 tx_signature = send_result.get("signature")
                 self.logger.info(f"✅ Live buy executed: {symbol} for ${usd_amount} - TX: {tx_signature}")
                 
-                # 🚀 NEW CLEAN FLOW: ONLY wait for WSS trigger, no immediate verification
-                self.logger.info(f"✅ Transaction sent: {tx_signature} - waiting for WSS confirmation...")
+                # NEW: Create position immediately using pool calculation
+                pool_result = await self.pool_calculator.get_expected_tokens(mint_address, sol_amount)
                 
-                # Store pending transaction data for WSS trigger
+                if pool_result.get("success"):
+                    min_tokens = pool_result["min_tokens"]
+                    entry_price = usd_amount / min_tokens if min_tokens > 0 else 0
+                    
+                    # Create position immediately with conservative estimate
+                    position = Position(
+                        mint=mint_address,
+                        entry_price=entry_price,
+                        amount=min_tokens,
+                        sol_invested=sol_amount,
+                        entry_time=datetime.now(),
+                        tp_price=entry_price * self.config.tp_multiplier,
+                        sl_price=entry_price * self.config.stop_loss_pct,
+                        peak_price=entry_price,
+                        paper_mode=False,
+                        tokens_initial=min_tokens,
+                        cost_usd_remaining=usd_amount,
+                        avg_cost_per_token=entry_price,
+                        buy_tx_signature=tx_signature,
+                        verified_from_blockchain=False  # Will be verified later
+                    )
+                    
+                    self.active_positions[mint_address] = position
+                    self.logger.info(f"🚀 Position created immediately: {min_tokens:,.0f} tokens at ${entry_price:.8f} (pool estimate)")
+                    
+                    # Also create realtime position for new flow compatibility  
+                    if self.use_realtime_positions:
+                        trade_event = {
+                            'mint': mint_address,
+                            'action': 'buy',
+                            'tokens_received': min_tokens,
+                            'sol_amount': sol_amount,
+                            'price': entry_price,
+                            'tx_signature': tx_signature
+                        }
+                        self.realtime_positions.handle_trade_event(trade_event)
+                    
+                    # Start monitoring position
+                    asyncio.create_task(self.monitor_position(mint_address))
+                else:
+                    self.logger.warning(f"Could not calculate expected tokens, will wait for verification")
+                
+                # Store pending transaction data for WSS reconciliation
                 if not hasattr(self, '_pending_transactions'):
                     self._pending_transactions = {}
                 
@@ -596,7 +650,8 @@ class TradingEngine:
                     'sol_amount': sol_amount,
                     'usd_amount': usd_amount,
                     'symbol': symbol,
-                    'timestamp': datetime.now()
+                    'timestamp': datetime.now(),
+                    'has_immediate_position': pool_result.get("success", False)
                 }
                 
                 # P&L and notifications will be handled after verification in _create_verified_position
@@ -1528,6 +1583,98 @@ class TradingEngine:
         
         self.logger.error(f"❌ Verification failed after {max_attempts} attempts")
         return None
+    
+    async def _reconcile_position(self, mint_address: str, tx_signature: str, symbol: str):
+        """
+        Reconcile immediate position with actual transaction data
+        Only adjusts if there's a significant difference
+        """
+        try:
+            self.logger.info(f"🔄 Reconciling position: {symbol}")
+            
+            if mint_address not in self.active_positions:
+                self.logger.warning(f"No position to reconcile for {mint_address}")
+                return
+            
+            position = self.active_positions[mint_address]
+            
+            # Get actual tokens from transaction (faster than ATA query)
+            verified_data = await self._get_transaction_token_amounts(tx_signature)
+            
+            if verified_data and verified_data.get('tokens_received', 0) > 0:
+                actual_tokens = verified_data['tokens_received']
+                estimated_tokens = position.amount
+                
+                # Check if adjustment needed (>2% difference)
+                diff_pct = abs(actual_tokens - estimated_tokens) / estimated_tokens * 100
+                
+                if diff_pct > 2:
+                    self.logger.info(f"📊 Adjusting position: {estimated_tokens:,.0f} → {actual_tokens:,.0f} tokens ({diff_pct:.1f}% difference)")
+                    
+                    # Adjust position amounts
+                    old_entry_price = position.entry_price
+                    new_entry_price = position.cost_usd_remaining / actual_tokens
+                    
+                    position.amount = actual_tokens
+                    position.tokens_initial = actual_tokens
+                    position.entry_price = new_entry_price
+                    position.avg_cost_per_token = new_entry_price
+                    position.tp_price = new_entry_price * self.config.tp_multiplier
+                    position.sl_price = new_entry_price * self.config.stop_loss_pct
+                    position.verified_from_blockchain = True
+                    
+                    self.logger.info(f"✅ Position reconciled: entry price ${old_entry_price:.8f} → ${new_entry_price:.8f}")
+                else:
+                    self.logger.info(f"✅ Position accurate: {diff_pct:.1f}% difference (no adjustment needed)")
+                    position.verified_from_blockchain = True
+            else:
+                self.logger.warning(f"Could not get transaction amounts for reconciliation")
+                
+        except Exception as e:
+            self.logger.error(f"Error reconciling position: {e}")
+    
+    async def _get_transaction_token_amounts(self, tx_signature: str) -> Optional[Dict]:
+        """Get token amounts from transaction logs (faster than ATA query)"""
+        try:
+            if not self.transaction_signer:
+                return None
+            
+            tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
+            if not tx_details:
+                return None
+            
+            # Get wallet address
+            wallet_address = self.transaction_signer.get_wallet_address()
+            
+            # Parse transaction logs for token amounts
+            meta = tx_details.get("meta", {})
+            post_balances = meta.get("postTokenBalances", [])
+            pre_balances = meta.get("preTokenBalances", [])
+            
+            # Calculate token balance change
+            post_amount = 0
+            pre_amount = 0
+            
+            for balance in post_balances:
+                if balance.get("owner") == wallet_address:
+                    post_amount = float(balance.get("uiTokenAmount", {}).get("uiAmount", 0))
+                    break
+            
+            for balance in pre_balances:
+                if balance.get("owner") == wallet_address:
+                    pre_amount = float(balance.get("uiTokenAmount", {}).get("uiAmount", 0))
+                    break
+            
+            tokens_received = post_amount - pre_amount
+            
+            if tokens_received > 0:
+                return {"tokens_received": tokens_received}
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Error getting transaction amounts: {e}")
+            return None
 
     async def _catchup_position_state(self, mint_address: str, symbol: str):
         """
@@ -1747,3 +1894,4 @@ class TradingEngine:
             await self.blockchain_analytics.close()
         await self.pumpfun.close()
         await self.moralis.close()
+        await self.pool_calculator.close()
