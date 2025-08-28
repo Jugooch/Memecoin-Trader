@@ -167,6 +167,22 @@ class TradingEngine:
         """Callback when a new position is opened via realtime tracking"""
         self.logger.info(f"📈 Realtime position opened: {position.mint[:8]}... {position.current_tokens:,.0f} tokens")
         
+        # Send buy notification to Discord after WSS confirmation
+        if hasattr(self, 'notifier') and self.notifier:
+            # Use current price for USD value estimate  
+            usd_value = position.current_tokens * position.entry_price if position.entry_price else 0
+            
+            asyncio.create_task(self.notifier.send_trade_notification(
+                side="BUY",
+                symbol=position.mint[:8] + "...",  # Use mint as symbol fallback
+                mint_address=position.mint,
+                quantity=position.current_tokens,
+                price=position.entry_price,
+                usd_amount=usd_value,
+                equity=self.pnl_store.current_equity,
+                paper_mode=False
+            ))
+        
     def _on_realtime_position_updated(self, position):
         """Callback when a position is updated via realtime tracking"""
         pnl_sol = position.unrealized_pnl_sol
@@ -1497,7 +1513,8 @@ class TradingEngine:
             return
             
         old_balance = position.amount
-        symbol = position.symbol or mint_address[:8]
+        # Position doesn't have symbol field, use mint address
+        symbol = mint_address[:8] + "..."
         
         # Update position with reality
         position.amount = actual_balance
@@ -1532,6 +1549,40 @@ class TradingEngine:
             position = self.active_positions.get(mint_address)
             if position:
                 position.needs_reconciliation = True  # Keep it paused
+
+    async def _get_transaction_details_with_retry(self, tx_signature: str, mint_address: str) -> Optional[Dict]:
+        """Get transaction details with exponential backoff retry"""
+        max_attempts = 5
+        base_delay = 1  # Start with 1 second
+        
+        for attempt in range(max_attempts):
+            try:
+                # Try to get transaction amounts first (most accurate)
+                verified_data = await self._get_transaction_token_amounts(tx_signature)
+                
+                if verified_data and verified_data.get('tokens_received', 0) > 0:
+                    self.logger.info(f"✅ Got transaction details on attempt {attempt + 1}: {verified_data['tokens_received']:,.0f} tokens")
+                    return verified_data
+                    
+                # Fallback to balance query if transaction details not ready
+                if self.transaction_signer:
+                    actual_balance = await self.transaction_signer.get_token_balance(mint_address)
+                    if actual_balance and actual_balance > 0:
+                        verified_data = {'tokens_received': actual_balance}
+                        self.logger.info(f"✅ Got balance on attempt {attempt + 1}: {actual_balance:,.0f} tokens")
+                        return verified_data
+                        
+            except Exception as e:
+                self.logger.warning(f"Transaction details attempt {attempt + 1} failed: {e}")
+            
+            # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+            if attempt < max_attempts - 1:
+                delay = base_delay * (2 ** attempt)
+                self.logger.info(f"⏳ Retrying transaction details in {delay}s...")
+                await asyncio.sleep(delay)
+        
+        self.logger.error(f"❌ Failed to get transaction details after {max_attempts} attempts")
+        return None
 
     def get_position_details(self, mint_address: str) -> Optional[Dict]:
         """Get details for a specific position"""
@@ -1739,17 +1790,8 @@ class TradingEngine:
             
             position = self.active_positions[mint_address]
             
-            # Get actual tokens from transaction (faster than ATA query)
-            verified_data = await self._get_transaction_token_amounts(tx_signature)
-            
-            # If transaction details not available yet, fall back to direct balance query
-            if not verified_data or verified_data.get('tokens_received', 0) == 0:
-                self.logger.warning(f"Transaction details not ready, falling back to balance query")
-                if self.transaction_signer:
-                    actual_tokens = await self.transaction_signer.get_token_balance(mint_address)
-                    if actual_tokens and actual_tokens > 0:
-                        verified_data = {'tokens_received': actual_tokens}
-                        self.logger.info(f"✅ Got balance from blockchain: {actual_tokens:,.0f} tokens")
+            # Get actual tokens with retry logic (includes transaction details + balance fallback)
+            verified_data = await self._get_transaction_details_with_retry(tx_signature, mint_address)
             
             if verified_data and verified_data.get('tokens_received', 0) > 0:
                 actual_tokens = verified_data['tokens_received']
