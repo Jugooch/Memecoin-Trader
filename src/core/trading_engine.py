@@ -1664,6 +1664,11 @@ class TradingEngine:
                 # Try to get transaction amounts first (most accurate)
                 verified_data = await self._get_transaction_token_amounts(tx_signature)
                 
+                # Check if transaction failed
+                if verified_data and verified_data.get('transaction_failed'):
+                    self.logger.error(f"❌ Buy transaction failed: {verified_data.get('error', 'Unknown error')}")
+                    return verified_data  # Return immediately with failure flag
+                
                 if verified_data and verified_data.get('tokens_received', 0) > 0:
                     self.logger.info(f"✅ Got transaction details on attempt {attempt + 1}: {verified_data['tokens_received']:,.0f} tokens")
                     return verified_data
@@ -1739,6 +1744,16 @@ class TradingEngine:
             
             # Wait for QuickNode verification with exponential backoff
             verified_data = await self._wait_for_verification(mint_address, tx_signature)
+            
+            # Check if transaction failed
+            if verified_data and verified_data.get('transaction_failed'):
+                self.logger.error(f"🚫 Buy transaction FAILED for {symbol} - not creating position")
+                await self.send_error_notification(f"Buy transaction failed: {symbol}", {
+                    'mint': mint_address,
+                    'tx_signature': tx_signature,
+                    'error': verified_data.get('error', 'Unknown error')
+                })
+                return
             
             if not verified_data:
                 self.logger.error(f"❌ Verification failed for {symbol} - no position created")
@@ -1867,6 +1882,13 @@ class TradingEngine:
                         'verification_attempts': attempt + 1
                     }
                 
+                # After a few attempts, check if the transaction actually failed
+                if attempt >= 3:  # Check after 3 attempts (~15-20 seconds)
+                    tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
+                    if tx_details and tx_details.get("_transaction_failed"):
+                        self.logger.error(f"🚫 Buy transaction FAILED: {tx_details.get('_error_detail', 'Unknown error')}")
+                        return {"transaction_failed": True, "error": tx_details.get("_error_detail")}
+                
                 if attempt < max_attempts - 1:
                     # Exponential backoff with jitter
                     delay = min(base_delay * (1.5 ** attempt), 15)  # Cap at 15s
@@ -1897,6 +1919,15 @@ class TradingEngine:
             
             # Get actual tokens with retry logic (includes transaction details + balance fallback)
             verified_data = await self._get_transaction_details_with_retry(tx_signature, mint_address)
+            
+            # Check if transaction failed
+            if verified_data and verified_data.get('transaction_failed'):
+                self.logger.error(f"🚫 Buy transaction FAILED for {symbol} - canceling position")
+                # Remove the failed position
+                if mint_address in self.active_positions:
+                    del self.active_positions[mint_address]
+                    self.logger.info(f"✅ Removed failed position for {symbol}")
+                return
             
             if verified_data and verified_data.get('tokens_received', 0) > 0:
                 actual_tokens = verified_data['tokens_received']
@@ -1939,6 +1970,11 @@ class TradingEngine:
             tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
             if not tx_details:
                 return None
+            
+            # Check if transaction failed
+            if tx_details.get("_transaction_failed"):
+                self.logger.warning(f"🚫 Transaction failed: {tx_details.get('_error_detail', 'Unknown error')}")
+                return {"transaction_failed": True, "error": tx_details.get("_error_detail")}
             
             # Get wallet address
             wallet_address = self.transaction_signer.get_wallet_address()

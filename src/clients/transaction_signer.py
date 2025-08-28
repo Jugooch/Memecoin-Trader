@@ -349,6 +349,12 @@ class TransactionSigner:
             )
             
             if result and "error" not in result:
+                # Check if transaction failed (has error in meta)
+                meta = result.get("meta", {})
+                if meta and meta.get("err") is not None:
+                    self.logger.warning(f"❌ Transaction {tx_signature} failed with error: {meta.get('err')}")
+                    result["_transaction_failed"] = True
+                    result["_error_detail"] = meta.get("err")
                 return result
             else:
                 self.logger.error(f"Failed to get transaction details: {result.get('error', 'Unknown error')}")
