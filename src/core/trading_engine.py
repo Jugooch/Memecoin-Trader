@@ -48,6 +48,10 @@ class Position:
     # Blockchain verification data (for live trading accuracy)
     buy_tx_signature: Optional[str] = None  # Source of truth for cost basis
     verified_from_blockchain: bool = False   # True if data comes from tx logs
+    
+    # Smart reconciliation system
+    needs_reconciliation: bool = False  # Flag for position balance reconciliation
+    pre_reconcile_state: Optional[dict] = None  # Store TP state before reconciliation
 
 
 class TradingEngine:
@@ -826,6 +830,11 @@ class TradingEngine:
             
             position = self.active_positions[mint_address]
             
+            # Check if reconciliation is needed - pause all sells until resolved
+            if hasattr(position, 'needs_reconciliation') and position.needs_reconciliation:
+                self.logger.info(f"⏸️ Skipping sell for {symbol} - reconciliation in progress")
+                return {"success": False, "error": "awaiting_reconciliation"}
+            
             # Prevent race conditions - check if position is already being sold
             if hasattr(position, 'is_selling') and position.is_selling:
                 self.logger.warning(f"🔒 Sell blocked - {symbol} position already being sold")
@@ -1081,69 +1090,28 @@ class TradingEngine:
                         position.is_selling = False  # Reset flag so we can try again later
                         return retry_result
                 
-                # Check if it's a "Not enough tokens" error and try to fix position tracking
+                # Check if it's a "Not enough tokens" error - trigger smart reconciliation
                 elif 'NotEnoughTokensToSell' in error_msg or '0x1787' in error_msg:
-                    self.logger.warning(f"⚠️ Token balance mismatch detected - fetching actual balance")
+                    self.logger.warning(f"🚫 Balance mismatch detected - entering reconciliation mode for {symbol}")
                     
-                    actual_balance = None
+                    # Mark position as needing reconciliation and preserve current state
+                    position.needs_reconciliation = True
+                    position.is_selling = False
+                    position.pre_reconcile_state = {
+                        'tp1_hit': position.tp1_hit_time is not None,
+                        'tp2_hit': position.tp2_hit_time is not None,
+                        'tp3_hit': position.tp3_hit_time is not None,
+                        'last_exit_reason': exit_reason,
+                        'attempted_percentage': percentage
+                    }
                     
-                    # FAST PATH: Try to extract actual balance from error message first
-                    import re
-                    left_match = re.search(r'Left: (\d+)', error_msg)
-                    if left_match:
-                        actual_balance_raw = int(left_match.group(1))
-                        # Convert from raw units (assuming 6 decimals for pump.fun tokens)
-                        actual_balance = actual_balance_raw / 1e6
-                        self.logger.info(f"📊 Actual balance from error: {actual_balance:,.0f} tokens (instant)")
+                    self.logger.info(f"⏸️ PAUSING {symbol}: Will reconcile balance and resume monitoring")
+                    self.logger.info(f"   Current TP state: TP1={position.tp1_hit_time is not None}, TP2={position.tp2_hit_time is not None}, TP3={position.tp3_hit_time is not None}")
                     
-                    # FALLBACK PATH: Query blockchain if parsing failed
-                    if actual_balance is None and self.transaction_signer:
-                        self.logger.info(f"📊 Querying blockchain for actual balance...")
-                        try:
-                            actual_balance = await self.transaction_signer.get_token_balance(mint_address)
-                            if actual_balance:
-                                self.logger.info(f"📊 Actual balance from blockchain: {actual_balance:,.0f} tokens")
-                        except Exception as e:
-                            self.logger.error(f"Failed to query balance: {e}")
+                    # Start reconciliation in background (don't wait)
+                    asyncio.create_task(self._reconcile_and_resume(mint_address, symbol))
                     
-                    if actual_balance and actual_balance > 0:
-                        self.logger.info(f"📊 Position tracking had: {position.amount:,.0f} tokens")
-                        
-                        # Update position with correct balance
-                        if actual_balance > 0:
-                            old_amount = position.amount
-                            position.amount = actual_balance
-                            position.tokens_initial = actual_balance  # Update initial too if needed
-                            
-                            # Recalculate entry price based on actual tokens
-                            if position.cost_usd_remaining > 0:
-                                position.entry_price = position.cost_usd_remaining / actual_balance
-                                position.avg_cost_per_token = position.entry_price
-                            
-                            self.logger.info(f"✅ Position corrected: {old_amount:,.0f} → {actual_balance:,.0f} tokens")
-                            
-                            # Update realtime position manager if it exists
-                            if self.realtime_positions:
-                                realtime_pos = self.realtime_positions.get_position(mint_address)
-                                if realtime_pos:
-                                    realtime_pos.current_tokens = actual_balance
-                                    self.logger.info(f"✅ Realtime position also updated")
-                            
-                            # Retry the sell with corrected amount
-                            self.logger.info(f"🔄 Retrying sell with corrected balance...")
-                            position.is_selling = False  # Reset flag for retry
-                            
-                            # Recursively retry with corrected amount (will use the updated position.amount)
-                            return await self._execute_real_sell(
-                                mint_address=mint_address,
-                                percentage=percentage,
-                                symbol=symbol,
-                                exit_reason=exit_reason
-                            )
-                        else:
-                            self.logger.error(f"❌ No tokens found in balance check")
-                    else:
-                        self.logger.warning(f"Could not extract balance from error message")
+                    return {"success": False, "error": "reconciliation_triggered", "message": f"Position reconciliation started for {symbol}"}
                 
                 position.is_selling = False  # Reset selling flag on failure
                 return send_result
@@ -1494,6 +1462,76 @@ class TradingEngine:
             "winning_trades": self.winning_trades,
             "win_rate": win_rate
         }
+
+    async def _attempt_reconciliation(self, mint_address: str) -> Optional[float]:
+        """Try to get actual balance with exponential backoff until successful"""
+        position = self.active_positions.get(mint_address)
+        if not position:
+            return None
+            
+        max_attempts = 10
+        base_delay = 1  # Start with 1 second
+        
+        for attempt in range(max_attempts):
+            try:
+                actual_balance = await self.transaction_signer.get_token_balance(mint_address)
+                if actual_balance is not None:
+                    self.logger.info(f"📊 Reconciliation attempt {attempt + 1}: {actual_balance:,.0f} tokens")
+                    # Accept any valid balance (even if higher than expected)
+                    return actual_balance
+            except Exception as e:
+                self.logger.warning(f"Reconciliation attempt {attempt + 1} failed: {e}")
+            
+            # Exponential backoff: 1s, 2s, 4s, 8s, 16s, etc.
+            if attempt < max_attempts - 1:
+                delay = base_delay * (2 ** attempt)
+                self.logger.info(f"⏳ Retrying reconciliation in {delay}s...")
+                await asyncio.sleep(delay)
+        
+        return None  # Failed to reconcile
+    
+    async def _resume_after_reconciliation(self, mint_address: str, actual_balance: float) -> None:
+        """Resume monitoring from current state, preserving TP progress"""
+        position = self.active_positions.get(mint_address)
+        if not position:
+            return
+            
+        old_balance = position.amount
+        symbol = position.symbol or mint_address[:8]
+        
+        # Update position with reality
+        position.amount = actual_balance
+        position.needs_reconciliation = False
+        
+        # Recalculate cost basis proportionally
+        if position.tokens_initial > 0:
+            balance_ratio = actual_balance / position.tokens_initial
+            position.cost_usd_remaining = position.cost_usd_remaining * balance_ratio
+            position.avg_cost_per_token = position.cost_usd_remaining / actual_balance if actual_balance > 0 else 0
+        
+        # CRITICAL: Don't reset TP progress - keep existing TP states intact
+        self.logger.info(f"✅ RECONCILED {symbol}: {old_balance:,.0f} → {actual_balance:,.0f} tokens")
+        self.logger.info(f"   TP Status: TP1={position.tp1_hit_time is not None}, "
+                        f"TP2={position.tp2_hit_time is not None}, TP3={position.tp3_hit_time is not None}")
+        self.logger.info(f"   Cost basis: ${position.cost_usd_remaining:.2f} (${position.avg_cost_per_token:.6f}/token)")
+        
+        # Resume normal monitoring - it will continue from current TP level
+        self.logger.info(f"🎯 {symbol} monitoring resumed - ready for next exit signal")
+    
+    async def _reconcile_and_resume(self, mint_address: str, symbol: str) -> None:
+        """Background task to reconcile and resume trading"""
+        self.logger.info(f"🔄 Starting reconciliation for {symbol}...")
+        
+        actual_balance = await self._attempt_reconciliation(mint_address)
+        
+        if actual_balance is not None:
+            await self._resume_after_reconciliation(mint_address, actual_balance)
+        else:
+            self.logger.error(f"❌ Failed to reconcile {symbol} after 10 attempts - position may need manual intervention")
+            # Keep position paused but don't break it completely
+            position = self.active_positions.get(mint_address)
+            if position:
+                position.needs_reconciliation = True  # Keep it paused
 
     def get_position_details(self, mint_address: str) -> Optional[Dict]:
         """Get details for a specific position"""
