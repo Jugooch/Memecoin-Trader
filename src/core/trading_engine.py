@@ -636,8 +636,7 @@ class TradingEngine:
                         }
                         self.realtime_positions.handle_trade_event(trade_event)
                     
-                    # Start monitoring position
-                    asyncio.create_task(self.monitor_position(mint_address))
+                    # Position monitoring now handled automatically by real-time WebSocket system
                 else:
                     self.logger.warning(f"Could not calculate expected tokens, will wait for verification")
                 
