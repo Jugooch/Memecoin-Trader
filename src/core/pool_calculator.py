@@ -59,9 +59,17 @@ class PoolCalculator:
                     token_reserves = data.get('virtual_token_reserves', 0)
                     
                     if sol_reserves > 0 and token_reserves > 0:
+                        # Log raw values to debug decimal issues
+                        self.logger.info(f"Raw API reserves: SOL={sol_reserves}, Tokens={token_reserves}")
+                        
+                        converted_sol = sol_reserves / 1e9  # Convert lamports to SOL
+                        converted_tokens = token_reserves / 1e6  # Convert to tokens (assuming 6 decimals)
+                        
+                        self.logger.info(f"Converted reserves: SOL={converted_sol:.2f}, Tokens={converted_tokens:,.0f}")
+                        
                         return {
-                            "sol_reserves": sol_reserves / 1e9,  # Convert to SOL
-                            "token_reserves": token_reserves / 1e6,  # Convert to tokens
+                            "sol_reserves": converted_sol,
+                            "token_reserves": converted_tokens,
                             "source": "api"
                         }
             

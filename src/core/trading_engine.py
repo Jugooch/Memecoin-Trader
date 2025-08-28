@@ -622,7 +622,7 @@ class TradingEngine:
                     )
                     
                     self.active_positions[mint_address] = position
-                    self.logger.info(f"🚀 Position created immediately: {min_tokens:,.0f} tokens at ${entry_price:.8f} (pool estimate)")
+                    self.logger.info(f"🚀 Position created immediately: {min_tokens:,.0f} tokens at ${entry_price:.8f} (pool estimate, reserves: {pool_calc_result.get('reserves_used', {}).get('source', 'unknown')})")
                     
                     # Also create realtime position for new flow compatibility  
                     if self.use_realtime_positions:
@@ -1040,7 +1040,73 @@ class TradingEngine:
                     "paper_mode": False
                 }
             else:
-                self.logger.error(f"Failed to send sell transaction: {send_result.get('error')}")
+                error_msg = send_result.get('error', '')
+                self.logger.error(f"Failed to send sell transaction: {error_msg}")
+                
+                # Check if it's a "Not enough tokens" error and try to fix position tracking
+                if 'NotEnoughTokensToSell' in error_msg or '0x1787' in error_msg:
+                    self.logger.warning(f"⚠️ Token balance mismatch detected - fetching actual balance")
+                    
+                    actual_balance = None
+                    
+                    # FAST PATH: Try to extract actual balance from error message first
+                    import re
+                    left_match = re.search(r'Left: (\d+)', error_msg)
+                    if left_match:
+                        actual_balance_raw = int(left_match.group(1))
+                        # Convert from raw units (assuming 6 decimals for pump.fun tokens)
+                        actual_balance = actual_balance_raw / 1e6
+                        self.logger.info(f"📊 Actual balance from error: {actual_balance:,.0f} tokens (instant)")
+                    
+                    # FALLBACK PATH: Query blockchain if parsing failed
+                    if actual_balance is None and self.transaction_signer:
+                        self.logger.info(f"📊 Querying blockchain for actual balance...")
+                        try:
+                            actual_balance = await self.transaction_signer.get_token_balance(mint_address)
+                            if actual_balance:
+                                self.logger.info(f"📊 Actual balance from blockchain: {actual_balance:,.0f} tokens")
+                        except Exception as e:
+                            self.logger.error(f"Failed to query balance: {e}")
+                    
+                    if actual_balance and actual_balance > 0:
+                        self.logger.info(f"📊 Position tracking had: {position.amount:,.0f} tokens")
+                        
+                        # Update position with correct balance
+                        if actual_balance > 0:
+                            old_amount = position.amount
+                            position.amount = actual_balance
+                            position.tokens_initial = actual_balance  # Update initial too if needed
+                            
+                            # Recalculate entry price based on actual tokens
+                            if position.cost_usd_remaining > 0:
+                                position.entry_price = position.cost_usd_remaining / actual_balance
+                                position.avg_cost_per_token = position.entry_price
+                            
+                            self.logger.info(f"✅ Position corrected: {old_amount:,.0f} → {actual_balance:,.0f} tokens")
+                            
+                            # Update realtime position manager if it exists
+                            if self.realtime_positions:
+                                realtime_pos = self.realtime_positions.get_position(mint_address)
+                                if realtime_pos:
+                                    realtime_pos.current_tokens = actual_balance
+                                    self.logger.info(f"✅ Realtime position also updated")
+                            
+                            # Retry the sell with corrected amount
+                            self.logger.info(f"🔄 Retrying sell with corrected balance...")
+                            position.is_selling = False  # Reset flag for retry
+                            
+                            # Recursively retry with corrected amount (will use the updated position.amount)
+                            return await self._execute_real_sell(
+                                mint_address=mint_address,
+                                percentage=percentage,
+                                symbol=symbol,
+                                exit_reason=exit_reason
+                            )
+                        else:
+                            self.logger.error(f"❌ No tokens found in balance check")
+                    else:
+                        self.logger.warning(f"Could not extract balance from error message")
+                
                 position.is_selling = False  # Reset selling flag on failure
                 return send_result
             
@@ -1599,6 +1665,15 @@ class TradingEngine:
             
             # Get actual tokens from transaction (faster than ATA query)
             verified_data = await self._get_transaction_token_amounts(tx_signature)
+            
+            # If transaction details not available yet, fall back to direct balance query
+            if not verified_data or verified_data.get('tokens_received', 0) == 0:
+                self.logger.warning(f"Transaction details not ready, falling back to balance query")
+                if self.transaction_signer:
+                    actual_tokens = await self.transaction_signer.get_token_balance(mint_address)
+                    if actual_tokens and actual_tokens > 0:
+                        verified_data = {'tokens_received': actual_tokens}
+                        self.logger.info(f"✅ Got balance from blockchain: {actual_tokens:,.0f} tokens")
             
             if verified_data and verified_data.get('tokens_received', 0) > 0:
                 actual_tokens = verified_data['tokens_received']
