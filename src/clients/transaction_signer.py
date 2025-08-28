@@ -126,38 +126,12 @@ class TransactionSigner:
                 post_token_balances = sim_result.get("postTokenBalances", [])
                 inner_instructions = sim_result.get("innerInstructions", [])
                 
-                # Calculate token balance changes using multiple methods
+                # Parse innerInstructions for token transfer data (primary method)
                 estimated_tokens = 0
                 token_mint = None
                 
-                # Find token balance changes for any new tokens received
-                if post_token_balances:
-                    for post_balance in post_token_balances:
-                        account_index = post_balance.get("accountIndex")
-                        mint_address = post_balance.get("mint")
-                        post_amount = post_balance.get("uiTokenAmount", {}).get("uiAmount", 0)
-                        
-                        if post_amount > 0:  # We received tokens
-                            # Find the corresponding pre-balance (if any)
-                            pre_amount = 0
-                            for pre_balance in pre_token_balances:
-                                if (pre_balance.get("accountIndex") == account_index and 
-                                    pre_balance.get("mint") == mint_address):
-                                    pre_amount = pre_balance.get("uiTokenAmount", {}).get("uiAmount", 0)
-                                    break
-                            
-                            # Calculate tokens received
-                            tokens_received = post_amount - pre_amount
-                            
-                            if tokens_received > 0:
-                                estimated_tokens = tokens_received
-                                token_mint = mint_address
-                                self.logger.info(f"📊 Simulation: {tokens_received:,.0f} tokens received for mint {mint_address[:8] if mint_address else 'unknown'}...")
-                                break  # Take the first positive token change (should be our buy)
-                
-                # Fallback: Parse innerInstructions for token transfer data if no balance changes found
-                if estimated_tokens == 0 and inner_instructions:
-                    self.logger.debug("📋 No token balance changes found, checking innerInstructions...")
+                if inner_instructions:
+                    self.logger.debug("📋 Parsing innerInstructions for token transfers...")
                     for instruction_group in inner_instructions:
                         for instruction in instruction_group.get('instructions', []):
                             # Look for SPL token transfer instructions
@@ -170,17 +144,15 @@ class TransactionSigner:
                                 try:
                                     amount = int(amount_str)
                                     if amount > 0:
-                                        # This is likely our token purchase
-                                        # Convert from raw token units to UI units (typically divide by 10^6 or 10^9)
-                                        # For now, assume 6 decimals (common for most tokens)
+                                        # Convert from raw token units to actual tokens
+                                        # Pump.fun tokens typically use 6 decimals
                                         estimated_tokens = amount / (10 ** 6)
                                         
-                                        # Try to get the mint from the destination account or context
-                                        destination = parsed_info.get('destination', '')
-                                        self.logger.info(f"📊 From innerInstructions: {estimated_tokens:,.0f} tokens to {destination[:8]}...")
+                                        self.logger.info(f"📊 Found token transfer: {amount} raw units = {estimated_tokens:,.0f} tokens")
                                         
-                                        # We'll use the first significant transfer we find
-                                        if estimated_tokens > 1000:  # Arbitrary threshold for "significant"
+                                        # Take the first significant token transfer we find
+                                        # (This is our buy since we're simulating our own transaction)
+                                        if estimated_tokens > 10:  # Any meaningful amount
                                             break
                                 except (ValueError, TypeError):
                                     continue
