@@ -610,6 +610,20 @@ class TradingEngine:
             if not transaction_b64:
                 return {"success": False, "error": "No transaction returned"}
             
+            # NEW: Simulate transaction to get accurate token estimate BEFORE signing
+            self.logger.info("Simulating transaction to get accurate token estimate...")
+            sim_result = await self.transaction_signer.simulate_transaction(transaction_b64)
+            
+            estimated_tokens = 0
+            if sim_result.get("success"):
+                estimated_tokens = sim_result.get("estimated_tokens", 0)
+                if estimated_tokens > 0:
+                    self.logger.info(f"✅ Simulation: Will receive {estimated_tokens:,.0f} tokens")
+                else:
+                    self.logger.warning("⚠️ Simulation successful but no tokens found - proceeding anyway")
+            else:
+                self.logger.warning(f"⚠️ Simulation failed: {sim_result.get('error')} - proceeding with send")
+            
             # Sign and send transaction
             self.logger.info("Signing and sending transaction...")
             send_result = await self.transaction_signer.sign_and_send_transaction(transaction_b64)
@@ -618,28 +632,36 @@ class TradingEngine:
                 tx_signature = send_result.get("signature")
                 self.logger.info(f"✅ Live buy executed: {symbol} for ${usd_amount} - TX: {tx_signature}")
                 
-                # NEW: Create position only with accurate price data (no bad estimates)
+                # NEW: Create position with simulation-based token estimate OR price fallback
                 position_created = False
                 current_price = None
                 
-                # Try to get current price with retries
-                max_price_retries = 3
-                for attempt in range(max_price_retries):
-                    self.logger.info(f"Getting current price for {symbol} (attempt {attempt + 1}/{max_price_retries})")
-                    current_price = await self.moralis.get_current_price(mint_address, fresh=True)
+                if estimated_tokens > 0:
+                    # Use simulation results for accurate position creation
+                    current_price = usd_amount / estimated_tokens  # Derive actual fill price
+                    self.logger.info(f"🎯 Using simulation data: {estimated_tokens:,.0f} tokens at derived price ${current_price:.8f}")
+                else:
+                    # Fallback to Moralis price if simulation failed
+                    max_price_retries = 3
+                    for attempt in range(max_price_retries):
+                        self.logger.info(f"Getting current price for {symbol} (attempt {attempt + 1}/{max_price_retries})")
+                        current_price = await self.moralis.get_current_price(mint_address, fresh=True)
+                        
+                        if current_price > 0:
+                            break
+                        elif attempt < max_price_retries - 1:
+                            # Wait 2 seconds between retries for price data
+                            self.logger.warning(f"Price unavailable for {symbol}, retrying in 2s...")
+                            await asyncio.sleep(2)
                     
                     if current_price > 0:
-                        break
-                    elif attempt < max_price_retries - 1:
-                        # Wait 2 seconds between retries for price data
-                        self.logger.warning(f"Price unavailable for {symbol}, retrying in 2s...")
-                        await asyncio.sleep(2)
+                        # Calculate estimated tokens based on current price with fee/slippage buffer
+                        # Account for: 1% pump.fun fee + 1% slippage + 5% safety margin = ~7% total buffer
+                        effective_usd = usd_amount * 0.93  # Conservative after all fees
+                        estimated_tokens = effective_usd / current_price
+                        self.logger.info(f"📊 Using Moralis fallback: {estimated_tokens:,.0f} tokens at ${current_price:.8f}")
                 
-                if current_price > 0:
-                    # Calculate estimated tokens based on current price with fee/slippage buffer
-                    # Account for: 1% pump.fun fee + 1% slippage + 5% safety margin = ~7% total buffer
-                    effective_usd = usd_amount * 0.93  # Conservative after all fees
-                    estimated_tokens = effective_usd / current_price
+                if estimated_tokens > 0 and current_price > 0:
                     
                     position = Position(
                         mint=mint_address,
@@ -659,8 +681,12 @@ class TradingEngine:
                         verified_from_blockchain=False
                     )
                     
+                    # Mark if this position was created with simulation data for better tracking
+                    position.simulation_verified = sim_result.get("success") and sim_result.get("estimated_tokens", 0) > 0
+                    
                     self.active_positions[mint_address] = position
-                    self.logger.info(f"🚀 Position created: {estimated_tokens:,.0f} tokens at ${current_price:.8f} (price-based estimate)")
+                    estimation_method = "simulation-based" if sim_result.get("success") and sim_result.get("estimated_tokens", 0) > 0 else "price-based estimate"
+                    self.logger.info(f"🚀 Position created: {estimated_tokens:,.0f} tokens at ${current_price:.8f} ({estimation_method})")
                     position_created = True
                     
                 else:
@@ -672,6 +698,7 @@ class TradingEngine:
                 if position_created and self.use_realtime_positions:
                     trade_event = {
                         'mint': mint_address,
+                        'symbol': symbol,  # Add symbol for RealtimePosition
                         'action': 'buy',
                         'tokens_received': position.amount,
                         'sol_amount': sol_amount,

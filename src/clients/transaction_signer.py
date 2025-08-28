@@ -92,7 +92,7 @@ class TransactionSigner:
             # For VersionedTransaction, create a new signed version
             signed_tx = VersionedTransaction(tx.message, [self.keypair])
             
-            # Simulate the signed transaction
+            # Simulate the signed transaction with token balance tracking
             result = await self._make_rpc_request(
                 "simulateTransaction",
                 [
@@ -119,19 +119,46 @@ class TransactionSigner:
                 if sim_result.get("err"):
                     return {"success": False, "error": f"Simulation failed: {sim_result.get('err')}"}
                 
-                # Extract useful data from logs
+                # Extract useful data from logs and token balances
                 logs = sim_result.get("logs", [])
                 accounts = sim_result.get("accounts", [])
+                pre_token_balances = sim_result.get("preTokenBalances", [])
+                post_token_balances = sim_result.get("postTokenBalances", [])
                 
-                # Parse account changes to find token balance changes
+                # Calculate token balance changes using pre/post token balances
                 estimated_tokens = 0
-                wallet_pubkey = str(self.keypair.pubkey()) if self.keypair else None
+                token_mint = None
                 
-                # Look through accounts for token balance changes
-                if accounts and wallet_pubkey:
+                # Find token balance changes for any new tokens received
+                if post_token_balances:
+                    for post_balance in post_token_balances:
+                        account_index = post_balance.get("accountIndex")
+                        mint_address = post_balance.get("mint")
+                        post_amount = post_balance.get("uiTokenAmount", {}).get("uiAmount", 0)
+                        
+                        if post_amount > 0:  # We received tokens
+                            # Find the corresponding pre-balance (if any)
+                            pre_amount = 0
+                            for pre_balance in pre_token_balances:
+                                if (pre_balance.get("accountIndex") == account_index and 
+                                    pre_balance.get("mint") == mint_address):
+                                    pre_amount = pre_balance.get("uiTokenAmount", {}).get("uiAmount", 0)
+                                    break
+                            
+                            # Calculate tokens received
+                            tokens_received = post_amount - pre_amount
+                            
+                            if tokens_received > 0:
+                                estimated_tokens = tokens_received
+                                token_mint = mint_address
+                                self.logger.info(f"📊 Simulation: {tokens_received:,.0f} tokens received for mint {mint_address[:8] if mint_address else 'unknown'}...")
+                                break  # Take the first positive token change (should be our buy)
+                
+                # Fallback to old method if token balances aren't available
+                if estimated_tokens == 0 and accounts:
+                    wallet_pubkey = str(self.keypair.pubkey()) if self.keypair else None
                     for i, account in enumerate(accounts):
                         if account and isinstance(account, dict):
-                            # Check if this is a token account
                             data = account.get("data")
                             if data and isinstance(data, dict):
                                 parsed = data.get("parsed")
@@ -139,7 +166,6 @@ class TransactionSigner:
                                     account_type = parsed.get("type")
                                     info = parsed.get("info")
                                     
-                                    # Look for token accounts owned by our wallet
                                     if (account_type == "account" and info and isinstance(info, dict)):
                                         owner = info.get("owner")
                                         if owner == wallet_pubkey:
@@ -148,27 +174,25 @@ class TransactionSigner:
                                                 ui_amount = token_amount.get("uiAmount", 0)
                                                 if ui_amount > 0:
                                                     mint = info.get("mint")
-                                                    self.logger.info(f"📊 Simulation: {ui_amount:,.0f} tokens for mint {mint[:8] if mint else 'unknown'}...")
                                                     estimated_tokens = max(estimated_tokens, ui_amount)
-                
-                # Also check postTokenBalances for our wallet's token changes
-                if not estimated_tokens and "value" in result:
-                    post_balances = result["value"].get("accounts", [])
-                    # This would need more sophisticated parsing of balance changes
-                    # For now, if we found token amounts above, use those
+                                                    token_mint = mint
+                                                    self.logger.info(f"📊 Simulation fallback: {ui_amount:,.0f} tokens for mint {mint[:8] if mint else 'unknown'}...")
                 
                 if estimated_tokens > 0:
-                    self.logger.info(f"✅ Simulation extracted {estimated_tokens:,.0f} tokens from account changes")
+                    self.logger.info(f"✅ Simulation extracted {estimated_tokens:,.0f} tokens from balance changes")
                 else:
-                    self.logger.warning("⚠️ Simulation successful but no token amounts found in account changes")
-                    self.logger.debug(f"Account data: {accounts[:2] if accounts else 'No accounts'}")
+                    self.logger.warning("⚠️ Simulation successful but no token amounts found in balance changes")
+                    self.logger.debug(f"Pre-balances: {len(pre_token_balances)}, Post-balances: {len(post_token_balances)}")
                 
                 return {
                     "success": True,
                     "logs": logs[-10:],  # Last 10 logs
                     "accounts": accounts,
                     "units_consumed": sim_result.get("unitsConsumed", 0),
-                    "estimated_tokens": estimated_tokens
+                    "estimated_tokens": estimated_tokens,
+                    "token_mint": token_mint,
+                    "pre_token_balances": pre_token_balances,
+                    "post_token_balances": post_token_balances
                 }
             
             return {"success": False, "error": "Invalid simulation response"}

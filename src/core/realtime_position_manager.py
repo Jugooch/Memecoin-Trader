@@ -13,6 +13,7 @@ from dataclasses import dataclass
 class RealtimePosition:
     """Position updated in real-time from WebSocket events"""
     mint: str
+    symbol: str  # Token symbol for display
     entry_time: datetime
     entry_price: float
     sol_invested: float
@@ -95,6 +96,7 @@ class RealtimePositionManager:
         # Create new position if none exists
         position = RealtimePosition(
             mint=mint,
+            symbol=event.get('symbol', mint[:8] + "..."),  # Use symbol from event or mint fallback
             entry_time=datetime.now(),
             entry_price=event.get('price', 0.0),
             sol_invested=event.get('sol_amount', 0.0),
