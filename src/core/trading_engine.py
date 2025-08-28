@@ -622,7 +622,7 @@ class TradingEngine:
                     )
                     
                     self.active_positions[mint_address] = position
-                    self.logger.info(f"🚀 Position created immediately: {min_tokens:,.0f} tokens at ${entry_price:.8f} (pool estimate, reserves: {pool_calc_result.get('reserves_used', {}).get('source', 'unknown')})")
+                    self.logger.info(f"🚀 Position created immediately: {min_tokens:,.0f} tokens at ${entry_price:.8f} (pool estimate, reserves: {pool_result.get('reserves_used', {}).get('source', 'unknown')})")
                     
                     # Also create realtime position for new flow compatibility  
                     if self.use_realtime_positions:
@@ -668,9 +668,16 @@ class TradingEngine:
                     "message": f"Transaction sent, position will be created after WSS confirmation"
                 }
             else:
-                self.logger.error(f"Failed to send transaction: {send_result.get('error')}")
+                error_msg = send_result.get('error', '')
+                self.logger.error(f"Failed to send buy transaction: {error_msg}")
+                
+                # Check if this is a slippage error - log but don't retry (we're too late)
+                if self._is_slippage_error(error_msg):
+                    self.logger.warning(f"🚫 SLIPPAGE ERROR - Skipping {symbol}: Too late to follow alpha wallet")
+                    return {"success": False, "error": "slippage_skip", "message": f"Slippage error on {symbol} - alpha signal expired"}
+                
                 # CRITICAL: Do not create position if buy failed
-                return {"success": False, "error": send_result.get('error', 'Transaction failed')}
+                return {"success": False, "error": error_msg}
             
         except Exception as e:
             self.logger.error(f"Error in real buy execution: {e}")
@@ -1043,8 +1050,22 @@ class TradingEngine:
                 error_msg = send_result.get('error', '')
                 self.logger.error(f"Failed to send sell transaction: {error_msg}")
                 
+                # Check if this is a slippage error on sell - we MUST exit, so retry with higher slippage
+                if self._is_slippage_error(error_msg) and not ('NotEnoughTokensToSell' in error_msg or '0x1787' in error_msg):
+                    self.logger.warning(f"🔄 SELL SLIPPAGE ERROR - {symbol}: Retrying with higher slippage (must exit position)")
+                    retry_result = await self._retry_sell_with_higher_slippage(
+                        mint_address, percentage, symbol, exit_reason
+                    )
+                    if retry_result.get('success'):
+                        return retry_result
+                    else:
+                        # All retries failed - position is stuck, but keep trying later
+                        self.logger.error(f"❌ SELL RETRIES FAILED - {symbol}: Position may be stuck")
+                        position.is_selling = False  # Reset flag so we can try again later
+                        return retry_result
+                
                 # Check if it's a "Not enough tokens" error and try to fix position tracking
-                if 'NotEnoughTokensToSell' in error_msg or '0x1787' in error_msg:
+                elif 'NotEnoughTokensToSell' in error_msg or '0x1787' in error_msg:
                     self.logger.warning(f"⚠️ Token balance mismatch detected - fetching actual balance")
                     
                     actual_balance = None
@@ -1959,6 +1980,153 @@ class TradingEngine:
             price = await self.blockchain_analytics.get_sol_price()
             return price if price > 0 else None
         return None
+    
+    def _is_slippage_error(self, error_msg: str) -> bool:
+        """
+        Check if an error is due to slippage/price movement
+        
+        Args:
+            error_msg: Error message from transaction failure
+            
+        Returns:
+            True if error is likely due to slippage/price movement
+        """
+        if not error_msg:
+            return False
+            
+        error_lower = error_msg.lower()
+        
+        # Slippage-related errors (don't retry these - we're too late)
+        slippage_indicators = [
+            'slippage',
+            'toomuchsolrequired',
+            '0x1772',  # TooMuchSolRequired error code
+            'price impact',
+            'price moved',
+            'insufficient output',
+            'minimum received',
+            'swap failed'
+        ]
+        
+        for indicator in slippage_indicators:
+            if indicator in error_lower:
+                self.logger.info(f"🚫 Detected slippage error: '{indicator}' in '{error_msg}'")
+                return True
+                
+        return False
+    
+    async def _retry_sell_with_higher_slippage(self, mint_address: str, percentage: float, 
+                                              symbol: str, exit_reason: str, max_retries: int = 2) -> Dict:
+        """
+        Retry sell transaction with progressively higher slippage tolerance
+        We MUST exit positions somehow, so we retry sells even if we skip buy retries
+        """
+        if mint_address not in self.active_positions:
+            return {"success": False, "error": "No position found for sell retry"}
+            
+        position = self.active_positions[mint_address]
+        base_slippage = 150  # Start with 1.5% for sells (higher than buys)
+        
+        for retry_attempt in range(max_retries):
+            # Increase slippage: 1.5% -> 2.5% -> 3.5%
+            retry_slippage = base_slippage + ((retry_attempt + 1) * 100)
+            
+            self.logger.warning(f"🔄 SELL Retry {retry_attempt + 1}/{max_retries}: Increasing slippage to {retry_slippage/100:.1f}%")
+            
+            try:
+                # Get wallet info
+                wallet_pubkey = await self.transaction_signer.get_wallet_pubkey()
+                
+                # Calculate tokens to sell
+                tokens_to_sell = position.amount * percentage
+                
+                # Create sell transaction with higher slippage
+                tx_result = await self.pumpfun.create_sell_transaction(
+                    wallet_pubkey=wallet_pubkey,
+                    mint_address=mint_address,
+                    token_amount=tokens_to_sell,
+                    slippage_bps=retry_slippage
+                )
+                
+                if not tx_result.get("success"):
+                    error_msg = tx_result.get('error', '')
+                    self.logger.warning(f"🔄 SELL Retry {retry_attempt + 1} creation failed: {error_msg}")
+                    
+                    if self._is_slippage_error(error_msg):
+                        continue  # Try with even higher slippage
+                    else:
+                        return tx_result  # Non-slippage error, give up
+                
+                # Try to send the transaction
+                transaction_b64 = tx_result.get("transaction")
+                if not transaction_b64:
+                    self.logger.error(f"🔄 SELL Retry {retry_attempt + 1}: No transaction returned")
+                    continue
+                
+                send_result = await self.transaction_signer.sign_and_send_transaction(transaction_b64)
+                
+                if send_result.get("success"):
+                    tx_signature = send_result.get("signature")
+                    self.logger.info(f"✅ SELL Retry {retry_attempt + 1} SUCCESS: {percentage*100:.0f}% sold with {retry_slippage/100:.1f}% slippage - TX: {tx_signature}")
+                    
+                    # Get current price for P&L calculation
+                    current_price = await self.moralis.get_current_price(mint_address, fresh=True)
+                    
+                    # Update position and handle P&L (simplified but functional)
+                    old_amount = position.amount
+                    tokens_to_sell = old_amount * percentage
+                    position.amount = old_amount * (1 - percentage)
+                    position.is_selling = False
+                    
+                    # Calculate P&L
+                    usd_value = tokens_to_sell * current_price if current_price > 0 else 0
+                    cost_basis = tokens_to_sell * position.avg_cost_per_token
+                    profit_usd = usd_value - cost_basis
+                    profit_pct = (profit_usd / cost_basis * 100) if cost_basis > 0 else 0
+                    
+                    # Update P&L store
+                    if hasattr(self, 'pnl_store'):
+                        self.pnl_store.add_trade(
+                            action="SELL",
+                            symbol=symbol,
+                            mint_address=mint_address,
+                            amount=tokens_to_sell,
+                            price=current_price,
+                            usd_value=usd_value,
+                            paper_mode=False
+                        )
+                    
+                    # If position fully sold, remove it
+                    if position.amount <= 0.01:  # Small threshold for rounding
+                        del self.active_positions[mint_address]
+                        self.logger.info(f"🎯 Position {symbol} fully closed via slippage retry")
+                    
+                    return {
+                        "success": True,
+                        "tx_signature": tx_signature,
+                        "tokens_sold": tokens_to_sell,
+                        "usd_received": usd_value,
+                        "profit": profit_usd,
+                        "profit_pct": profit_pct,
+                        "symbol": symbol,
+                        "slippage_used": retry_slippage,
+                        "retry_attempt": retry_attempt + 1,
+                        "paper_mode": False
+                    }
+                else:
+                    retry_error = send_result.get('error', '')
+                    self.logger.warning(f"🔄 SELL Retry {retry_attempt + 1} send failed: {retry_error}")
+                    
+                    if not self._is_slippage_error(retry_error):
+                        return send_result  # Non-slippage error, give up
+                        
+            except Exception as e:
+                self.logger.error(f"🔄 SELL Retry {retry_attempt + 1} exception: {e}")
+                continue
+        
+        self.logger.error(f"❌ All {max_retries} SELL retries exhausted for {symbol}")
+        position.is_selling = False  # Reset flag so monitoring will try again later
+        return {"success": False, "error": f"All {max_retries} sell retries failed"}
     
     async def cleanup(self):
         """Cleanup resources"""
