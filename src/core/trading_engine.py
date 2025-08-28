@@ -22,6 +22,7 @@ from .pool_calculator import PoolCalculator
 @dataclass
 class Position:
     mint: str
+    symbol: str  # Token name/symbol for display
     entry_price: float
     amount: float
     sol_invested: float
@@ -174,7 +175,7 @@ class TradingEngine:
             
             asyncio.create_task(self.notifier.send_trade_notification(
                 side="BUY",
-                symbol=position.mint[:8] + "...",  # Use mint as symbol fallback
+                symbol=position.symbol,  # Use proper token symbol
                 mint_address=position.mint,
                 quantity=position.current_tokens,
                 price=position.entry_price,
@@ -489,6 +490,7 @@ class TradingEngine:
         # Create position with proper cost tracking (use fill_price as entry)
         position = Position(
             mint=mint_address,
+            symbol=symbol,
             entry_price=fill_price,
             amount=tokens_received,
             sol_invested=sol_amount,
@@ -641,6 +643,7 @@ class TradingEngine:
                     
                     position = Position(
                         mint=mint_address,
+                        symbol=symbol,
                         entry_price=current_price,
                         amount=estimated_tokens,
                         sol_invested=sol_amount,
@@ -1674,6 +1677,7 @@ class TradingEngine:
             # Create verified position
             position = Position(
                 mint=mint_address,
+                symbol=symbol,
                 entry_price=actual_fill_price,
                 amount=actual_tokens,
                 sol_invested=sol_amount,
