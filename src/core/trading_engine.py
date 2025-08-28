@@ -596,49 +596,66 @@ class TradingEngine:
                 tx_signature = send_result.get("signature")
                 self.logger.info(f"✅ Live buy executed: {symbol} for ${usd_amount} - TX: {tx_signature}")
                 
-                # NEW: Create position immediately using pool calculation
-                pool_result = await self.pool_calculator.get_expected_tokens(mint_address, sol_amount)
+                # NEW: Create position only with accurate price data (no bad estimates)
+                position_created = False
+                current_price = None
                 
-                if pool_result.get("success"):
-                    min_tokens = pool_result["min_tokens"]
-                    entry_price = usd_amount / min_tokens if min_tokens > 0 else 0
+                # Try to get current price with retries
+                max_price_retries = 3
+                for attempt in range(max_price_retries):
+                    self.logger.info(f"Getting current price for {symbol} (attempt {attempt + 1}/{max_price_retries})")
+                    current_price = await self.moralis.get_current_price(mint_address, fresh=True)
                     
-                    # Create position immediately with conservative estimate
+                    if current_price > 0:
+                        break
+                    elif attempt < max_price_retries - 1:
+                        # Wait 2 seconds between retries for price data
+                        self.logger.warning(f"Price unavailable for {symbol}, retrying in 2s...")
+                        await asyncio.sleep(2)
+                
+                if current_price > 0:
+                    # Calculate estimated tokens based on current price with fee/slippage buffer
+                    # Account for: 1% pump.fun fee + 1% slippage + 5% safety margin = ~7% total buffer
+                    effective_usd = usd_amount * 0.93  # Conservative after all fees
+                    estimated_tokens = effective_usd / current_price
+                    
                     position = Position(
                         mint=mint_address,
-                        entry_price=entry_price,
-                        amount=min_tokens,
+                        entry_price=current_price,
+                        amount=estimated_tokens,
                         sol_invested=sol_amount,
                         entry_time=datetime.now(),
-                        tp_price=entry_price * self.config.tp_multiplier,
-                        sl_price=entry_price * self.config.stop_loss_pct,
-                        peak_price=entry_price,
+                        tp_price=current_price * self.config.tp_multiplier,
+                        sl_price=current_price * self.config.stop_loss_pct,
+                        peak_price=current_price,
                         paper_mode=False,
-                        tokens_initial=min_tokens,
+                        tokens_initial=estimated_tokens,
                         cost_usd_remaining=usd_amount,
-                        avg_cost_per_token=entry_price,
+                        avg_cost_per_token=current_price,
                         buy_tx_signature=tx_signature,
-                        verified_from_blockchain=False  # Will be verified later
+                        verified_from_blockchain=False
                     )
                     
                     self.active_positions[mint_address] = position
-                    self.logger.info(f"🚀 Position created immediately: {min_tokens:,.0f} tokens at ${entry_price:.8f} (pool estimate, reserves: {pool_result.get('reserves_used', {}).get('source', 'unknown')})")
+                    self.logger.info(f"🚀 Position created: {estimated_tokens:,.0f} tokens at ${current_price:.8f} (price-based estimate)")
+                    position_created = True
                     
-                    # Also create realtime position for new flow compatibility  
-                    if self.use_realtime_positions:
-                        trade_event = {
-                            'mint': mint_address,
-                            'action': 'buy',
-                            'tokens_received': min_tokens,
-                            'sol_amount': sol_amount,
-                            'price': entry_price,
-                            'tx_signature': tx_signature
-                        }
-                        self.realtime_positions.handle_trade_event(trade_event)
-                    
-                    # Position monitoring now handled automatically by real-time WebSocket system
                 else:
-                    self.logger.warning(f"Could not calculate expected tokens, will wait for verification")
+                    # No position created - wait for WSS verification
+                    self.logger.warning(f"❌ Could not get price for {symbol} after {max_price_retries} attempts - will wait for WSS verification")
+                    self.logger.info(f"📝 Transaction successful but position creation deferred until WSS confirmation")
+                
+                # Create realtime position if we have a position
+                if position_created and self.use_realtime_positions:
+                    trade_event = {
+                        'mint': mint_address,
+                        'action': 'buy',
+                        'tokens_received': position.amount,
+                        'sol_amount': sol_amount,
+                        'price': position.entry_price,
+                        'tx_signature': tx_signature
+                    }
+                    self.realtime_positions.handle_trade_event(trade_event)
                 
                 # Store pending transaction data for WSS reconciliation
                 if not hasattr(self, '_pending_transactions'):
@@ -650,22 +667,22 @@ class TradingEngine:
                     'usd_amount': usd_amount,
                     'symbol': symbol,
                     'timestamp': datetime.now(),
-                    'has_immediate_position': pool_result.get("success", False)
+                    'has_immediate_position': position_created
                 }
                 
                 # P&L and notifications will be handled after verification in _create_verified_position
                 
                 return {
                     "success": True,
-                    "price": 0.0,  # Temporary - real price will be set after verification
+                    "price": current_price if position_created else 0.0,
                     "tx_signature": tx_signature,
                     "sol_amount": sol_amount,
                     "usd_amount": usd_amount,
-                    "tokens_received": 0.0,  # Temporary - real tokens will be set after verification
+                    "tokens_received": position.amount if position_created else 0.0,
                     "symbol": symbol,
                     "paper_mode": False,
-                    "status": "verification_pending",
-                    "message": f"Transaction sent, position will be created after WSS confirmation"
+                    "status": "immediate_position" if position_created else "wss_verification_pending",
+                    "message": f"Position created with price data" if position_created else f"Transaction sent, position creation deferred until WSS confirmation"
                 }
             else:
                 error_msg = send_result.get('error', '')
