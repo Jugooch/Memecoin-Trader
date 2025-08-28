@@ -173,16 +173,71 @@ class TradingEngine:
             # Use current price for USD value estimate  
             usd_value = position.current_tokens * position.entry_price if position.entry_price else 0
             
-            asyncio.create_task(self.notifier.send_trade_notification(
+            # If symbol is dummy from ultra fast execution, fetch real metadata now
+            if position.symbol == 'UF':
+                asyncio.create_task(self._send_notification_with_real_metadata(
+                    position, usd_value
+                ))
+            else:
+                # Use existing symbol for immediate notification
+                asyncio.create_task(self.notifier.send_trade_notification(
+                    side="BUY",
+                    symbol=position.symbol,  # Use proper token symbol
+                    mint_address=position.mint,
+                    quantity=position.current_tokens,
+                    price=position.entry_price,
+                    usd_amount=usd_value,
+                    equity=self.pnl_store.current_equity,
+                    paper_mode=False
+                ))
+    
+    async def _send_notification_with_real_metadata(self, position, usd_value):
+        """Fetch real metadata and send Discord notification with proper symbol"""
+        try:
+            # Fetch real metadata from Moralis
+            self.logger.info(f"🔍 Fetching real metadata for {position.mint[:8]}...")
+            metadata = await self.moralis.get_token_metadata(position.mint)
+            
+            if metadata and metadata.get('symbol'):
+                real_symbol = metadata['symbol']
+                self.logger.info(f"✅ Updated symbol: {position.mint[:8]}... UF → {real_symbol}")
+                
+                # Update the position's symbol for future use
+                position.symbol = real_symbol
+                
+                # Also update main position if it exists
+                if position.mint in self.active_positions:
+                    self.active_positions[position.mint].symbol = real_symbol
+                
+            else:
+                real_symbol = f"{position.mint[:8]}..."  # Fallback to mint address
+                self.logger.warning(f"⚠️ Could not fetch metadata for {position.mint[:8]}..., using mint address")
+            
+            # Send Discord notification with real symbol
+            await self.notifier.send_trade_notification(
                 side="BUY",
-                symbol=position.symbol,  # Use proper token symbol
+                symbol=real_symbol,
                 mint_address=position.mint,
                 quantity=position.current_tokens,
                 price=position.entry_price,
                 usd_amount=usd_value,
                 equity=self.pnl_store.current_equity,
                 paper_mode=False
-            ))
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error fetching metadata for {position.mint[:8]}...: {e}")
+            # Send notification with fallback symbol
+            await self.notifier.send_trade_notification(
+                side="BUY",
+                symbol=f"{position.mint[:8]}...",
+                mint_address=position.mint,
+                quantity=position.current_tokens,
+                price=position.entry_price,
+                usd_amount=usd_value,
+                equity=self.pnl_store.current_equity,
+                paper_mode=False
+            )
         
     def _on_realtime_position_updated(self, position):
         """Callback when a position is updated via realtime tracking"""

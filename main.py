@@ -229,6 +229,7 @@ class MemecoinTradingBot:
             tp2_multiplier=config_data.get('tp2_multiplier', 1.50),
             tp3_multiplier=config_data.get('tp3_multiplier', 2.00),
             multi_tier_exits=config_data.get('multi_tier_exits', {}),
+            ultra_fast_execution=config_data.get('ultra_fast_execution', False),
             use_realtime_positions=config_data.get('use_realtime_positions', False)
         )
 

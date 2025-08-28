@@ -100,10 +100,9 @@ class TransactionSigner:
                     {
                         "encoding": "base64",
                         "commitment": "processed",
-                        "replaceRecentBlockhash": True,  # Use current blockhash for simulation
-                        "accounts": {
-                            "encoding": "jsonParsed"  # Get parsed account data
-                        }
+                        "replaceRecentBlockhash": True  # Use current blockhash for simulation
+                        # Note: Removed accounts parameter to avoid "missing addresses" error
+                        # We'll rely on preTokenBalances/postTokenBalances which are returned by default
                     }
                 ]
             )
@@ -154,29 +153,8 @@ class TransactionSigner:
                                 self.logger.info(f"📊 Simulation: {tokens_received:,.0f} tokens received for mint {mint_address[:8] if mint_address else 'unknown'}...")
                                 break  # Take the first positive token change (should be our buy)
                 
-                # Fallback to old method if token balances aren't available
-                if estimated_tokens == 0 and accounts:
-                    wallet_pubkey = str(self.keypair.pubkey()) if self.keypair else None
-                    for i, account in enumerate(accounts):
-                        if account and isinstance(account, dict):
-                            data = account.get("data")
-                            if data and isinstance(data, dict):
-                                parsed = data.get("parsed")
-                                if parsed and isinstance(parsed, dict):
-                                    account_type = parsed.get("type")
-                                    info = parsed.get("info")
-                                    
-                                    if (account_type == "account" and info and isinstance(info, dict)):
-                                        owner = info.get("owner")
-                                        if owner == wallet_pubkey:
-                                            token_amount = info.get("tokenAmount")
-                                            if token_amount and isinstance(token_amount, dict):
-                                                ui_amount = token_amount.get("uiAmount", 0)
-                                                if ui_amount > 0:
-                                                    mint = info.get("mint")
-                                                    estimated_tokens = max(estimated_tokens, ui_amount)
-                                                    token_mint = mint
-                                                    self.logger.info(f"📊 Simulation fallback: {ui_amount:,.0f} tokens for mint {mint[:8] if mint else 'unknown'}...")
+                # No fallback needed - we rely on preTokenBalances/postTokenBalances only
+                # The accounts parsing was error-prone and we removed the accounts parameter
                 
                 if estimated_tokens > 0:
                     self.logger.info(f"✅ Simulation extracted {estimated_tokens:,.0f} tokens from balance changes")
