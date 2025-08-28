@@ -208,6 +208,7 @@ class TradingEngine:
                 # Also update main position if it exists
                 if position.mint in self.active_positions:
                     self.active_positions[position.mint].symbol = real_symbol
+                    self.logger.debug(f"📋 Updated active position symbol: {position.mint[:8]}... → {real_symbol}")
                 
             else:
                 real_symbol = f"{position.mint[:8]}..."  # Fallback to mint address
@@ -812,6 +813,15 @@ class TradingEngine:
         
         position = self.active_positions[mint_address]
         
+        # Always use the position's symbol if it's been updated from "UF"
+        actual_symbol = position.symbol if hasattr(position, 'symbol') and position.symbol != "UF" else symbol
+        
+        # QOL: Show "Unknown" instead of "UF" for better user experience
+        if actual_symbol == "UF":
+            actual_symbol = "Unknown"
+            
+        self.logger.debug(f"🏷️ Using symbol: {actual_symbol} (position.symbol={getattr(position, 'symbol', 'missing')}, passed={symbol})")
+        
         # Get current price
         current_price = await self.moralis.get_current_price(mint_address, fresh=True)
         if current_price <= 0:
@@ -867,7 +877,7 @@ class TradingEngine:
         # Record in P&L store
         self.pnl_store.add_trade(
             action="SELL",
-            symbol=symbol,
+            symbol=actual_symbol,
             mint_address=mint_address,
             amount=tokens_to_sell,
             price=current_price,
@@ -880,7 +890,7 @@ class TradingEngine:
         if self.notifier:
             await self.notifier.send_trade_notification(
                 side="SELL",
-                symbol=symbol,
+                symbol=actual_symbol,
                 mint_address=mint_address,
                 quantity=tokens_to_sell,
                 price=current_price,
@@ -931,14 +941,23 @@ class TradingEngine:
             
             position = self.active_positions[mint_address]
             
+            # Always use the position's symbol if it's been updated from "UF"
+            actual_symbol = position.symbol if hasattr(position, 'symbol') and position.symbol != "UF" else symbol
+            
+            # QOL: Show "Unknown" instead of "UF" for better user experience
+            if actual_symbol == "UF":
+                actual_symbol = "Unknown"
+                
+            self.logger.debug(f"🏷️ Using symbol: {actual_symbol} (position.symbol={getattr(position, 'symbol', 'missing')}, passed={symbol})")
+            
             # Check if reconciliation is needed - pause all sells until resolved
             if hasattr(position, 'needs_reconciliation') and position.needs_reconciliation:
-                self.logger.info(f"⏸️ Skipping sell for {symbol} - reconciliation in progress")
+                self.logger.info(f"⏸️ Skipping sell for {actual_symbol} - reconciliation in progress")
                 return {"success": False, "error": "awaiting_reconciliation"}
             
             # Prevent race conditions - check if position is already being sold
             if hasattr(position, 'is_selling') and position.is_selling:
-                self.logger.warning(f"🔒 Sell blocked - {symbol} position already being sold")
+                self.logger.warning(f"🔒 Sell blocked - {actual_symbol} position already being sold")
                 return {"success": False, "error": "Position already being sold"}
             
             # Mark as selling to prevent concurrent sells
@@ -1134,7 +1153,7 @@ class TradingEngine:
                 # Update P&L
                 self.pnl_store.add_trade(
                     action="SELL",
-                    symbol=symbol,
+                    symbol=actual_symbol,
                     mint_address=mint_address,
                     amount=tokens_to_sell,
                     price=current_price,
@@ -1151,7 +1170,7 @@ class TradingEngine:
                 if self.notifier:
                     await self.notifier.send_trade_notification(
                         side="SELL",
-                        symbol=symbol,
+                        symbol=actual_symbol,
                         mint_address=mint_address,
                         quantity=tokens_to_sell,
                         price=current_price,
