@@ -560,7 +560,7 @@ class PumpPortalClient:
     async def close(self):
         """Close the WebSocket connection"""
         self.connected = False
-        if self.websocket and not self.websocket.closed:
+        if self.websocket:
             try:
                 await self.websocket.close()
             except Exception as e:

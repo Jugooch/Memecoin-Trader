@@ -100,9 +100,10 @@ class TransactionSigner:
                     {
                         "encoding": "base64",
                         "commitment": "processed",
-                        "replaceRecentBlockhash": True  # Use current blockhash for simulation
+                        "replaceRecentBlockhash": True,  # Use current blockhash for simulation
+                        "innerInstructions": True  # Get detailed instruction data
                         # Note: Removed accounts parameter to avoid "missing addresses" error
-                        # We'll rely on preTokenBalances/postTokenBalances which are returned by default
+                        # We'll rely on preTokenBalances/postTokenBalances + innerInstructions
                     }
                 ]
             )
@@ -123,8 +124,9 @@ class TransactionSigner:
                 accounts = sim_result.get("accounts", [])
                 pre_token_balances = sim_result.get("preTokenBalances", [])
                 post_token_balances = sim_result.get("postTokenBalances", [])
+                inner_instructions = sim_result.get("innerInstructions", [])
                 
-                # Calculate token balance changes using pre/post token balances
+                # Calculate token balance changes using multiple methods
                 estimated_tokens = 0
                 token_mint = None
                 
@@ -153,14 +155,44 @@ class TransactionSigner:
                                 self.logger.info(f"📊 Simulation: {tokens_received:,.0f} tokens received for mint {mint_address[:8] if mint_address else 'unknown'}...")
                                 break  # Take the first positive token change (should be our buy)
                 
-                # No fallback needed - we rely on preTokenBalances/postTokenBalances only
-                # The accounts parsing was error-prone and we removed the accounts parameter
+                # Fallback: Parse innerInstructions for token transfer data if no balance changes found
+                if estimated_tokens == 0 and inner_instructions:
+                    self.logger.debug("📋 No token balance changes found, checking innerInstructions...")
+                    for instruction_group in inner_instructions:
+                        for instruction in instruction_group.get('instructions', []):
+                            # Look for SPL token transfer instructions
+                            if (instruction.get('program') == 'spl-token' and 
+                                instruction.get('parsed', {}).get('type') == 'transfer'):
+                                
+                                parsed_info = instruction.get('parsed', {}).get('info', {})
+                                amount_str = parsed_info.get('amount', '0')
+                                
+                                try:
+                                    amount = int(amount_str)
+                                    if amount > 0:
+                                        # This is likely our token purchase
+                                        # Convert from raw token units to UI units (typically divide by 10^6 or 10^9)
+                                        # For now, assume 6 decimals (common for most tokens)
+                                        estimated_tokens = amount / (10 ** 6)
+                                        
+                                        # Try to get the mint from the destination account or context
+                                        destination = parsed_info.get('destination', '')
+                                        self.logger.info(f"📊 From innerInstructions: {estimated_tokens:,.0f} tokens to {destination[:8]}...")
+                                        
+                                        # We'll use the first significant transfer we find
+                                        if estimated_tokens > 1000:  # Arbitrary threshold for "significant"
+                                            break
+                                except (ValueError, TypeError):
+                                    continue
+                        
+                        if estimated_tokens > 0:
+                            break
                 
                 if estimated_tokens > 0:
-                    self.logger.info(f"✅ Simulation extracted {estimated_tokens:,.0f} tokens from balance changes")
+                    self.logger.info(f"✅ Simulation extracted {estimated_tokens:,.0f} tokens")
                 else:
-                    self.logger.warning("⚠️ Simulation successful but no token amounts found in balance changes")
-                    self.logger.debug(f"Pre-balances: {len(pre_token_balances)}, Post-balances: {len(post_token_balances)}")
+                    self.logger.warning("⚠️ Simulation successful but no token amounts found")
+                    self.logger.debug(f"Pre-balances: {len(pre_token_balances)}, Post-balances: {len(post_token_balances)}, InnerInstructions: {len(inner_instructions)}")
                 
                 return {
                     "success": True,
@@ -170,7 +202,8 @@ class TransactionSigner:
                     "estimated_tokens": estimated_tokens,
                     "token_mint": token_mint,
                     "pre_token_balances": pre_token_balances,
-                    "post_token_balances": post_token_balances
+                    "post_token_balances": post_token_balances,
+                    "inner_instructions": inner_instructions
                 }
             
             return {"success": False, "error": "Invalid simulation response"}
