@@ -987,8 +987,18 @@ class TradingEngine:
                 self.logger.error(f"No tokens to sell: internal balance {position.amount}, percentage {percentage}")
                 return {"success": False, "error": "No tokens to sell - position empty"}
             
-            # Conservative sell amount accounting for slippage (1.5% buffer)
-            conservative_sell_amount = tokens_to_sell * 0.985
+            # Conservative sell amount - adjust based on position verification status
+            # If position is verified from blockchain, we can be more aggressive
+            # For 100% sells, use actual amount to ensure position closes
+            if percentage >= 0.999:  # Selling 100%
+                conservative_sell_amount = tokens_to_sell  # Use full amount for complete exit
+                self.logger.info(f"📤 Full exit: selling all {tokens_to_sell:.0f} tokens")
+            elif hasattr(position, 'verified_from_blockchain') and position.verified_from_blockchain:
+                conservative_sell_amount = tokens_to_sell * 0.995  # Only 0.5% buffer for verified positions
+                self.logger.info(f"✅ Verified position: using 99.5% conservative amount")
+            else:
+                conservative_sell_amount = tokens_to_sell * 0.985  # 1.5% buffer for unverified positions
+                self.logger.info(f"⚠️ Unverified position: using 98.5% conservative amount")
             
             self.logger.info(f"Selling {percentage*100:.1f}% of position: {tokens_to_sell:.0f} tokens (internal tracking), conservative amount: {conservative_sell_amount:.0f}")
             
@@ -1118,9 +1128,15 @@ class TradingEngine:
                 if self.use_realtime_positions:
                     # NEW: Realtime positions are updated automatically via WebSocket
                     # Just update the old position system for compatibility
-                    position.amount = max(0, position.amount - conservative_sell_amount)
-                    position.cost_usd_remaining -= cost_basis_usd
-                    self.logger.info(f"⚡ Position updated via realtime tracking")
+                    # For 100% sells, ensure position is fully closed
+                    if percentage >= 0.999:
+                        position.amount = 0  # Force to 0 for complete exits
+                        position.cost_usd_remaining = 0
+                        self.logger.info(f"⚡ Position fully closed via 100% sell")
+                    else:
+                        position.amount = max(0, position.amount - conservative_sell_amount)
+                        position.cost_usd_remaining -= cost_basis_usd
+                        self.logger.info(f"⚡ Position updated via realtime tracking")
                 else:
                     # OLD: Update position using post-transaction balance verification (SLOW)
                     remaining_balance = await self._get_post_transaction_balance(mint_address)
@@ -1141,14 +1157,20 @@ class TradingEngine:
                 else:
                     position.avg_cost_per_token = 0.0
                 
-                # Remove position if no tokens remain
-                if position.amount <= 0.0001:  # Account for dust
+                # Remove position if no tokens remain OR if we sold 100%
+                if position.amount <= 0.0001 or percentage >= 0.999:  # Account for dust or full exit
                     del self.active_positions[mint_address]
                     tracking_method = "realtime" if self.use_realtime_positions else "blockchain verified"
-                    self.logger.info(f"Position fully closed for {mint_address[:8]}... ({tracking_method})")
+                    self.logger.info(f"✅ Position fully closed for {mint_address[:8]}... ({tracking_method})")
+                    
+                    # Also clean up from realtime positions if used
+                    if self.use_realtime_positions and hasattr(self, 'realtime_positions') and mint_address in self.realtime_positions.positions:
+                        del self.realtime_positions.positions[mint_address]
+                        self.logger.info(f"🧹 Cleaned up realtime position for {mint_address[:8]}...")
                 else:
                     # Reset selling flag for partial sells
                     position.is_selling = False
+                    self.logger.info(f"📊 Partial sell: {position.amount:.0f} tokens remaining")
                 
                 # Update P&L
                 self.pnl_store.add_trade(
