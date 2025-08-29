@@ -1218,8 +1218,21 @@ class TradingEngine:
                 error_msg = send_result.get('error', '')
                 self.logger.error(f"Failed to send sell transaction: {error_msg}")
                 
-                # Check if this is a slippage error on sell - we MUST exit, so retry with higher slippage
-                if self._is_slippage_error(error_msg) and not ('NotEnoughTokensToSell' in error_msg or '0x1787' in error_msg):
+                # Handle sell failures - distinguish between slippage and indexing delays
+                buy_age = (datetime.now() - position.entry_time).total_seconds()
+                
+                # For NotEnoughTokensToSell on recent buys, it's likely an indexing delay
+                if ('NotEnoughTokensToSell' in error_msg or '0x1787' in error_msg) and buy_age < 120:
+                    self.logger.warning(f"🕐 INDEXING DELAY - {symbol}: Buy is {buy_age:.0f}s old, retrying with smart evaluation")
+                    retry_result = await self._smart_sell_retry(
+                        mint_address, symbol, exit_reason
+                    )
+                    if retry_result.get('success'):
+                        return retry_result
+                    # If still failing after smart retries, fall through to reconciliation
+                    
+                # Check if this is a traditional slippage error - retry with higher slippage
+                elif self._is_slippage_error(error_msg) and not ('NotEnoughTokensToSell' in error_msg or '0x1787' in error_msg):
                     self.logger.warning(f"🔄 SELL SLIPPAGE ERROR - {symbol}: Retrying with higher slippage (must exit position)")
                     retry_result = await self._retry_sell_with_higher_slippage(
                         mint_address, percentage, symbol, exit_reason
@@ -1232,8 +1245,8 @@ class TradingEngine:
                         position.is_selling = False  # Reset flag so we can try again later
                         return retry_result
                 
-                # Check if it's a "Not enough tokens" error - trigger smart reconciliation
-                elif 'NotEnoughTokensToSell' in error_msg or '0x1787' in error_msg:
+                # Final fallback: trigger reconciliation for persistent balance issues
+                if 'NotEnoughTokensToSell' in error_msg or '0x1787' in error_msg:
                     self.logger.warning(f"🚫 Balance mismatch detected - entering reconciliation mode for {symbol}")
                     
                     # Mark position as needing reconciliation and preserve current state
@@ -2307,6 +2320,8 @@ class TradingEngine:
             'slippage',
             'toomuchsolrequired',
             '0x1772',  # TooMuchSolRequired error code
+            '0x1787',  # NotEnoughTokensToSell - can be slippage-related
+            'notenoughtokenstosell',
             'price impact',
             'price moved',
             'insufficient output',
@@ -2433,6 +2448,149 @@ class TradingEngine:
         self.logger.error(f"❌ All {max_retries} SELL retries exhausted for {symbol}")
         position.is_selling = False  # Reset flag so monitoring will try again later
         return {"success": False, "error": f"All {max_retries} sell retries failed"}
+    
+    async def _smart_sell_retry(self, mint_address: str, symbol: str, original_exit_reason: str, max_retries: int = 4) -> Dict:
+        """
+        Smart sell retry that re-evaluates position conditions on each attempt
+        Handles indexing delays while ensuring we don't sell at the wrong price/conditions
+        """
+        if mint_address not in self.active_positions:
+            return {"success": False, "error": "No position found for smart retry"}
+            
+        position = self.active_positions[mint_address]
+        base_delay = 2  # Start with 2 second delays
+        
+        self.logger.info(f"🧠 SMART RETRY starting for {symbol}: will re-evaluate conditions on each attempt")
+        
+        for retry_attempt in range(max_retries):
+            # Wait for indexing to catch up
+            delay = base_delay * (1.5 ** retry_attempt)  # 2s, 3s, 4.5s, 6.8s
+            if retry_attempt > 0:
+                self.logger.info(f"⏳ Smart retry {retry_attempt + 1}/{max_retries}: waiting {delay:.1f}s for indexing...")
+                await asyncio.sleep(delay)
+            
+            try:
+                # Re-evaluate current price and position conditions
+                current_price = await self.moralis.get_current_price(mint_address, fresh=True)
+                if current_price <= 0:
+                    self.logger.warning(f"⚠️ Smart retry {retry_attempt + 1}: Could not get current price, continuing with retry")
+                    continue
+                
+                # Check if position conditions have changed
+                exit_conditions = await self.check_exit_conditions(mint_address, current_price)
+                
+                if exit_conditions:
+                    new_exit_reason, new_percentage = exit_conditions
+                    current_gain_pct = ((current_price / position.entry_price) - 1) * 100
+                    
+                    self.logger.info(f"🔄 Smart retry {retry_attempt + 1}: Conditions changed!")
+                    self.logger.info(f"   Original: {original_exit_reason} (unknown%)") 
+                    self.logger.info(f"   Current:  {new_exit_reason} at {current_gain_pct:+.1f}% (sell {new_percentage*100:.0f}%)")
+                    
+                    # Use the NEW conditions, not the original ones
+                    percentage = new_percentage
+                    exit_reason = new_exit_reason
+                else:
+                    # No exit conditions met - position recovered!
+                    current_gain_pct = ((current_price / position.entry_price) - 1) * 100
+                    self.logger.info(f"🚀 Smart retry {retry_attempt + 1}: Position recovered to {current_gain_pct:+.1f}% - canceling sell!")
+                    position.is_selling = False
+                    return {"success": False, "error": "position_recovered", "message": f"Position recovered to {current_gain_pct:+.1f}%, sell canceled"}
+                
+                # Try to execute the sell with current conditions
+                tokens_to_sell = position.amount * percentage
+                
+                # Check if we have tokens available now (simple balance check)
+                if self.transaction_signer:
+                    actual_balance = await self.transaction_signer.get_token_balance(mint_address)
+                    if actual_balance is not None and actual_balance > 0:
+                        self.logger.info(f"✅ Smart retry {retry_attempt + 1}: Balance available! {actual_balance:,.0f} tokens")
+                        
+                        # Update position with actual balance if significantly different
+                        if abs(actual_balance - position.amount) / position.amount > 0.05:  # 5% difference
+                            self.logger.info(f"📊 Adjusting position: {position.amount:,.0f} → {actual_balance:,.0f} tokens")
+                            position.amount = actual_balance
+                            tokens_to_sell = actual_balance * percentage
+                        
+                        # Try the actual sell
+                        result = await self._execute_sell_transaction(
+                            mint_address, tokens_to_sell, percentage, symbol, exit_reason, current_price
+                        )
+                        
+                        if result.get('success'):
+                            self.logger.info(f"✅ Smart retry {retry_attempt + 1} SUCCESS: {exit_reason} executed!")
+                            return result
+                        else:
+                            retry_error = result.get('error', '')
+                            self.logger.warning(f"🔄 Smart retry {retry_attempt + 1} failed: {retry_error}")
+                            
+                            # If it's still a balance error, continue retrying
+                            if 'NotEnoughTokensToSell' not in retry_error and '0x1787' not in retry_error:
+                                # Different error type, don't keep retrying
+                                break
+                    else:
+                        self.logger.warning(f"⏳ Smart retry {retry_attempt + 1}: Still 0 tokens available, continuing...")
+                        
+            except Exception as e:
+                self.logger.error(f"🔄 Smart retry {retry_attempt + 1} exception: {e}")
+                continue
+        
+        self.logger.error(f"❌ All {max_retries} smart retries exhausted for {symbol}")
+        position.is_selling = False
+        return {"success": False, "error": f"All {max_retries} smart retries failed"}
+    
+    async def _execute_sell_transaction(self, mint_address: str, tokens_to_sell: float, 
+                                      percentage: float, symbol: str, exit_reason: str, 
+                                      current_price: float) -> Dict:
+        """
+        Execute the actual sell transaction (extracted from main sell logic)
+        """
+        try:
+            wallet_pubkey = self.config.pumpportal.get('wallet_public_key') if hasattr(self.config, 'pumpportal') else None
+            if not wallet_pubkey:
+                return {"success": False, "error": "Wallet public key not configured"}
+            
+            # Create sell transaction with standard slippage
+            slippage_bps = 150  # 1.5% slippage
+            
+            tx_result = await self.pumpfun.create_sell_transaction(
+                wallet_pubkey=wallet_pubkey,
+                mint_address=mint_address,
+                token_amount=tokens_to_sell,
+                slippage_bps=slippage_bps
+            )
+            
+            if not tx_result.get("success"):
+                return tx_result
+            
+            transaction_b64 = tx_result.get("transaction")
+            if not transaction_b64:
+                return {"success": False, "error": "No transaction returned"}
+            
+            # Sign and send transaction
+            send_result = await self.transaction_signer.sign_and_send_transaction(transaction_b64)
+            
+            if send_result.get("success"):
+                tx_signature = send_result.get("signature")
+                pnl_pct = ((current_price / self.active_positions[mint_address].entry_price) - 1) * 100
+                
+                self.logger.info(f"✅ Smart sell executed: {percentage*100:.0f}% of {symbol} at {pnl_pct:+.1f}% P&L - TX: {tx_signature}")
+                
+                return {
+                    "success": True,
+                    "tx_signature": tx_signature,
+                    "tokens_sold": tokens_to_sell,
+                    "exit_reason": exit_reason,
+                    "price": current_price,
+                    "profit_pct": pnl_pct,
+                    "symbol": symbol,
+                    "paper_mode": False
+                }
+            else:
+                return send_result
+                
+        except Exception as e:
+            return {"success": False, "error": str(e)}
     
     async def cleanup(self):
         """Cleanup resources"""
