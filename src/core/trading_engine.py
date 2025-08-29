@@ -1702,6 +1702,17 @@ class TradingEngine:
                         verified_data = {'tokens_received': actual_balance}
                         self.logger.info(f"✅ Got balance on attempt {attempt + 1}: {actual_balance:,.0f} tokens")
                         return verified_data
+                    elif actual_balance == 0:
+                        # Balance is 0 - check if transaction actually failed
+                        self.logger.warning(f"⚠️ Balance is 0 for {mint_address[:8]}... - checking transaction status")
+                        tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
+                        if tx_details:
+                            meta = tx_details.get("meta", {})
+                            if meta and meta.get("err") is not None:
+                                self.logger.error(f"❌ Transaction FAILED: {meta.get('err')}")
+                                return {"transaction_failed": True, "error": meta.get("err")}
+                        # If we can't confirm failure, continue retrying
+                        self.logger.info(f"Transaction status unclear, will retry (attempt {attempt + 1}/{max_attempts})")
                         
             except Exception as e:
                 self.logger.warning(f"Transaction details attempt {attempt + 1} failed: {e}")
@@ -1947,8 +1958,15 @@ class TradingEngine:
                 self.logger.error(f"🚫 Buy transaction FAILED for {symbol} - canceling position")
                 # Remove the failed position
                 if mint_address in self.active_positions:
+                    # Log any erroneous TP hits before removal
+                    if position.tp1_hit_time:
+                        self.logger.warning(f"⚠️ Removing false TP1 hit for failed transaction")
                     del self.active_positions[mint_address]
                     self.logger.info(f"✅ Removed failed position for {symbol}")
+                    
+                    # Also remove from any sell locks
+                    if hasattr(self, '_active_sells') and mint_address in self._active_sells:
+                        del self._active_sells[mint_address]
                 return
             
             if verified_data and verified_data.get('tokens_received', 0) > 0:
