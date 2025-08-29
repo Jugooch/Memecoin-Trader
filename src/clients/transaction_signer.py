@@ -348,6 +348,11 @@ class TransactionSigner:
                 ]
             )
             
+            # Check if transaction not found (returns None)
+            if result is None:
+                self.logger.debug(f"Transaction {tx_signature[:16]}... not found yet")
+                return {"_not_found": True}
+            
             if result and "error" not in result:
                 # Check if transaction failed (has error in meta)
                 meta = result.get("meta", {})
@@ -357,7 +362,7 @@ class TransactionSigner:
                     result["_error_detail"] = meta.get("err")
                 return result
             else:
-                self.logger.error(f"Failed to get transaction details: {result.get('error', 'Unknown error')}")
+                self.logger.error(f"Failed to get transaction details: {result.get('error', 'Unknown error') if result else 'None response'}")
                 return {}
                 
         except Exception as e:

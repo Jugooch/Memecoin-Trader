@@ -1703,16 +1703,39 @@ class TradingEngine:
                         self.logger.info(f"✅ Got balance on attempt {attempt + 1}: {actual_balance:,.0f} tokens")
                         return verified_data
                     elif actual_balance == 0:
-                        # Balance is 0 - check if transaction actually failed
+                        # Balance is 0 - check if transaction actually failed with exponential backoff
                         self.logger.warning(f"⚠️ Balance is 0 for {mint_address[:8]}... - checking transaction status")
-                        tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
-                        if tx_details:
-                            meta = tx_details.get("meta", {})
-                            if meta and meta.get("err") is not None:
-                                self.logger.error(f"❌ Transaction FAILED: {meta.get('err')}")
-                                return {"transaction_failed": True, "error": meta.get("err")}
-                        # If we can't confirm failure, continue retrying
-                        self.logger.info(f"Transaction status unclear, will retry (attempt {attempt + 1}/{max_attempts})")
+                        
+                        # Try to get transaction details with retries
+                        tx_check_attempts = 4
+                        tx_check_delay = 1.0  # Start with 1 second
+                        
+                        for tx_attempt in range(tx_check_attempts):
+                            tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
+                            
+                            # If transaction found and we can check status
+                            if tx_details and not tx_details.get("_not_found"):
+                                if tx_details.get("_transaction_failed"):
+                                    self.logger.error(f"❌ Transaction FAILED: {tx_details.get('_error_detail', 'Unknown error')}")
+                                    return {"transaction_failed": True, "error": tx_details.get("_error_detail")}
+                                else:
+                                    # Transaction succeeded but balance is still 0 - might be a race condition
+                                    self.logger.warning(f"Transaction succeeded but balance still 0 - will retry balance check")
+                                    break
+                            
+                            # If not the last attempt, wait before retrying
+                            if tx_attempt < tx_check_attempts - 1:
+                                self.logger.debug(f"Transaction not indexed yet, retrying in {tx_check_delay}s...")
+                                await asyncio.sleep(tx_check_delay)
+                                # Progressive backoff: 1s -> 3s -> 5s -> 8s
+                                if tx_check_delay < 5:
+                                    tx_check_delay = min(tx_check_delay + 2, 5)
+                                else:
+                                    tx_check_delay = 8  # Final longer wait
+                        
+                        # If we still can't confirm status after all attempts with 0 balance, assume failure
+                        self.logger.error(f"❌ Balance is 0 and transaction status unclear after {tx_check_attempts} checks - assuming transaction failed")
+                        return {"transaction_failed": True, "error": "Balance is 0 and transaction not found/confirmed"}
                         
             except Exception as e:
                 self.logger.warning(f"Transaction details attempt {attempt + 1} failed: {e}")
