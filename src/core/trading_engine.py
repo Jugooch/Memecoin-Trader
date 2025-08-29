@@ -648,7 +648,7 @@ class TradingEngine:
             self.logger.info(f"Creating live buy transaction: ${usd_amount} ({sol_amount:.4f} SOL) for {symbol}")
             
             # Tightened slippage for better fills and more accurate P&L
-            slippage_bps = 100  # 1% slippage - tightened from 2%
+            slippage_bps = 300  # 3% slippage to handle volatile tokens
             
             tx_result = await self.pumpfun.create_buy_transaction(
                 wallet_pubkey=wallet_pubkey,
@@ -1719,9 +1719,10 @@ class TradingEngine:
                                     self.logger.error(f"❌ Transaction FAILED: {tx_details.get('_error_detail', 'Unknown error')}")
                                     return {"transaction_failed": True, "error": tx_details.get("_error_detail")}
                                 else:
-                                    # Transaction succeeded but balance is still 0 - might be a race condition
-                                    self.logger.warning(f"Transaction succeeded but balance still 0 - will retry balance check")
-                                    break
+                                    # Transaction succeeded - trust it even if balance shows 0
+                                    self.logger.warning(f"⚠️ Transaction SUCCEEDED but balance shows 0 - likely indexing delay")
+                                    # Return None to continue main retry loop which will keep checking balance
+                                    return None
                             
                             # If not the last attempt, wait before retrying
                             if tx_attempt < tx_check_attempts - 1:
@@ -1733,9 +1734,10 @@ class TradingEngine:
                                 else:
                                     tx_check_delay = 8  # Final longer wait
                         
-                        # If we still can't confirm status after all attempts with 0 balance, assume failure
-                        self.logger.error(f"❌ Balance is 0 and transaction status unclear after {tx_check_attempts} checks - assuming transaction failed")
-                        return {"transaction_failed": True, "error": "Balance is 0 and transaction not found/confirmed"}
+                        # If we still can't confirm status after all attempts, continue retrying balance
+                        # Don't assume failure just because transaction isn't indexed yet
+                        self.logger.warning(f"⚠️ Transaction not indexed after {tx_check_attempts} checks, continuing balance retry")
+                        # Return None to continue main retry loop
                         
             except Exception as e:
                 self.logger.warning(f"Transaction details attempt {attempt + 1} failed: {e}")
@@ -2019,7 +2021,10 @@ class TradingEngine:
                     self.logger.info(f"✅ Position accurate: {diff_pct:.1f}% difference (no adjustment needed)")
                     position.verified_from_blockchain = True
             else:
-                self.logger.warning(f"Could not get transaction amounts for reconciliation")
+                # Could not verify - keep position but mark as unverified
+                self.logger.warning(f"⚠️ Could not verify transaction for {symbol} - keeping position with estimated amounts")
+                position.verified_from_blockchain = False
+                # Don't remove needs_reconciliation flag - keep it paused for safety
                 
         except Exception as e:
             self.logger.error(f"Error reconciling position: {e}")
