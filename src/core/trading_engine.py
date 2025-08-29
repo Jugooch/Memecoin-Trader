@@ -980,6 +980,23 @@ class TradingEngine:
                 self.logger.error("Wallet public key not configured")
                 return {"success": False, "error": "Wallet public key not configured"}
             
+            # CRITICAL: Never attempt to sell positions with 0 tokens (ghost positions)
+            if position.amount <= 0:
+                buy_age = (datetime.now() - position.entry_time).total_seconds()
+                self.logger.error(f"👻 GHOST POSITION DETECTED - {symbol}: {position.amount} tokens, buy age {buy_age:.0f}s")
+                
+                # If this is a very recent buy (< 2 minutes) that might still be indexing, keep position
+                if buy_age < 120:
+                    self.logger.warning(f"⚠️ {symbol}: Recent buy with 0 tokens - likely indexing delay, keeping position")
+                    position.is_selling = False
+                    return {"success": False, "error": "indexing_delay", "message": "Recent buy still indexing"}
+                else:
+                    # Old position with 0 tokens - remove it entirely
+                    self.logger.error(f"🧙 {symbol}: Removing old ghost position (age: {buy_age:.0f}s)")
+                    if mint_address in self.active_positions:
+                        del self.active_positions[mint_address]
+                    return {"success": False, "error": "ghost_position_removed"}
+            
             # Use internal tracking for sell calculations (fast, no blockchain calls)
             tokens_to_sell = position.amount * percentage
             
@@ -1229,7 +1246,12 @@ class TradingEngine:
                     )
                     if retry_result.get('success'):
                         return retry_result
-                    # If still failing after smart retries, fall through to reconciliation
+                    elif retry_result.get('error') == 'position_recovered':
+                        # Position recovered during retry - this is SUCCESS, not failure!
+                        self.logger.info(f"🎆 {symbol}: Position recovered during smart retry - sell canceled successfully")
+                        position.is_selling = False
+                        return retry_result  # Don't do reconciliation for recovered positions
+                    # If still failing after smart retries AND not recovered, fall through to reconciliation
                     
                 # Check if this is a traditional slippage error - retry with higher slippage
                 elif self._is_slippage_error(error_msg) and not ('NotEnoughTokensToSell' in error_msg or '0x1787' in error_msg):
@@ -1626,14 +1648,21 @@ class TradingEngine:
             
         max_attempts = 10
         base_delay = 1  # Start with 1 second
+        buy_age = (datetime.now() - position.entry_time).total_seconds()
         
         for attempt in range(max_attempts):
             try:
                 actual_balance = await self.transaction_signer.get_token_balance(mint_address)
                 if actual_balance is not None:
-                    self.logger.info(f"📊 Reconciliation attempt {attempt + 1}: {actual_balance:,.0f} tokens")
-                    # Accept any valid balance (even if higher than expected)
-                    return actual_balance
+                    self.logger.info(f"📊 Reconciliation attempt {attempt + 1}: {actual_balance:,.0f} tokens (buy age: {buy_age:.0f}s)")
+                    
+                    # CONSERVATIVE: Don't accept 0 balance for recent successful buys
+                    if actual_balance == 0 and buy_age < 180:  # 3 minutes
+                        self.logger.warning(f"⚠️ Got 0 balance for recent buy ({buy_age:.0f}s old) - likely indexing delay, continuing...")
+                        # Don't return 0, continue retrying
+                    else:
+                        # Accept any valid balance > 0, or 0 for old positions
+                        return actual_balance
             except Exception as e:
                 self.logger.warning(f"Reconciliation attempt {attempt + 1} failed: {e}")
             
@@ -1654,6 +1683,18 @@ class TradingEngine:
         old_balance = position.amount
         # Position doesn't have symbol field, use mint address
         symbol = mint_address[:8] + "..."
+        buy_age = (datetime.now() - position.entry_time).total_seconds()
+        
+        # CRITICAL: Never create ghost positions with 0 tokens
+        if actual_balance == 0:
+            self.logger.error(f"🚫 RECONCILIATION FAILED - {symbol}: Got 0 tokens for {buy_age:.0f}s old position")
+            self.logger.error(f"   Original estimate: {old_balance:,.0f} tokens")
+            self.logger.error(f"   Removing position to prevent ghost trading")
+            
+            # Remove the position entirely rather than creating a ghost position
+            if mint_address in self.active_positions:
+                del self.active_positions[mint_address]
+            return
         
         # Update position with reality
         position.amount = actual_balance

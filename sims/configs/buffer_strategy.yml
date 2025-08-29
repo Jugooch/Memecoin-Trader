@@ -1,0 +1,70 @@
+# Buffer Strategy Configuration  
+# 60-second volatility buffer with wider stops and multi-tier exits
+
+strategy_name: "buffer"
+description: "Volatility buffer strategy with multi-tier profit taking"
+
+# Entry conditions (same as current)
+entry:
+  min_alpha_wallets: 1
+  max_entry_delay_seconds: 15  # Same fast entry
+  position_size_usd: 30.0
+
+# Exit conditions (improved approach)
+exits:
+  # Volatility buffer - no stop losses during initial period
+  volatility_buffer:
+    enabled: true
+    buffer_seconds: 60  # No stop losses for first 60 seconds
+    allow_take_profits_during_buffer: true  # Can still take profits
+  
+  # Wider stop loss after buffer period
+  stop_loss:
+    enabled: true
+    percentage: -35.0  # -35% stop loss (vs -15% current)
+    applies_after_buffer: true
+  
+  # Multi-tier take profit system (balanced approach with buffer)
+  take_profit:
+    enabled: true
+    multi_tier_enabled: true  # Use multi-tier system
+    
+    # TP1: Take some profit early but not too aggressive
+    tp1_percentage: 20.0   # +20% (more realistic than 30%)
+    tp1_sell_amount: 0.40  # Sell 40%, keep 60%
+    
+    # TP2: Secure more profit 
+    tp2_percentage: 45.0   # +45% (more realistic than 75%)
+    tp2_sell_amount: 0.35  # Sell 35% more, keep 25%
+    
+    # TP3: Moon shot target (more achievable)
+    tp3_percentage: 90.0   # +90% (more realistic than 150%)
+    tp3_sell_amount: 0.20  # Sell 20% more, keep 5%
+    
+    # Trailing stop on remaining position (balanced)
+    trailing_stop_enabled: true
+    trailing_stop_percentage: 18.0  # 18% drawdown from peak
+  
+  # Time-based exits (more patient)
+  time_based:
+    max_hold_seconds: 3600  # 60 minutes max hold (vs 30min current)
+    force_exit_at_max: false  # Let trailing stops handle it
+  
+  # Remaining position management after partial exits
+  remaining_position:
+    enabled: true
+    # After TP1: Protect the gains but let winners run
+    profit_protection_level: 15.0  # Exit remaining if drops below +15% (5% buffer below TP1 of +20%)
+    trailing_stop_percentage: 25.0  # Wider trailing stop since we took profit already
+    max_remaining_hold_seconds: 10800  # 3 hours max for remaining position (patient strategy)
+    philosophy: "Volatility buffer strategy: let winners run but protect partial profits"
+
+# Simulation settings
+simulation:
+  # No artificial delays - assumes technical issues are fixed
+  reconciliation_delay_seconds: 0.0
+  indexing_delay_seconds: 5.0  # Faster indexing simulation
+  
+  # Better transaction success rates
+  simulate_failed_sells: true
+  failed_sell_probability: 0.05  # 5% failure rate (vs 15% current)

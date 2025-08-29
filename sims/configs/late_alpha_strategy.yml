@@ -1,0 +1,77 @@
+# Late Alpha Strategy Configuration
+# Waits for 4+ alpha wallets before entering, assumes higher confidence
+
+strategy_name: "late_alpha"  
+description: "Late entry strategy waiting for multiple alpha confirmations"
+
+# Entry conditions (wait for more confirmation but not too strict)
+entry:
+  min_alpha_wallets: 2  # Wait for 2+ alpha wallets (was 4 - too strict)
+  max_entry_delay_seconds: 120  # Allow up to 2 minutes delay (was 5min - too long)
+  position_size_usd: 30.0
+  
+  # Entry confidence scaling
+  confidence_multiplier: true  # Larger positions for more alphas
+  max_position_multiplier: 1.5  # Up to 1.5x position size for 6+ alphas
+
+# Exit conditions (same as buffer strategy - coming in late already)
+exits:
+  # Still use volatility buffer (even more important for late entries)
+  volatility_buffer:
+    enabled: true
+    buffer_seconds: 90  # Longer buffer for late entries
+    allow_take_profits_during_buffer: true
+  
+  # Even wider stop loss (higher confidence = more patience)
+  stop_loss:
+    enabled: true
+    percentage: -40.0  # -40% stop loss (most patient)
+    applies_after_buffer: true
+  
+  # Multi-tier exits (moderate patience - wait for confirmation but take profits)
+  take_profit:
+    enabled: true
+    multi_tier_enabled: true  # Use multi-tier system
+    
+    # TP1: Wait for decent gain but not too greedy
+    tp1_percentage: 25.0   # +25% (reasonable for confirmed entries)
+    tp1_sell_amount: 0.35  # Sell 35%, keep 65%
+    
+    # TP2: Higher conviction targets but realistic
+    tp2_percentage: 55.0   # +55% (achievable target)
+    tp2_sell_amount: 0.35  # Sell 35% more, keep 30%
+    
+    # TP3: Good moon shot target
+    tp3_percentage: 110.0  # +110% (good but achievable)
+    tp3_sell_amount: 0.25  # Sell 25% more, keep 5%
+    
+    # Balanced trailing stop
+    trailing_stop_enabled: true
+    trailing_stop_percentage: 20.0  # 20% drawdown tolerance
+  
+  # Patient time exits
+  time_based:
+    max_hold_seconds: 5400  # 90 minutes (most patient)
+    force_exit_at_max: false
+  
+  # Remaining position management after partial exits
+  remaining_position:
+    enabled: true
+    # After TP1: Ride the trend but protect against reversals
+    profit_protection_level: 20.0  # Exit remaining if drops below +20% (5% buffer below TP1 of +25%)
+    trailing_stop_percentage: 20.0  # Balanced trailing stop for trend following
+    max_remaining_hold_seconds: 5400  # 90 minutes max for remaining position (patient)
+    philosophy: "Late alpha strategy: ride established momentum, exit on clear reversal"
+
+# Simulation settings
+simulation:
+  # Simulate entering during established trends
+  entry_price_premium: 0.05  # Enter at 5% higher price (missed early pump)
+  
+  # Better execution due to more established liquidity
+  reconciliation_delay_seconds: 0.0
+  indexing_delay_seconds: 2.0  # Better indexing for established tokens
+  
+  # Lowest failure rates
+  simulate_failed_sells: true
+  failed_sell_probability: 0.02  # 2% failure rate (best execution)

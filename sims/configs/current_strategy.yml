@@ -1,0 +1,64 @@
+# Current Implementation Strategy Configuration
+# Simulates the existing bot behavior with tight stops and immediate exits
+
+strategy_name: "current"
+description: "Current bot implementation with aggressive stop losses"
+
+# Entry conditions
+entry:
+  min_alpha_wallets: 1
+  max_entry_delay_seconds: 15  # Must enter within 15s of first alpha
+  position_size_usd: 30.0
+
+# Exit conditions (current aggressive approach)
+exits:
+  # Immediate stop loss - no buffer period
+  stop_loss:
+    enabled: true
+    percentage: -15.0  # -15% stop loss
+    buffer_seconds: 0  # No volatility buffer
+  
+  # Multi-tier take profit system (more aggressive profit taking)
+  take_profit:
+    enabled: true
+    multi_tier_enabled: true  # Use multi-tier system
+    
+    # TP1 at 15% - Take early profits on volatile memes
+    tp1_percentage: 15.0   # +15% gain target (was 25%)
+    tp1_sell_amount: 0.50  # Sell 50%, keep 50%
+    
+    # TP2 at 30% - Secure more profits
+    tp2_percentage: 30.0   # +30% gain target (was 50%)
+    tp2_sell_amount: 0.30  # Sell 30% more, keep 20%
+    
+    # TP3 at 60% - Moon shot protection
+    tp3_percentage: 60.0   # +60% gain target (was 100%)
+    tp3_sell_amount: 0.15  # Sell 15% more, keep 5%
+    
+    # Trailing stop on remaining position (tighter)
+    trailing_stop_enabled: true
+    trailing_stop_percentage: 10.0  # 10% drawdown from peak (was 15%)
+  
+  # Time-based exits
+  time_based:
+    max_hold_seconds: 1800  # 30 minutes max hold
+    force_exit_at_max: true
+  
+  # Remaining position management after partial exits
+  remaining_position:
+    enabled: true
+    # After TP1: Aggressive protection - don't give back gains
+    profit_protection_level: 10.0  # Exit remaining if drops below +10% (5% buffer below TP1 of +15%)
+    trailing_stop_percentage: 12.0  # Tight trailing stop for quick exits
+    max_remaining_hold_seconds: 2700  # 45 minutes max for remaining position (aggressive)
+    philosophy: "Current aggressive strategy: quick additional upside, don't give back gains"
+
+# Simulation-specific settings
+simulation:
+  # Simulate reconciliation delays (current bot issue)
+  reconciliation_delay_seconds: 2.0
+  indexing_delay_seconds: 10.0  # Simulate blockchain indexing delays
+  
+  # Transaction simulation
+  simulate_failed_sells: true  # Simulate "NotEnoughTokensToSell" errors
+  failed_sell_probability: 0.15  # 15% chance of sell failure on first attempt

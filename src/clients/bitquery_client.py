@@ -426,6 +426,110 @@ class BitqueryClient:
                 except Exception as reinit_error:
                     self.logger.error(f"Failed to reinitialize with new token: {reinit_error}")
                     return []
+            
+            return []
+    
+    async def get_token_price_history(self, mint_address: str, start_iso: str, end_iso: str, limit: int = 500) -> List[Dict]:
+        """Get historical price data for a specific token using DEX trades - EFFICIENT for API credits
+        
+        This method is designed to be credit-efficient for Bitquery usage:
+        - Limited to 500 trades by default (adjustable)
+        - Focuses on successful pump.fun trades only
+        - Gets actual transaction prices from DEX data
+        
+        Args:
+            mint_address: Token mint address
+            start_iso: Start time in ISO format (e.g., "2024-01-01T00:00:00Z")
+            end_iso: End time in ISO format  
+            limit: Maximum number of trades (default 500 to conserve credits)
+            
+        Returns:
+            List of price points: [{'timestamp': str, 'price': float, 'volume_usd': float}, ...]
+        """
+        if not self.client:
+            await self.initialize()
+        
+        try:
+            query = gql(f"""
+                query {{
+                  Solana {{
+                    DEXTrades(
+                      where: {{
+                        Trade: {{ 
+                          Dex: {{ ProtocolName: {{ is: "pump" }} }}
+                          Buy: {{ Currency: {{ MintAddress: {{ is: "{mint_address}" }} }} }}
+                        }}
+                        Transaction: {{ Result: {{ Success: true }} }}
+                        Block: {{ Time: {{ since: "{start_iso}", till: "{end_iso}" }} }}
+                      }}
+                      limit: {{ count: {limit} }}
+                      orderBy: {{ ascending: Block_Time }}
+                    ) {{
+                      Block {{ Time }}
+                      Trade {{
+                        Buy {{
+                          Amount
+                          AmountInUSD
+                          PriceInUSD
+                        }}
+                      }}
+                    }}
+                  }}
+                }}
+            """)
+            
+            # Use current token for the API call
+            current_token_info = self.token_stats[self.current_token_index]
+            
+            if current_token_info.get('payment_required', False):
+                self.logger.warning(f"Skipping payment required token #{self.current_token_index}")
+                return []
+                
+            if current_token_info.get('rate_limited', False):
+                if time.time() < current_token_info.get('reset_time', 0):
+                    self.logger.warning(f"Token {self.current_token_index} is rate limited")
+                    return []
+                else:
+                    current_token_info['rate_limited'] = False
+            
+            result = await self.client.execute_async(query)
+            
+            # Update stats
+            current_token_info['calls_today'] += 1
+            self.logger.debug(f"Bitquery API call #{current_token_info['calls_today']} for token #{self.current_token_index}")
+            
+            trades = result.get('Solana', {}).get('DEXTrades', [])
+            
+            # Convert to standardized price history format
+            price_history = []
+            for trade in trades:
+                buy_data = trade.get('Trade', {}).get('Buy', {})
+                price_usd = buy_data.get('PriceInUSD')
+                
+                if price_usd and float(price_usd) > 0:
+                    price_history.append({
+                        'timestamp': trade['Block']['Time'],
+                        'price': float(price_usd),
+                        'volume_usd': float(buy_data.get('AmountInUSD', 0))
+                    })
+            
+            self.logger.info(f"Bitquery: Retrieved {len(price_history)} price points for {mint_address[:8]}...")
+            return price_history
+            
+        except Exception as e:
+            error_str = str(e)
+            self.logger.error(f"Bitquery price history error: {error_str}")
+            
+            # Handle API limits and errors
+            if '402' in error_str or 'Payment Required' in error_str:
+                current_token_info['payment_required'] = True
+                self.logger.warning(f"[PAYMENT] Bitquery payment required for token #{self.current_token_index}")
+            elif '429' in error_str or 'rate limit' in error_str.lower():
+                current_token_info['rate_limited'] = True
+                current_token_info['reset_time'] = time.time() + 3600  # 1 hour
+                self.logger.warning(f"[RATE_LIMIT] Bitquery rate limited for token #{self.current_token_index}")
+            
+            return []
     
     async def get_trades_windowed_paginated(self, start_iso: str, end_iso: str, page_limit: int = 3000, max_pages: int = 20) -> List[Dict]:
         """Paginate Bitquery to actually cover the full time window
@@ -720,3 +824,6 @@ class BitqueryClient:
                 except Exception as reinit_error:
                     self.logger.error(f"Failed to reinitialize with new token: {reinit_error}")
                     return []
+            
+            return []
+    
