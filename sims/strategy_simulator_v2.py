@@ -602,14 +602,29 @@ class StrategySimulator:
         
         # Track token analysis
         self.stats['tokens_analyzed'] += 1
-        entry_price = token_data['entry_price']
+        
+        # REALISTIC EXECUTION DELAY SIMULATION
+        # Get simulation parameters from strategy config
+        sim_config = self.strategies.get('current', {}).simulation_config if self.strategies else {}
+        execution_delay_seconds = sim_config.get('execution_delay_seconds', 3.0)
+        
+        # Find the price after execution delay
+        delayed_entry_price = None
+        for price_point in price_history:
+            time_since_signal = (price_point['timestamp'] - signal_time).total_seconds()
+            if time_since_signal >= execution_delay_seconds:
+                delayed_entry_price = price_point['price']
+                break
+        
+        # Use delayed price if available, otherwise use first price (if delay > data)
+        entry_price = delayed_entry_price if delayed_entry_price else token_data['entry_price']
         
         if not entry_price or entry_price <= 0:
             self.logger.debug(f"Invalid entry price for {mint[:8]}...")
             return
             
         self.logger.info(f"Analyzing {mint[:8]}... with {len(price_history)} price points")
-        self.logger.info(f"    Entry would have been at: ${entry_price:.8f} ({signal_time.strftime('%H:%M:%S')})")
+        self.logger.info(f"    Realistic entry after {execution_delay_seconds}s delay: ${entry_price:.8f} ({signal_time.strftime('%H:%M:%S')})")
         
         # Check which strategies would have entered and simulate their complete journey
         for strategy_name, strategy_config in self.strategies.items():
@@ -641,27 +656,40 @@ class StrategySimulator:
             token_metadata = await self.moralis.get_token_metadata(mint)
             symbol = token_metadata.get('symbol', 'UNKNOWN') if token_metadata else 'UNKNOWN'
             
-            # Calculate position size
-            estimated_tokens = usd_amount / entry_price
+            # REALISTIC FEE STRUCTURE - Use config values
+            sim_config = strategy_config.simulation_config
+            priority_fee_usd = sim_config.get('entry_priority_fee_usd', 1.0)
+            transaction_fee_usd = sim_config.get('transaction_fee_usd', 0.05)
+            slippage_pct = sim_config.get('entry_slippage_pct', 2.0)
+            
+            # Calculate actual entry cost with fees and slippage
+            entry_price_with_slippage = entry_price * (1 + slippage_pct / 100)
+            total_entry_fees = priority_fee_usd + transaction_fee_usd
+            actual_usd_for_tokens = usd_amount - total_entry_fees
+            
+            # Calculate position size after fees
+            estimated_tokens = actual_usd_for_tokens / entry_price_with_slippage
             
             # Create initial position
             position = SimulatedPosition(
                 mint_address=mint,
                 symbol=symbol,
                 entry_time=analysis_item['signal_time'],
-                entry_price=entry_price,
+                entry_price=entry_price_with_slippage,  # Track actual entry price with slippage
                 tokens=estimated_tokens,
-                usd_invested=usd_amount,
+                usd_invested=usd_amount,  # Track original investment amount for P&L calc
                 strategy=strategy_name,
                 alpha_count=analysis_item['alpha_count'],
                 alpha_delay_seconds=0,  # Assuming immediate entry after alpha
-                current_price=entry_price,
+                current_price=entry_price,  # Current market price (no slippage)
                 peak_price=entry_price
             )
             
-            # Send Discord notification for position entry
-            if self.discord:
-                await self.send_position_entry_notification(position, strategy_name)
+            # Log the impact of fees
+            self.logger.debug(f"Entry fees: ${total_entry_fees:.2f} | Slippage: {slippage_pct}% | Effective entry: ${entry_price_with_slippage:.8f}")
+            
+            # Skip position entry notifications for historical analysis - they're not useful
+            # Only send exit notifications which show actual results
             
             # Set up volatility buffer if strategy uses it
             exit_config = strategy_config.exit_config
@@ -672,9 +700,9 @@ class StrategySimulator:
                 position.is_in_buffer = True
             
             # Walk through price history and simulate strategy execution with GRANULAR precision
-            exit_result = None
             trade_count = 0
             significant_moves = 0
+            position_fully_closed = False
             
             for i, price_point in enumerate(price_history):
                 timestamp = price_point['timestamp']
@@ -699,29 +727,38 @@ class StrategySimulator:
                         position.is_in_buffer = False
                         self.logger.debug(f"Buffer ended at trade #{trade_count} for {position.symbol}")
                 
-                # Check exit conditions at this EXACT price point
-                exit_result = await self.check_exit_conditions_historical(position, strategy_name, timestamp)
-                if exit_result:
-                    # Exit triggered - finalize position
-                    seconds_held = (timestamp - position.entry_time).total_seconds()
-                    current_gain = ((price / position.entry_price) - 1) * 100
-                    self.logger.info(f"[EXIT] {strategy_name.upper()}: Exit triggered after {trade_count} trades ({seconds_held:.0f}s)")
-                    self.logger.info(f"    Reason: {exit_result['reason']} | Gain: {current_gain:+.1f}% | Significant moves: {significant_moves}")
-                    
-                    await self.finalize_historical_position(position, exit_result, timestamp, price)
-                    self.active_positions[strategy_name][mint] = position
+                # Keep checking exit conditions until position is fully closed
+                while position.remaining_percentage > 0.01:
+                    exit_result = await self.check_exit_conditions_historical(position, strategy_name, timestamp)
+                    if exit_result:
+                        # Process this exit (partial or full)
+                        await self.finalize_historical_position(position, exit_result, timestamp, price)
+                        
+                        # Check if position is now fully closed
+                        if position.remaining_percentage <= 0.01:
+                            position_fully_closed = True
+                            seconds_held = (timestamp - position.entry_time).total_seconds()
+                            current_gain = ((price / position.entry_price) - 1) * 100
+                            self.logger.info(f"[COMPLETE] {strategy_name.upper()}: Position fully closed after {trade_count} trades ({seconds_held:.0f}s)")
+                            break
+                    else:
+                        # No more exits at this price point, move to next
+                        break
+                
+                # If position is fully closed, stop processing
+                if position_fully_closed:
                     break
             
-            # If no exit was triggered, position is still active (shouldn't happen in backtesting)
-            if not exit_result:
-                # Position would still be active - use final price
+            # Handle positions that didn't fully close
+            if not position_fully_closed and position.remaining_percentage > 0.01:
+                # Position still has remaining balance - use final price
                 final_price = price_history[-1]['price']
                 final_timestamp = price_history[-1]['timestamp']
                 position.current_price = final_price
                 
                 # Mark as active position (will be tracked going forward)
                 self.active_positions[strategy_name][mint] = position
-                self.logger.info(f"[ACTIVE] {strategy_name.upper()}: POSITION {symbol} | Current: {((final_price/entry_price-1)*100):+.1f}%")
+                self.logger.info(f"[ACTIVE] {strategy_name.upper()}: POSITION {symbol} | Remaining: {position.remaining_percentage:.1%} | Current: {((final_price/entry_price-1)*100):+.1f}%")
             
             self.stats['positions_created'] += 1
             
@@ -857,19 +894,38 @@ class StrategySimulator:
         exit_reason = exit_result['reason']
         percentage = exit_result['percentage']
         
-        # Calculate profit/loss
+        # EXIT FEE STRUCTURE - Use config values
+        strategy = position.strategy
+        sim_config = self.strategies[strategy].simulation_config
+        exit_priority_fee = sim_config.get('exit_priority_fee_usd', 1.0)
+        exit_transaction_fee = sim_config.get('transaction_fee_usd', 0.05)
+        
+        # Higher slippage on panic sells (stop losses)
+        if 'stop_loss' in exit_reason:
+            exit_slippage_pct = sim_config.get('panic_exit_slippage_pct', 3.0)
+        else:
+            exit_slippage_pct = sim_config.get('exit_slippage_pct', 2.0)
+        
+        # Calculate actual exit price with slippage
+        exit_price_with_slippage = exit_price * (1 - exit_slippage_pct / 100)
+        
+        # Calculate profit/loss for this specific exit
         tokens_sold = position.tokens * percentage
-        usd_received = tokens_sold * exit_price
+        usd_received_before_fees = tokens_sold * exit_price_with_slippage
+        exit_fees = exit_priority_fee + exit_transaction_fee
+        usd_received = usd_received_before_fees - exit_fees
+        
         cost_basis = position.usd_invested * percentage
         profit_usd = usd_received - cost_basis
         profit_pct = (profit_usd / cost_basis) * 100 if cost_basis > 0 else 0
         
-        # Update position
-        position.exit_time = exit_time
-        position.exit_price = exit_price
-        position.exit_reason = exit_reason
-        position.profit_usd = profit_usd
-        position.profit_pct = profit_pct
+        # Send Discord notification for this exit event (historical)
+        if self.discord:
+            await self.send_exit_notification(position, position.strategy, exit_reason, exit_price, percentage, profit_pct, profit_usd)
+        
+        # Accumulate profits (important for multi-tier exits)
+        position.cumulative_profit_usd += profit_usd
+        position.cumulative_profit_pct += profit_pct * percentage  # Weight by percentage sold
         
         # Update tracking for partial exits
         if exit_reason == 'take_profit_1':
@@ -880,17 +936,32 @@ class StrategySimulator:
             position.tp3_hit = True
             
         position.total_sold_pct += percentage
-        position.remaining_percentage -= percentage
+        position.remaining_percentage = max(0, position.remaining_percentage - percentage)
         
-        # If fully closed, move to completed positions
-        if percentage >= 1.0 or position.remaining_percentage <= 0.01:
+        # Log this specific exit
+        self.logger.info(f"    Exit {exit_reason.upper()}: Sold {percentage:.1%} at ${exit_price:.8f} | This Exit P&L: {profit_pct:+.1f}% (${profit_usd:+.2f})")
+        
+        # If fully closed, finalize and move to completed positions
+        if position.remaining_percentage <= 0.01:
+            # Set final exit data
+            position.exit_time = exit_time
+            position.exit_price = exit_price
+            position.exit_reason = exit_reason
+            # Use cumulative profits as final P&L
+            position.profit_usd = position.cumulative_profit_usd
+            position.profit_pct = position.cumulative_profit_pct
+            
             strategy = position.strategy
             self.completed_positions[strategy].append(position)
             self.stats['positions_closed'] += 1
             
             hold_time_minutes = (exit_time - position.entry_time).total_seconds() / 60
-            self.logger.info(f"[CLOSED] {strategy.upper()}: HISTORICAL EXIT {position.symbol}")
-            self.logger.info(f"    {exit_reason.upper()} at ${exit_price:.8f} | P&L: {profit_pct:+.1f}% (${profit_usd:+.2f}) | Hold: {hold_time_minutes:.1f}m")
+            self.logger.info(f"[CLOSED] {strategy.upper()}: FULLY CLOSED {position.symbol}")
+            self.logger.info(f"    Final Cumulative P&L: {position.cumulative_profit_pct:+.1f}% (${position.cumulative_profit_usd:+.2f}) | Hold: {hold_time_minutes:.1f}m")
+            
+            # Send Discord summary for fully closed position
+            if self.discord:
+                await self.send_position_closed_summary(position, strategy)
 
     async def analyze_token_retroactively(self, analysis_item: dict, current_price: float):
         """Analyze what would have happened if we bought this token"""
@@ -1065,6 +1136,9 @@ class StrategySimulator:
                         'percentage': position.remaining_percentage  # Sell remaining position
                     }
         
+        # Calculate hold time first
+        hold_time = (current_time - position.entry_time).total_seconds()
+        
         # REMAINING POSITION MANAGEMENT - Strategy-specific logic for partial exits
         remaining_config = exit_config.get('remaining_position', {})
         if remaining_config.get('enabled', False) and position.total_sold_pct > 0:
@@ -1104,7 +1178,6 @@ class StrategySimulator:
         # Check time-based exit (only for full positions or if forced)
         time_config = exit_config.get('time_based', {})
         max_hold_seconds = time_config.get('max_hold_seconds', 1800)
-        hold_time = (current_time - position.entry_time).total_seconds()
         
         if hold_time >= max_hold_seconds and time_config.get('force_exit_at_max', False):
             # Exit remaining percentage only (may be full position if no partial exits yet)
@@ -1443,14 +1516,26 @@ class StrategySimulator:
             # Initialize bitquery client early to test token rotation
             await self.initialize_bitquery_client()
             
-            # Start monitoring and updating tasks
-            tasks = [
-                self.monitor_alpha_trades(duration_hours),
-                self.periodic_position_updates()
-            ]
+            # Create tasks
+            monitor_task = asyncio.create_task(self.monitor_alpha_trades(duration_hours))
+            update_task = asyncio.create_task(self.periodic_position_updates())
             
-            # Run all tasks concurrently
-            await asyncio.gather(*tasks)
+            # Wait for monitor task to complete (it has the duration limit)
+            await monitor_task
+            
+            # Stop the update task
+            self.running = False
+            
+            # Give update task a moment to finish its current iteration
+            try:
+                await asyncio.wait_for(update_task, timeout=10.0)
+            except asyncio.TimeoutError:
+                self.logger.warning("Update task didn't finish cleanly, cancelling")
+                update_task.cancel()
+                try:
+                    await update_task
+                except asyncio.CancelledError:
+                    pass
             
         except Exception as e:
             self.logger.error(f"ERROR: Simulation error: {e}")

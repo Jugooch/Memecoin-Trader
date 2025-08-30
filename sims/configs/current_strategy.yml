@@ -55,10 +55,23 @@ exits:
 
 # Simulation-specific settings
 simulation:
+  # REALISTIC EXECUTION PARAMETERS
+  execution_delay_seconds: 3.0  # Time from alpha signal to our bot's execution
+  
+  # Fee structure (per transaction)
+  entry_priority_fee_usd: 1.0  # Jito bundle or priority fee
+  exit_priority_fee_usd: 1.0
+  transaction_fee_usd: 0.05  # Base Solana fee
+  
+  # Slippage settings
+  entry_slippage_pct: 2.0  # Normal entry slippage
+  exit_slippage_pct: 2.0  # Normal exit slippage
+  panic_exit_slippage_pct: 3.0  # Stop loss slippage (panic selling)
+  
+  # Transaction failure rates
+  buy_failure_rate: 0.15  # 15% of buys fail due to slippage/congestion
+  sell_failure_rate: 0.10  # 10% of sells fail
+  
   # Simulate reconciliation delays (current bot issue)
   reconciliation_delay_seconds: 2.0
   indexing_delay_seconds: 10.0  # Simulate blockchain indexing delays
-  
-  # Transaction simulation
-  simulate_failed_sells: true  # Simulate "NotEnoughTokensToSell" errors
-  failed_sell_probability: 0.15  # 15% chance of sell failure on first attempt
