@@ -372,19 +372,18 @@ class PumpPortalClient:
             await self.initialize()
         
         try:
-            # Try multiple subscription formats for trades
+            # Subscribe to specific token trades
             if mint_address:
                 subscription_messages = [
                     {"method": "subscribeTokenTrade", "keys": [mint_address]},
-                    {"method": "subscribeAccountTrade"},  # Maybe this gets all trades?
                 ]
+                self.logger.info(f"Subscribing to trades for specific token: {mint_address[:8]}...")
             else:
                 # Subscribe to all token trades - try different formats
                 subscription_messages = [
-                    {"method": "subscribeTokenTrade"},
-                    {"method": "subscribeAccountTrade"},
-                    {"method": "subscribeAllTrades"},  # Guessing this might work
+                    {"method": "subscribeTokenTrade", "keys": []},  # Empty keys = all tokens
                 ]
+                self.logger.info("Subscribing to all token trades")
             
             # Send all subscription attempts
             for msg in subscription_messages:

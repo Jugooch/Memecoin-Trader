@@ -33,6 +33,7 @@ from src.core.safety_checks import SafetyChecker
 from src.core.risk_manager import AdaptiveRiskManager
 from src.utils.logger_setup import setup_logging
 from src.utils.config_loader import load_config, validate_required_keys
+from src.services.realtime_price_integration import create_realtime_price_system
 
 
 @dataclass
@@ -131,6 +132,10 @@ class MemecoinTradingBot:
         
         # Monitoring state
         self._pumpportal_monitoring = False
+        
+        # Initialize real-time price integration
+        self.price_integration = None
+        self.moralis_replacement = None
         
         # Initialize safety checker and risk manager (Phase 4)
         self.safety_checker = SafetyChecker(self.config.safety if self.config.safety else {})
@@ -278,6 +283,22 @@ class MemecoinTradingBot:
         # Initialize realtime client
         await self.realtime_client.initialize()
         self.logger.info(f"Realtime client initialized with source: {self.realtime_client.get_source()}")
+        
+        # Initialize real-time price integration
+        try:
+            from src.core.realtime_position_manager import RealtimePositionManager
+            position_manager = RealtimePositionManager(self.config.__dict__, self.logger)
+            
+            self.price_integration, self.moralis_replacement = await create_realtime_price_system(
+                self.config.__dict__.get('pumpportal', {}),
+                position_manager,
+                self.logger
+            )
+            self.logger.info("✅ Real-time price integration initialized")
+        except Exception as e:
+            self.logger.warning(f"⚠️ Real-time price integration failed, will use Moralis fallback: {e}")
+            self.price_integration = None
+            self.moralis_replacement = None
         
         # Start monitoring tasks
         tasks = [
@@ -1322,11 +1343,90 @@ class MemecoinTradingBot:
                         f"TP: ${position.tp_price:.8f}, "
                         f"SL: ${position.sl_price:.8f}")
         
-        # Monitor until position is fully closed in trading_engine
+        # Subscribe to real-time price updates with instant exit checking
+        if self.price_integration:
+            # Create price callback that immediately checks exit conditions
+            async def on_price_change(mint: str, old_price: float, new_price: float, change_pct: float, update):
+                try:
+                    if mint_address in self.trading_engine.active_positions:
+                        await self._check_exit_conditions_instantly(mint_address, new_price, symbol)
+                except Exception as e:
+                    self.logger.error(f"Error in price callback for {symbol}: {e}")
+            
+            # Start real-time monitoring with instant exit callback
+            success = await self.price_integration.start_position_monitoring(
+                mint_address, symbol, position.entry_price, on_price_change
+            )
+            
+            if success:
+                self.logger.info(f"⚡ Real-time monitoring started for {symbol} - instant exit checking enabled")
+                # Simple wait loop - the real work happens in the price callbacks
+                while mint_address in self.trading_engine.active_positions:
+                    await asyncio.sleep(30)  # Just keep the monitoring alive
+                
+                # Stop monitoring when position closes
+                await self.price_integration.stop_position_monitoring(mint_address, symbol)
+            else:
+                self.logger.warning(f"⚠️ Real-time monitoring failed for {symbol}, falling back to polling")
+                await self._monitor_position_polling(mint_address, symbol)
+        else:
+            # Fallback to polling mode
+            await self._monitor_position_polling(mint_address, symbol)
+        
+        self.logger.info(f"🏁 Position monitoring ended for {mint_address[:8]}...")
+    
+    async def _check_exit_conditions_instantly(self, mint_address: str, current_price: float, symbol: str):
+        """Instantly check exit conditions when price updates - no polling delay!"""
+        if mint_address not in self.trading_engine.active_positions:
+            return
+        
+        position = self.trading_engine.active_positions[mint_address]
+        
+        # Update peak price and gain tracking in position
+        if current_price > position.peak_price:
+            position.peak_price = current_price
+            position.high_gain_peak = max(position.high_gain_peak, 
+                                         ((current_price / position.entry_price) - 1) * 100)
+        
+        # 🚀 INSTANT EXIT LOGIC - NO DELAY!
+        exit_result = await self.trading_engine.check_exit_conditions(mint_address, current_price)
+        
+        if exit_result:
+            exit_reason, sell_percentage = exit_result
+            current_gain = ((current_price / position.entry_price) - 1) * 100
+            
+            self.logger.info(f"⚡ INSTANT EXIT: {symbol} {exit_reason} "
+                           f"{sell_percentage*100:.0f}% @ ${current_price:.8f} "
+                           f"({current_gain:+.1f}%)")
+            
+            # Execute immediately - no delays!
+            sell_result = await self.trading_engine.sell_token(
+                mint_address, sell_percentage, self.config.paper_mode, 
+                symbol=symbol, exit_reason=exit_reason
+            )
+            
+            if sell_result.get("success"):
+                self.logger.info(f"✅ INSTANT SELL SUCCESS: {symbol}")
+            else:
+                self.logger.error(f"❌ INSTANT SELL FAILED: {symbol} - {sell_result.get('error')}")
+    
+    async def _monitor_position_polling(self, mint_address: str, symbol: str):
+        """Fallback polling monitoring when real-time service unavailable"""
+        self.logger.info(f"⚠️ Using fallback polling mode for {symbol}")
+        
+        # Monitor until position is fully closed in trading_engine (old polling approach)
         while mint_address in self.trading_engine.active_positions:
             try:
-                # Get current price and update position state
-                current_price = await self.moralis.get_current_price(mint_address, fresh=True)
+                position = self.trading_engine.active_positions[mint_address]
+                
+                # Get current price - prefer real-time integration, fallback to Moralis
+                current_price = None
+                if self.price_integration:
+                    current_price = self.price_integration.get_current_price(mint_address)
+                
+                # Fallback to Moralis if real-time price not available
+                if current_price is None or current_price <= 0:
+                    current_price = await self.moralis.get_current_price(mint_address, fresh=True)
                 
                 if current_price <= 0:
                     self.logger.warning(f"Invalid price for {mint_address}, retrying...")
@@ -1429,11 +1529,17 @@ class MemecoinTradingBot:
                                     f"TP1: {'✓' if position.tp1_hit_time else '○'}, "
                                     f"BE: {'✓' if position.break_even_armed else '○'}")
                 
-                await asyncio.sleep(2)  # Check every 2 seconds
+                # Standard polling interval (only used when real-time is unavailable)
+                await asyncio.sleep(2)
                 
             except Exception as e:
                 self.logger.error(f"Error monitoring position {mint_address}: {e}")
                 await asyncio.sleep(5)
+        
+        # Unsubscribe from real-time price updates
+        if self.realtime_price_service.enabled:
+            await self.realtime_price_service.unsubscribe_token(mint_address)
+            self.logger.info(f"🔕 Unsubscribed from real-time prices for {symbol}")
         
         self.logger.info(f"🏁 Position monitoring ended for {mint_address[:8]}...")
     
@@ -1863,6 +1969,13 @@ class MemecoinTradingBot:
         
         # Stop wallet rotation
         self.wallet_rotation_manager.stop_rotation()
+        
+        # Close real-time price integration
+        try:
+            if self.price_integration:
+                await self.price_integration.close()
+        except Exception as e:
+            self.logger.error(f"Error closing real-time price integration: {e}")
         
         # Close realtime client
         try:
