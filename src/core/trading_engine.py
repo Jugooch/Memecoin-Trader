@@ -53,6 +53,10 @@ class Position:
     # Smart reconciliation system
     needs_reconciliation: bool = False  # Flag for position balance reconciliation
     pre_reconcile_state: Optional[dict] = None  # Store TP state before reconciliation
+    
+    # Buffer strategy fields
+    buffer_period_seconds: int = 0  # Volatility buffer period (no stop losses)
+    buffer_end_time: Optional[datetime] = None  # When buffer period ends
 
 
 class TradingEngine:
@@ -544,20 +548,27 @@ class TradingEngine:
         self.paper_capital -= usd_amount
         
         # Create position with proper cost tracking (use fill_price as entry)
+        # Get buffer configuration
+        buffer_config = getattr(self.config, 'volatility_buffer', {})
+        buffer_seconds = buffer_config.get('buffer_seconds', 0) if buffer_config.get('enabled', False) else 0
+        entry_time = datetime.now()
+        
         position = Position(
             mint=mint_address,
             symbol=symbol,
             entry_price=fill_price,
             amount=tokens_received,
             sol_invested=sol_amount,
-            entry_time=datetime.now(),
+            entry_time=entry_time,
             tp_price=fill_price * self.config.tp_multiplier,
             sl_price=fill_price * self.config.stop_loss_pct,
             peak_price=fill_price,
             paper_mode=True,
             tokens_initial=tokens_received,
             cost_usd_remaining=usd_amount,
-            avg_cost_per_token=usd_amount / tokens_received
+            avg_cost_per_token=usd_amount / tokens_received,
+            buffer_period_seconds=buffer_seconds,
+            buffer_end_time=datetime.fromtimestamp(entry_time.timestamp() + buffer_seconds) if buffer_seconds > 0 else None
         )
         
         self.active_positions[mint_address] = position
@@ -719,13 +730,18 @@ class TradingEngine:
                 
                 if estimated_tokens > 0 and current_price > 0:
                     
+                    # Get buffer configuration
+                    buffer_config = getattr(self.config, 'volatility_buffer', {})
+                    buffer_seconds = buffer_config.get('buffer_seconds', 0) if buffer_config.get('enabled', False) else 0
+                    entry_time = datetime.now()
+                    
                     position = Position(
                         mint=mint_address,
                         symbol=symbol,
                         entry_price=current_price,
                         amount=estimated_tokens,
                         sol_invested=sol_amount,
-                        entry_time=datetime.now(),
+                        entry_time=entry_time,
                         tp_price=current_price * self.config.tp_multiplier,
                         sl_price=current_price * self.config.stop_loss_pct,
                         peak_price=current_price,
@@ -734,7 +750,9 @@ class TradingEngine:
                         cost_usd_remaining=usd_amount,
                         avg_cost_per_token=current_price,
                         buy_tx_signature=tx_signature,
-                        verified_from_blockchain=False
+                        verified_from_blockchain=False,
+                        buffer_period_seconds=buffer_seconds,
+                        buffer_end_time=datetime.fromtimestamp(entry_time.timestamp() + buffer_seconds) if buffer_seconds > 0 else None
                     )
                     
                     # Mark if this position was created with simulation data for better tracking
@@ -1346,33 +1364,47 @@ class TradingEngine:
         use_multi_tier = multi_tier_config.get('enabled', False)
         
         if use_multi_tier:
-            # Multi-tier exit strategy for aggressive mode
-            tp2_price = position.entry_price * getattr(self.config, 'tp2_multiplier', 1.50)
-            tp3_price = position.entry_price * getattr(self.config, 'tp3_multiplier', 2.00)
+            # Multi-tier exit strategy for aggressive mode with buffer strategy values
+            # Use buffer strategy TP values if enabled, otherwise use original aggressive values
+            buffer_config = getattr(self.config, 'volatility_buffer', {})
+            if buffer_config.get('enabled', False):
+                # Buffer strategy TPs: 20%, 45%, 90%
+                tp1_multiplier = getattr(self.config, 'tp_multiplier', 1.20)  # Default to 20% gain
+                tp2_price = position.entry_price * getattr(self.config, 'tp2_multiplier', 1.45)  # 45% gain
+                tp3_price = position.entry_price * getattr(self.config, 'tp3_multiplier', 1.90)  # 90% gain
+                
+                # Buffer strategy sell percentages: 40%, 35%, 20%
+                tp1_sell_pct = multi_tier_config.get('tp1_sell_pct', 0.40)
+                tp2_sell_pct = multi_tier_config.get('tp2_sell_pct', 0.35)
+                tp3_sell_pct = multi_tier_config.get('tp3_sell_pct', 0.20)
+            else:
+                # Original aggressive mode values
+                tp2_price = position.entry_price * getattr(self.config, 'tp2_multiplier', 1.50)
+                tp3_price = position.entry_price * getattr(self.config, 'tp3_multiplier', 2.00)
+                tp1_sell_pct = multi_tier_config.get('tp1_sell_pct', 0.45)
+                tp2_sell_pct = multi_tier_config.get('tp2_sell_pct', 0.35)
+                tp3_sell_pct = multi_tier_config.get('tp3_sell_pct', 0.15)
             
-            # TP1 at 25% - Sell 45%
+            # TP1 - First take profit
             if current_price >= position.tp_price and position.tp1_hit_time is None:
                 position.tp1_hit_time = datetime.now()
-                tp1_percentage = multi_tier_config.get('tp1_sell_pct', 0.45)
-                position.tp1_percentage_sold = tp1_percentage
-                self.logger.info(f"🎯 TP1 HIT: Selling {tp1_percentage*100:.0f}% at +{current_gain_pct:.1f}% gain")
-                return ("take_profit_partial", tp1_percentage)
+                position.tp1_percentage_sold = tp1_sell_pct
+                self.logger.info(f"🎯 TP1 HIT: Selling {tp1_sell_pct*100:.0f}% at +{current_gain_pct:.1f}% gain")
+                return ("take_profit_partial", tp1_sell_pct)
             
-            # TP2 at 50% - Sell 35%  
+            # TP2 - Second take profit
             if current_price >= tp2_price and position.tp2_hit_time is None and position.tp1_hit_time is not None:
                 position.tp2_hit_time = datetime.now()
-                tp2_percentage = multi_tier_config.get('tp2_sell_pct', 0.35)
-                position.tp2_percentage_sold = tp2_percentage
-                self.logger.info(f"🚀 TP2 HIT: Selling {tp2_percentage*100:.0f}% at +{current_gain_pct:.1f}% gain")
-                return ("take_profit_partial", tp2_percentage)
+                position.tp2_percentage_sold = tp2_sell_pct
+                self.logger.info(f"🚀 TP2 HIT: Selling {tp2_sell_pct*100:.0f}% at +{current_gain_pct:.1f}% gain")
+                return ("take_profit_partial", tp2_sell_pct)
             
-            # TP3 at 100% - Sell 15%
+            # TP3 - Third take profit
             if current_price >= tp3_price and position.tp3_hit_time is None and position.tp2_hit_time is not None:
                 position.tp3_hit_time = datetime.now()
-                tp3_percentage = multi_tier_config.get('tp3_sell_pct', 0.15)
-                position.tp3_percentage_sold = tp3_percentage
-                self.logger.info(f"🌙 TP3 HIT: Selling {tp3_percentage*100:.0f}% at +{current_gain_pct:.1f}% gain (Moonshot!)")
-                return ("take_profit_partial", tp3_percentage)
+                position.tp3_percentage_sold = tp3_sell_pct
+                self.logger.info(f"🌙 TP3 HIT: Selling {tp3_sell_pct*100:.0f}% at +{current_gain_pct:.1f}% gain (Moonshot!)")
+                return ("take_profit_partial", tp3_sell_pct)
         else:
             # Original single TP1 logic for conservative mode
             if current_price >= position.tp_price and position.tp1_hit_time is None:
@@ -1416,51 +1448,90 @@ class TradingEngine:
         total_sold_pct = position.tp1_percentage_sold + position.tp2_percentage_sold + position.tp3_percentage_sold
         has_banked_profits = total_sold_pct > 0
         
-        # Break-even stop logic - more aggressive after taking profits
-        break_even_threshold = 5 if has_banked_profits else 8
-        if current_gain_pct >= break_even_threshold and not position.break_even_armed:
-            position.break_even_armed = True
-            position.break_even_armed_time = datetime.now()
-            self.logger.info(f"Break-even stop armed for {mint_address[:8]}... at +{current_gain_pct:.1f}% (banked: {has_banked_profits})")
+        # Check for buffer strategy's remaining position management
+        buffer_config = getattr(self.config, 'volatility_buffer', {})
+        remaining_config = getattr(self.config, 'remaining_position', {})
         
-        if position.break_even_armed:
-            time_since_armed = (datetime.now() - position.break_even_armed_time).total_seconds()
-            if time_since_armed <= 60:  # Break-even protection for 60 seconds
-                buffer = 1.005 if has_banked_profits else 1.01  # Tighter buffer after profits
-                if current_price <= position.entry_price * buffer:
-                    return ("break_even_stop", 1.0)
-            else:
-                # After 60 seconds, switch to normal trailing
-                position.trailing_stop_active = True
-                position.break_even_armed = False
-        
-        # Adaptive trailing stop based on profit-taking progress
-        if position.trailing_stop_active or current_gain_pct >= 15:
-            # Tighter trailing after taking multi-tier profits
-            if has_banked_profits:
-                if total_sold_pct >= 0.80:  # After TP1+TP2 (80% sold)
-                    trailing_pct = 0.95  # Very tight 5% trail on final 20%
-                elif total_sold_pct >= 0.45:  # After TP1 (45% sold)
-                    trailing_pct = 0.90  # Moderate 10% trail on remaining 55%
+        if buffer_config.get('enabled', False) and remaining_config.get('enabled', False) and has_banked_profits:
+            # Buffer strategy: After TP1, protect gains but let winners run
+            profit_protection_level = remaining_config.get('profit_protection_level', 15.0)  # Default 15%
+            trailing_stop_pct = remaining_config.get('trailing_stop_percentage', 20.0)  # Default 20% trailing
+            max_remaining_hold = remaining_config.get('max_remaining_hold_seconds', 10800)  # 3 hours default
+            
+            # Check if we should exit based on profit protection level
+            if position.tp1_hit_time and current_gain_pct < profit_protection_level:
+                self.logger.info(f"📉 PROFIT PROTECTION: Price dropped below +{profit_protection_level:.0f}% after TP1")
+                return ("profit_protection", 1.0)
+            
+            # Apply wider trailing stop for remaining position
+            if position.tp1_hit_time:
+                trailing_threshold = position.peak_price * (1 - trailing_stop_pct / 100)
+                if current_price <= trailing_threshold:
+                    self.logger.info(f"📊 REMAINING POSITION TRAILING: {trailing_stop_pct:.0f}% drawdown from peak")
+                    return ("remaining_trailing_stop", 1.0)
+            
+            # Check max hold time for remaining position
+            if position.tp1_hit_time:
+                time_since_tp1 = (datetime.now() - position.tp1_hit_time).total_seconds()
+                if time_since_tp1 >= max_remaining_hold:
+                    self.logger.info(f"⏰ MAX REMAINING HOLD: {max_remaining_hold/3600:.1f} hours reached for remaining position")
+                    return ("max_remaining_hold", 1.0)
+        else:
+            # Original break-even and trailing logic for non-buffer strategies
+            # Break-even stop logic - more aggressive after taking profits
+            break_even_threshold = 5 if has_banked_profits else 8
+            if current_gain_pct >= break_even_threshold and not position.break_even_armed:
+                position.break_even_armed = True
+                position.break_even_armed_time = datetime.now()
+                self.logger.info(f"Break-even stop armed for {mint_address[:8]}... at +{current_gain_pct:.1f}% (banked: {has_banked_profits})")
+            
+            if position.break_even_armed:
+                time_since_armed = (datetime.now() - position.break_even_armed_time).total_seconds()
+                if time_since_armed <= 60:  # Break-even protection for 60 seconds
+                    buffer = 1.005 if has_banked_profits else 1.01  # Tighter buffer after profits
+                    if current_price <= position.entry_price * buffer:
+                        return ("break_even_stop", 1.0)
                 else:
-                    trailing_pct = 0.85  # Standard trail
-            else:
-                trailing_pct = 0.85  # Standard trail for conservative mode
-                
-            trailing_stop = position.peak_price * trailing_pct
-            if current_price <= trailing_stop:
-                trail_pct = int((1 - trailing_pct) * 100)
-                self.logger.info(f"Trailing stop hit: {trail_pct}% drawdown from peak (banked {total_sold_pct:.0%})")
-                return ("trailing_stop", 1.0)
+                    # After 60 seconds, switch to normal trailing
+                    position.trailing_stop_active = True
+                    position.break_even_armed = False
+            
+            # Adaptive trailing stop based on profit-taking progress
+            if position.trailing_stop_active or current_gain_pct >= 15:
+                # Tighter trailing after taking multi-tier profits
+                if has_banked_profits:
+                    if total_sold_pct >= 0.80:  # After TP1+TP2 (80% sold)
+                        trailing_pct = 0.95  # Very tight 5% trail on final 20%
+                    elif total_sold_pct >= 0.45:  # After TP1 (45% sold)
+                        trailing_pct = 0.90  # Moderate 10% trail on remaining 55%
+                    else:
+                        trailing_pct = 0.85  # Standard trail
+                else:
+                    trailing_pct = 0.85  # Standard trail for conservative mode
+                    
+                trailing_stop = position.peak_price * trailing_pct
+                if current_price <= trailing_stop:
+                    trail_pct = int((1 - trailing_pct) * 100)
+                    self.logger.info(f"Trailing stop hit: {trail_pct}% drawdown from peak (banked {total_sold_pct:.0%})")
+                    return ("trailing_stop", 1.0)
         
-        # VOLATILITY-BASED STOP LOSS
-        # Instead of fixed 8%, adjust based on token volatility and time
-        volatility_stop = await self._calculate_dynamic_stop_loss(mint_address, position, hold_time_seconds)
+        # Check if we're in buffer period - no stop losses allowed during buffer
+        in_buffer_period = False
+        if position.buffer_end_time:
+            in_buffer_period = datetime.now() < position.buffer_end_time
+            if in_buffer_period:
+                time_remaining = (position.buffer_end_time - datetime.now()).total_seconds()
+                self.logger.debug(f"🛡️ Buffer period active: {time_remaining:.0f}s remaining (no stop losses)")
         
-        if current_price <= volatility_stop:
-            stop_pct = ((volatility_stop / position.entry_price) - 1) * 100
-            self.logger.info(f"DYNAMIC STOP HIT: Volatility-adjusted stop at {stop_pct:.1f}%")
-            return ("stop_loss", 1.0)
+        # VOLATILITY-BASED STOP LOSS (skip during buffer period)
+        if not in_buffer_period:
+            # Instead of fixed 8%, adjust based on token volatility and time
+            volatility_stop = await self._calculate_dynamic_stop_loss(mint_address, position, hold_time_seconds)
+            
+            if current_price <= volatility_stop:
+                stop_pct = ((volatility_stop / position.entry_price) - 1) * 100
+                self.logger.info(f"DYNAMIC STOP HIT: Volatility-adjusted stop at {stop_pct:.1f}%")
+                return ("stop_loss", 1.0)
         
         # AGGRESSIVE TIME-BASED EXITS (Friend's Strategy Refined)
         max_hold = getattr(self.config, 'max_hold_seconds', 1800)  # 30 minutes for aggressive
@@ -1568,7 +1639,7 @@ class TradingEngine:
     
     async def _calculate_dynamic_stop_loss(self, mint_address: str, position: Position, hold_time_seconds: float) -> float:
         """
-        Calculate aggressive stop loss based on friend's strategy
+        Calculate stop loss based on buffer strategy configuration
         
         Args:
             mint_address: Token mint address
@@ -1579,24 +1650,31 @@ class TradingEngine:
             Stop loss price level
         """
         try:
-            # AGGRESSIVE STOP LOSS STRATEGY (Friend's Plan Refined)
-            hold_time_minutes = hold_time_seconds / 60
-            
-            if hold_time_minutes < 5:
-                # 0-5 minutes: 15% stop loss (refined from 25%)
-                base_stop_pct = 0.85
-                self.logger.debug(f"Aggressive early stop: 15% (hold time: {hold_time_minutes:.1f}m)")
-            elif hold_time_minutes < 10:
-                # 5-10 minutes: 20% stop loss (refined from 40%)  
-                base_stop_pct = 0.80
-                self.logger.debug(f"Aggressive mid stop: 20% (hold time: {hold_time_minutes:.1f}m)")
+            # Check if buffer strategy is enabled
+            buffer_config = getattr(self.config, 'volatility_buffer', {})
+            if buffer_config.get('enabled', False):
+                # Use buffer strategy's wider stop loss (35% by default)
+                buffer_stop_loss_pct = getattr(self.config, 'buffer_stop_loss_pct', 0.65)  # 35% stop loss = 0.65 multiplier
+                stop_price = position.entry_price * buffer_stop_loss_pct
+                self.logger.debug(f"Buffer strategy stop: {(1-buffer_stop_loss_pct)*100:.0f}% stop loss")
             else:
-                # 10+ minutes: 25% stop loss
-                base_stop_pct = 0.75
-                self.logger.debug(f"Aggressive late stop: 25% (hold time: {hold_time_minutes:.1f}m)")
-            
-            # Calculate stop price
-            stop_price = position.entry_price * base_stop_pct
+                # Original aggressive stop loss strategy
+                hold_time_minutes = hold_time_seconds / 60
+                
+                if hold_time_minutes < 5:
+                    # 0-5 minutes: 15% stop loss
+                    base_stop_pct = 0.85
+                    self.logger.debug(f"Aggressive early stop: 15% (hold time: {hold_time_minutes:.1f}m)")
+                elif hold_time_minutes < 10:
+                    # 5-10 minutes: 20% stop loss
+                    base_stop_pct = 0.80
+                    self.logger.debug(f"Aggressive mid stop: 20% (hold time: {hold_time_minutes:.1f}m)")
+                else:
+                    # 10+ minutes: 25% stop loss
+                    base_stop_pct = 0.75
+                    self.logger.debug(f"Aggressive late stop: 25% (hold time: {hold_time_minutes:.1f}m)")
+                
+                stop_price = position.entry_price * base_stop_pct
             
             # Never let stop price go above entry (no positive stops)
             stop_price = min(stop_price, position.entry_price * 0.99)
@@ -1604,7 +1682,7 @@ class TradingEngine:
             return stop_price
             
         except Exception as e:
-            self.logger.error(f"Error calculating aggressive stop loss: {e}")
+            self.logger.error(f"Error calculating stop loss: {e}")
             # Fallback to 15% stop
             return position.entry_price * 0.85
 
@@ -1903,13 +1981,18 @@ class TradingEngine:
             self.logger.info(f"✅ Verification complete: {actual_tokens:,.0f} tokens at ${actual_fill_price:.8f}")
             
             # Create verified position
+            # Get buffer configuration
+            buffer_config = getattr(self.config, 'volatility_buffer', {})
+            buffer_seconds = buffer_config.get('buffer_seconds', 0) if buffer_config.get('enabled', False) else 0
+            entry_time = datetime.now()
+            
             position = Position(
                 mint=mint_address,
                 symbol=symbol,
                 entry_price=actual_fill_price,
                 amount=actual_tokens,
                 sol_invested=sol_amount,
-                entry_time=datetime.now(),
+                entry_time=entry_time,
                 tp_price=actual_fill_price * self.config.tp_multiplier,
                 sl_price=actual_fill_price * self.config.stop_loss_pct,
                 peak_price=actual_fill_price,
@@ -1918,7 +2001,9 @@ class TradingEngine:
                 cost_usd_remaining=usd_amount,
                 avg_cost_per_token=actual_fill_price,
                 buy_tx_signature=tx_signature,
-                verified_from_blockchain=True
+                verified_from_blockchain=True,
+                buffer_period_seconds=buffer_seconds,
+                buffer_end_time=datetime.fromtimestamp(entry_time.timestamp() + buffer_seconds) if buffer_seconds > 0 else None
             )
             
             self.active_positions[mint_address] = position

@@ -96,7 +96,10 @@ def validate_required_keys(config: Dict[str, Any]) -> None:
         'time_window_sec',
         'max_trade_pct',
         'tp_multiplier',
-        'stop_loss_pct'
+        'tp2_multiplier',
+        'tp3_multiplier',
+        'stop_loss_pct',
+        'buffer_stop_loss_pct'
     ]
     
     missing_keys = []
@@ -220,7 +223,10 @@ def restore_missing_config_sections() -> Dict[str, Any]:
         'trading_mode': 'simulation',
         'time_window_sec': 300,
         'tp_multiplier': 1.25,
+        'tp2_multiplier': 1.50,  # Added for multi-tier exits
+        'tp3_multiplier': 2.00,  # Added for multi-tier exits
         'stop_loss_pct': 0.92,
+        'buffer_stop_loss_pct': 0.65,  # 35% stop loss for buffer strategy
         'trading': {
             'initial_capital': 500.0,
             'max_trades_per_day': 20,
@@ -240,5 +246,16 @@ def restore_missing_config_sections() -> Dict[str, Any]:
         'notifications': {
             'discord_webhook_url': '',
             'enabled': True
+        },
+        'volatility_buffer': {
+            'enabled': False,
+            'buffer_seconds': 60,
+            'allow_take_profits_during_buffer': True
+        },
+        'remaining_position': {
+            'enabled': False,
+            'profit_protection_level': 15.0,
+            'trailing_stop_percentage': 20.0,
+            'max_remaining_hold_seconds': 10800
         }
     }
