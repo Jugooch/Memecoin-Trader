@@ -92,6 +92,10 @@ class TradingConfig:
     multi_tier_exits: Dict = None
     ultra_fast_execution: bool = False  # Skip all Moralis waits when True
     use_realtime_positions: bool = False  # Enable real-time position tracking via WebSocket
+    # Buffer strategy configuration
+    volatility_buffer: Dict = None  # Buffer strategy settings
+    buffer_stop_loss_pct: float = 0.65  # 35% stop loss for buffer strategy
+    remaining_position: Dict = None  # Remaining position management after partial exits
 
 
 class MemecoinTradingBot:
@@ -230,7 +234,11 @@ class MemecoinTradingBot:
             tp3_multiplier=config_data.get('tp3_multiplier', 2.00),
             multi_tier_exits=config_data.get('multi_tier_exits', {}),
             ultra_fast_execution=config_data.get('ultra_fast_execution', False),
-            use_realtime_positions=config_data.get('use_realtime_positions', False)
+            use_realtime_positions=config_data.get('use_realtime_positions', False),
+            # Buffer strategy configuration
+            volatility_buffer=config_data.get('volatility_buffer', {}),
+            buffer_stop_loss_pct=config_data.get('buffer_stop_loss_pct', 0.65),
+            remaining_position=config_data.get('remaining_position', {})
         )
 
     def _get_realtime_config(self) -> Dict:
