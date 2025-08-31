@@ -1448,11 +1448,23 @@ class TradingEngine:
         total_sold_pct = position.tp1_percentage_sold + position.tp2_percentage_sold + position.tp3_percentage_sold
         has_banked_profits = total_sold_pct > 0
         
-        # Check for buffer strategy's remaining position management
-        buffer_config = getattr(self.config, 'volatility_buffer', {})
-        remaining_config = getattr(self.config, 'remaining_position', {})
+        # Check if we're in buffer period first - no break-even or stop losses during buffer
+        in_buffer_period = False
+        if position.buffer_end_time:
+            in_buffer_period = datetime.now() < position.buffer_end_time
+            if in_buffer_period:
+                time_remaining = (position.buffer_end_time - datetime.now()).total_seconds()
+                self.logger.debug(f"🛡️ Buffer period active: {time_remaining:.0f}s remaining (no stops/break-even)")
         
-        if buffer_config.get('enabled', False) and remaining_config.get('enabled', False) and has_banked_profits:
+        # Skip ALL stop/break-even logic during buffer period (but allow TPs)
+        if in_buffer_period:
+            # During buffer, we only check for take profits (TPs are handled earlier in the function)
+            # No break-even stops, no trailing stops, no stop losses
+            pass
+        # Check for buffer strategy's remaining position management (AFTER buffer period)
+        elif getattr(self.config, 'volatility_buffer', {}).get('enabled', False) and \
+             getattr(self.config, 'remaining_position', {}).get('enabled', False) and has_banked_profits:
+            remaining_config = getattr(self.config, 'remaining_position', {})
             # Buffer strategy: After TP1, protect gains but let winners run
             profit_protection_level = remaining_config.get('profit_protection_level', 15.0)  # Default 15%
             trailing_stop_pct = remaining_config.get('trailing_stop_percentage', 20.0)  # Default 20% trailing
@@ -1515,15 +1527,7 @@ class TradingEngine:
                     self.logger.info(f"Trailing stop hit: {trail_pct}% drawdown from peak (banked {total_sold_pct:.0%})")
                     return ("trailing_stop", 1.0)
         
-        # Check if we're in buffer period - no stop losses allowed during buffer
-        in_buffer_period = False
-        if position.buffer_end_time:
-            in_buffer_period = datetime.now() < position.buffer_end_time
-            if in_buffer_period:
-                time_remaining = (position.buffer_end_time - datetime.now()).total_seconds()
-                self.logger.debug(f"🛡️ Buffer period active: {time_remaining:.0f}s remaining (no stop losses)")
-        
-        # VOLATILITY-BASED STOP LOSS (skip during buffer period)
+        # VOLATILITY-BASED STOP LOSS (already checked buffer period above)
         if not in_buffer_period:
             # Instead of fixed 8%, adjust based on token volatility and time
             volatility_stop = await self._calculate_dynamic_stop_loss(mint_address, position, hold_time_seconds)
