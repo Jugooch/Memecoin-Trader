@@ -353,12 +353,16 @@ class PumpPortalPriceMonitor:
         else:
             change_pct = 0.0
         
-        # Log significant price changes
-        if abs(change_pct) >= 1.0 or self.updates_per_token[mint] <= 5:  # Log first 5 updates or >1% changes
+        # Log only very significant price changes to avoid flooding console
+        if abs(change_pct) >= 5.0:  # Only log major moves (5%+)
             self.logger.info(
-                f"💰 PRICE UPDATE: {mint[:8]}... "
+                f"📈 MAJOR PRICE MOVE: {mint[:8]}... "
                 f"${old_price:.8f} → ${new_price:.8f} "
-                f"({change_pct:+.2f}%) [{update.trade_type.upper()}]"
+                f"({change_pct:+.2f}%)"
+            )
+        elif self.updates_per_token[mint] == 1:  # Log only the very first update per token
+            self.logger.debug(
+                f"💰 First price for {mint[:8]}...: ${new_price:.8f}"
             )
         
         # Call price change handler if set
