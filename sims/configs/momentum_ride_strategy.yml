@@ -1,0 +1,67 @@
+# Momentum Ride Strategy - Simplified Version
+# Only using conditions that are actually implemented in the simulator
+
+strategy_name: "momentum_ride"
+description: "Ride momentum with 12% targets - simplified"
+
+# Entry conditions - ONLY using implemented features
+entry:
+  min_alpha_wallets: 2  # Need stronger signal but achievable
+  max_entry_delay_seconds: 15
+  position_size_usd: 100.0  # Medium position
+
+# Exit conditions - Ride the momentum
+exits:
+  # Short buffer for momentum plays
+  volatility_buffer:
+    enabled: true
+    buffer_seconds: 30  # 30 second buffer
+    allow_take_profits_during_buffer: true
+  
+  # Wider stop for momentum
+  stop_loss:
+    enabled: true
+    percentage: -10.0  # -10% stop (wider for volatility)
+    applies_after_buffer: true
+  
+  # Multi-tier take profit for momentum
+  take_profit:
+    enabled: true
+    multi_tier_enabled: true
+    
+    # TP1: Secure majority at 12%
+    tp1_percentage: 12.0  # +12% target
+    tp1_sell_amount: 0.70  # Sell 70%
+    
+    # TP2: Take more at 25%
+    tp2_percentage: 25.0  # +25% for momentum
+    tp2_sell_amount: 0.25  # Sell 25% more
+    
+    # TP3: Small moon bag
+    tp3_percentage: 40.0  # +40% moon target
+    tp3_sell_amount: 0.04  # Sell 4% more
+    
+    # Trailing stop for remaining 1%
+    trailing_stop_enabled: true
+    trailing_stop_percentage: 15.0  # 15% trailing from peak
+  
+  # Time limits
+  time_based:
+    max_hold_seconds: 600  # 10 minutes max
+    force_exit_at_max: false  # Let trailing stop handle
+
+# Simulation settings - REALISTIC for $100 positions
+simulation:
+  # Transaction costs
+  entry_priority_fee_usd: 1.0
+  exit_priority_fee_usd: 1.0
+  transaction_fee_usd: 0.05
+  
+  # Slippage for medium positions
+  entry_slippage_pct: 2.0  # Standard slippage
+  exit_slippage_pct: 2.0
+  panic_exit_slippage_pct: 3.5  # Better than scalping
+  
+  # Failure rates
+  buy_failure_rate: 0.12  # 12% fail (momentum is competitive)
+  sell_failure_rate: 0.08

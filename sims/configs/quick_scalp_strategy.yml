@@ -1,0 +1,64 @@
+# Quick Scalp Strategy - Simplified Version
+# Only using conditions that are actually implemented in the simulator
+
+strategy_name: "quick_scalp"
+description: "High frequency 6% scalping - simplified"
+
+# Entry conditions - ONLY using implemented features
+entry:
+  min_alpha_wallets: 1  # Start with 1 like original strategies
+  max_entry_delay_seconds: 10  # Must be FAST
+  position_size_usd: 150.0  # Larger position for small gains
+
+# Exit conditions - Quick profits
+exits:
+  # NO volatility buffer - we want quick exits
+  volatility_buffer:
+    enabled: false
+  
+  # Tight stop loss for quick trades
+  stop_loss:
+    enabled: true
+    percentage: -7.0  # Only -7% stop (tight risk management)
+    
+  # Single aggressive take profit
+  take_profit:
+    enabled: true
+    multi_tier_enabled: true
+    
+    # TP1: Take almost everything at 6%
+    tp1_percentage: 6.0  # Only +6% target!
+    tp1_sell_amount: 0.95  # Sell 95% - lock in profits
+    
+    # TP2: Let tiny moon bag ride
+    tp2_percentage: 15.0  # If it moons
+    tp2_sell_amount: 0.04  # Sell 4% more
+    
+    # No TP3 for scalping
+    tp3_percentage: 999.0  # Effectively disabled
+    tp3_sell_amount: 0.0
+    
+    # Trailing stop on the 1% remaining
+    trailing_stop_enabled: true
+    trailing_stop_percentage: 10.0  # Tight trailing
+  
+  # Time-based emergency exit
+  time_based:
+    max_hold_seconds: 180  # 3 minutes max
+    force_exit_at_max: true
+
+# Simulation settings - REALISTIC FEES
+simulation:
+  # Realistic transaction costs
+  entry_priority_fee_usd: 1.0  # Jito bundle fee
+  exit_priority_fee_usd: 1.0  
+  transaction_fee_usd: 0.05  # Solana base fee
+  
+  # Realistic slippage for $150 positions
+  entry_slippage_pct: 2.5  # Slightly higher for larger position
+  exit_slippage_pct: 2.5  
+  panic_exit_slippage_pct: 4.0  # Panic sells have worse slippage
+  
+  # MEV and failed transaction rates
+  buy_failure_rate: 0.10  # 10% of buys fail
+  sell_failure_rate: 0.08  # 8% of sells fail

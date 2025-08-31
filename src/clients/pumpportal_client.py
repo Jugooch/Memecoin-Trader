@@ -465,7 +465,16 @@ class PumpPortalClient:
                 'timestamp': timestamp,
                 'signature': data.get('signature') or data.get('txid') or '',
                 'buyer': None,  # Not available in token creation event
-                'buy_amount': 0  # Not applicable for token creation
+                'buy_amount': 0,  # Not applicable for token creation
+                
+                # Preserve financial data needed for alpha filtering
+                'solAmount': data.get('solAmount', 0),
+                'marketCapSol': data.get('marketCapSol', 0),
+                'initialLpSol': data.get('initialLpSol', 0),
+                'initialBuy': data.get('initialBuy', 0),
+                'vSolInBondingCurve': data.get('vSolInBondingCurve', 0),
+                'traderPublicKey': data.get('traderPublicKey', ''),
+                'txType': data.get('txType', ''),
             }
             
             self.logger.debug(f"Successfully created token data: {result}")

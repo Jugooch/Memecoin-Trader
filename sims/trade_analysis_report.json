@@ -1,0 +1,136 @@
+{
+  "summary": {
+    "total_trades_analyzed": 64,
+    "current_trades": 40,
+    "buffer_trades": 24,
+    "total_exit_events": 104
+  },
+  "current_strategy": {
+    "strategy": "CURRENT",
+    "total_trades": 40,
+    "total_pnl_usd": -181.42,
+    "total_pnl_pct": -604.7,
+    "avg_pnl_pct": -15.12,
+    "wins": 7,
+    "losses": 33,
+    "breakeven": 0,
+    "win_rate": 17.5,
+    "avg_win_pct": 8.77,
+    "avg_loss_pct": -20.18,
+    "profit_factor": 0.09,
+    "avg_peak_gain": 15.24,
+    "max_peak_gain": 94.7,
+    "avg_missed_gain": 30.36,
+    "exit_reasons": {
+      "Stop Loss": 21,
+      "Trailing Stop": 18,
+      "Profit Protection": 1
+    },
+    "tp1_hits": 20,
+    "tp2_hits": 6,
+    "tp3_hits": 1,
+    "tp_hit_rate": 22.5,
+    "avg_hold_time_minutes": 0.53,
+    "max_win_pct": 13.8,
+    "max_loss_pct": -37.8,
+    "max_win_usd": 4.15,
+    "max_loss_usd": -11.33
+  },
+  "buffer_strategy": {
+    "strategy": "BUFFER",
+    "total_trades": 24,
+    "total_pnl_usd": -70.24,
+    "total_pnl_pct": -234.1,
+    "avg_pnl_pct": -9.75,
+    "wins": 7,
+    "losses": 16,
+    "breakeven": 1,
+    "win_rate": 29.2,
+    "avg_win_pct": 12.7,
+    "avg_loss_pct": -20.19,
+    "profit_factor": 0.28,
+    "avg_peak_gain": 33.29,
+    "max_peak_gain": 130.2,
+    "avg_missed_gain": 43.05,
+    "exit_reasons": {
+      "Stop Loss": 5,
+      "Trailing Stop": 13,
+      "Profit Protection": 6
+    },
+    "tp1_hits": 19,
+    "tp2_hits": 3,
+    "tp3_hits": 2,
+    "tp_hit_rate": 33.3,
+    "avg_hold_time_minutes": 0.96,
+    "max_win_pct": 27.8,
+    "max_loss_pct": -66.0,
+    "max_win_usd": 8.35,
+    "max_loss_usd": -19.81
+  },
+  "exit_event_analysis": {
+    "current": {
+      "strategy": "CURRENT",
+      "total_exits": 59,
+      "tp1_exits": 24,
+      "tp2_exits": 0,
+      "tp3_exits": 0,
+      "stop_losses": 22,
+      "trailing_stops": 12,
+      "avg_tp1_gain": 7.1,
+      "avg_tp2_gain": 0,
+      "avg_tp3_gain": 0,
+      "avg_stop_loss": -30.42,
+      "avg_trailing_stop": -12.78
+    },
+    "buffer": {
+      "strategy": "BUFFER",
+      "total_exits": 45,
+      "tp1_exits": 24,
+      "tp2_exits": 0,
+      "tp3_exits": 0,
+      "stop_losses": 5,
+      "trailing_stops": 10,
+      "avg_tp1_gain": 9.26,
+      "avg_tp2_gain": 0,
+      "avg_tp3_gain": 0,
+      "avg_stop_loss": -51.18,
+      "avg_trailing_stop": -16.78
+    }
+  },
+  "optimization_opportunities": {
+    "current_early_exits": {
+      "issue": "Exiting winning trades too early",
+      "impact": "Missing average of 30.4% gains per trade",
+      "recommendation": "Consider wider trailing stop or higher TP targets",
+      "potential_improvement": "$364.32"
+    },
+    "current_stop_losses": {
+      "issue": "High stop loss rate (52.5%)",
+      "impact": "Average loss of -20.2% when stopped",
+      "recommendation": "Consider dynamic stop loss based on volatility or support levels",
+      "potential_improvement": "Reducing stop losses by 20% could save $39.96"
+    },
+    "strategy_comparison": {
+      "current_roi": "-15.1%",
+      "buffer_roi": "-9.8%",
+      "better_strategy": "BUFFER",
+      "difference": "$111.18"
+    }
+  },
+  "recommendations": [
+    {
+      "priority": "HIGH",
+      "category": "Risk Management",
+      "recommendation": "Implement dynamic stop loss",
+      "details": "Current avg loss is -20.2%. Consider: 1) ATR-based stops, 2) Support level stops, 3) Time-based stops for high volatility periods",
+      "expected_impact": "Could reduce average loss to -15%, saving ~$51.28"
+    },
+    {
+      "priority": "MEDIUM",
+      "category": "Strategy",
+      "recommendation": "Adopt Buffer Strategy",
+      "details": "Buffer strategy shows $111.18 better performance",
+      "expected_impact": "Projected improvement of 61.3%"
+    }
+  ]
+}
