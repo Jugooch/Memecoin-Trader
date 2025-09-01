@@ -288,8 +288,12 @@ class MemecoinTradingBot:
             pumpportal_config = self.config.__dict__.get('pumpportal', {})
             if pumpportal_config.get('api_key'):
                 self.price_monitor = PumpPortalPriceMonitor(pumpportal_config, self.logger)
-                await self.price_monitor.initialize()
-                self.logger.info("✅ PumpPortal price monitor initialized")
+                success = await self.price_monitor.initialize()
+                if success:
+                    self.logger.info("✅ PumpPortal price monitor initialized successfully")
+                else:
+                    self.logger.error("❌ PumpPortal price monitor initialization failed")
+                    self.price_monitor = None
             else:
                 self.logger.warning("⚠️ PumpPortal API key not configured")
                 self.price_monitor = None
@@ -1344,18 +1348,28 @@ class MemecoinTradingBot:
         if self.price_monitor:
             # Add token to real-time monitoring
             self.price_monitor.add_token(mint_address, position.entry_price)
+            self.logger.info(f"🔍 DEBUG: Added {symbol} ({mint_address}) to price monitor")
             
             # Set up instant exit callback
             original_callback = self.price_monitor.on_price_change
             async def price_change_handler(mint: str, old_price: float, new_price: float, update):
                 try:
+                    # DEBUG: Log that we're receiving callbacks
+                    if mint == mint_address:
+                        change_pct = ((new_price - old_price) / old_price * 100) if old_price > 0 else 0
+                        self.logger.info(f"🔍 DEBUG: Price callback for {symbol}: ${old_price:.8f} → ${new_price:.8f} ({change_pct:+.2f}%)")
+                    
                     # Call original callback if it exists
                     if original_callback:
                         await original_callback(mint, old_price, new_price, update)
                     
                     # Check exit conditions instantly for our position
                     if mint == mint_address and mint_address in self.trading_engine.active_positions:
+                        self.logger.info(f"🔍 DEBUG: Checking exit conditions for {symbol} at ${new_price:.8f}")
                         await self._check_exit_conditions_instantly(mint_address, new_price, symbol)
+                    else:
+                        if mint == mint_address:
+                            self.logger.warning(f"⚠️ DEBUG: Position {symbol} not found in active positions")
                 except Exception as e:
                     self.logger.error(f"Error in price callback for {symbol}: {e}")
             
@@ -1367,9 +1381,20 @@ class MemecoinTradingBot:
             
             self.logger.info(f"⚡ Real-time price tracking started: {symbol} ({mint_address[:8]}...)")
             
+            # Heartbeat tracking
+            last_heartbeat = time.time()
+            position_start_time = time.time()
+            heartbeat_interval = 300  # 5 minutes
+            
             # Simple wait loop - real work happens in price callbacks
             while mint_address in self.trading_engine.active_positions:
                 await asyncio.sleep(30)  # Keep monitoring alive
+                
+                # Heartbeat every 5 minutes
+                current_time = time.time()
+                if current_time - last_heartbeat >= heartbeat_interval:
+                    await self._log_position_heartbeat(mint_address, symbol, position_start_time)
+                    last_heartbeat = current_time
             
             # Clean up when position closes
             self.price_monitor.remove_token(mint_address)
@@ -1414,6 +1439,43 @@ class MemecoinTradingBot:
                 self.logger.info(f"✅ INSTANT SELL: {symbol} executed successfully")
             else:
                 self.logger.error(f"❌ INSTANT SELL FAILED: {symbol} - {sell_result.get('error')}")
+    
+    async def _log_position_heartbeat(self, mint_address: str, symbol: str, start_time: float):
+        """Log position heartbeat with real-time stats"""
+        try:
+            if mint_address not in self.trading_engine.active_positions:
+                return
+            
+            position = self.trading_engine.active_positions[mint_address]
+            
+            # Calculate hold time
+            hold_time_seconds = time.time() - start_time
+            hold_time_minutes = int(hold_time_seconds / 60)
+            
+            # Get current price and calculate P&L
+            current_price = None
+            if self.price_monitor:
+                current_price = self.price_monitor.get_current_price(mint_address)
+            
+            if current_price and current_price > 0:
+                current_pnl = ((current_price / position.entry_price) - 1) * 100
+                
+                # Get price update stats from monitor
+                update_count = 0
+                if self.price_monitor:
+                    stats = self.price_monitor.get_monitoring_stats()
+                    update_count = stats.get('updates_per_token', {}).get(mint_address, 0)
+                
+                self.logger.info(
+                    f"💓 HEARTBEAT: {symbol} | Hold: {hold_time_minutes}m | "
+                    f"P&L: {current_pnl:+.1f}% | Price Updates: {update_count} | "
+                    f"Current: ${current_price:.8f} | Peak: {position.high_gain_peak:.1f}%"
+                )
+            else:
+                self.logger.warning(f"💓 HEARTBEAT: {symbol} | Hold: {hold_time_minutes}m | No price data")
+                
+        except Exception as e:
+            self.logger.error(f"Error in position heartbeat: {e}")
     
     async def _monitor_position_polling(self, mint_address: str, symbol: str):
         """Fallback polling monitoring when real-time service unavailable"""
