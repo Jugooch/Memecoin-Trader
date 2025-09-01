@@ -104,6 +104,10 @@ trading_mode: "simulation"    # Options: "simulation", "alerts", "auto"
 # alerts = Generate buy/sell alerts for manual execution  
 # auto = Fully automated trading (requires QuickNode)
 
+# Price monitoring configuration  
+# Controls how frequently we poll Moralis for price updates on active positions
+price_poll_interval: 2.0       # Seconds between price updates (2.0 = every 2 seconds)
+
 # EXPERIMENTAL: Real-time position tracking (NEW FEATURE)
 # When enabled, positions are updated immediately from WebSocket events
 # instead of waiting for blockchain polling (5-15 second improvement)

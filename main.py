@@ -28,7 +28,7 @@ from src.clients.pumpfun_client import PumpFunClient
 from src.core.wallet_tracker import WalletTracker
 from src.core.trading_engine import TradingEngine
 from src.core.database import Database
-from src.core.bitquery_position_monitor import BitqueryPositionMonitor
+from src.core.moralis_position_monitor import MoralisPositionMonitor
 from src.core.wallet_rotation_manager import WalletRotationManager
 from src.core.safety_checks import SafetyChecker
 from src.core.risk_manager import AdaptiveRiskManager
@@ -94,6 +94,7 @@ class TradingConfig:
     multi_tier_exits: Dict = None
     ultra_fast_execution: bool = False  # Skip all Moralis waits when True
     use_realtime_positions: bool = False  # Enable real-time position tracking via WebSocket
+    price_poll_interval: float = 2.0  # Seconds between price updates for Moralis polling
     # Buffer strategy configuration
     volatility_buffer: Dict = None  # Buffer strategy settings
     buffer_stop_loss_pct: float = 0.65  # 35% stop loss for buffer strategy
@@ -179,15 +180,15 @@ class MemecoinTradingBot:
     @property
     def monitored_positions(self):
         """Legacy compatibility for monitored_positions"""
-        if hasattr(self, 'bitquery_monitor'):
-            return self.bitquery_monitor.get_monitored_positions()
+        if hasattr(self, 'moralis_monitor'):
+            return self.moralis_monitor.get_monitored_positions()
         return self._monitored_positions
 
     @property 
     def price_cache(self):
         """Legacy compatibility for price_cache"""
-        if hasattr(self, 'bitquery_monitor'):
-            return self.bitquery_monitor.price_cache
+        if hasattr(self, 'moralis_monitor'):
+            return self.moralis_monitor.price_cache
         return self._price_cache
 
     def _load_config(self, config_path: str) -> TradingConfig:
@@ -254,6 +255,7 @@ class MemecoinTradingBot:
             multi_tier_exits=config_data.get('multi_tier_exits', {}),
             ultra_fast_execution=config_data.get('ultra_fast_execution', False),
             use_realtime_positions=config_data.get('use_realtime_positions', False),
+            price_poll_interval=config_data.get('price_poll_interval', 2.0),
             # Buffer strategy configuration
             volatility_buffer=config_data.get('volatility_buffer', {}),
             buffer_stop_loss_pct=config_data.get('buffer_stop_loss_pct', 0.65),
@@ -298,20 +300,20 @@ class MemecoinTradingBot:
         await self.realtime_client.initialize()
         self.logger.info(f"Realtime client initialized with source: {self.realtime_client.get_source()}")
         
-        # Initialize and start Bitquery position monitor (replaces PumpPortal price tracking)
-        self.logger.info("Initializing Bitquery position monitor...")
-        self.bitquery_monitor = BitqueryPositionMonitor(
+        # Initialize and start Moralis position monitor (replaces Bitquery WebSocket streams)
+        self.logger.info("Initializing Moralis position monitor...")
+        self.moralis_monitor = MoralisPositionMonitor(
             self.trading_engine, 
             self.config, 
-            self.realtime_client.bitquery_client  # Use existing BitqueryClient with token rotation
+            self.moralis  # Use existing MoralisClient with key rotation
         )
         
         # Legacy properties for backward compatibility
         self._monitored_positions = {}
         self._price_cache = {}
         
-        self.logger.info("Starting Bitquery position monitor...")
-        await self.bitquery_monitor.start()
+        self.logger.info("Starting Moralis position monitor...")
+        await self.moralis_monitor.start()
         
         # Start monitoring tasks
         tasks = [
@@ -1369,8 +1371,8 @@ class MemecoinTradingBot:
             self.logger.error(f"Position {mint_address} not found in trading_engine!")
             return
         
-        # Use Bitquery monitor instead of PumpPortal
-        await self.bitquery_monitor.add_position_for_monitoring(mint_address, metadata)
+        # Use Moralis monitor for position tracking
+        await self.moralis_monitor.add_position_for_monitoring(mint_address, metadata)
         
         # Wait for position to complete (the monitor handles all the real-time logic)
         while mint_address in self.trading_engine.active_positions:
@@ -1455,14 +1457,14 @@ class MemecoinTradingBot:
             try:
                 position = self.trading_engine.active_positions[mint_address]
                 
-                # Get current price - prefer Bitquery price, fallback to Moralis
+                # Get current price - prefer Moralis monitor cache, fallback to direct API
                 current_price = None
                 
-                # Try Bitquery price first (real-time)
-                if hasattr(self, 'bitquery_monitor'):
-                    current_price = self.bitquery_monitor.get_current_price(mint_address)
+                # Try Moralis monitor price first (cached from polling)
+                if hasattr(self, 'moralis_monitor'):
+                    current_price = self.moralis_monitor.get_current_price(mint_address)
                     if current_price and current_price > 0:
-                        self.logger.debug(f"Using Bitquery price for position management: ${current_price:.8f}")
+                        self.logger.debug(f"Using Moralis cached price for position management: ${current_price:.8f}")
                 
                 # Fallback to cached price if available
                 if not current_price or current_price <= 0:
@@ -1852,8 +1854,8 @@ class MemecoinTradingBot:
     
     async def _check_wallet_recycling_needs(self, active_wallet_count: int):
         """Check if we need to trigger alpha wallet discovery due to low active wallet count"""
-        min_active_threshold = 25  # Trigger recycling if we have < 25 active wallets
-        critical_threshold = 15    # Critical level for immediate action
+        min_active_threshold = 5  # Trigger recycling if we have < 5 active wallets
+        critical_threshold = 5    # Critical level for immediate action
         
         if active_wallet_count < critical_threshold:
             self.logger.warning(f"CRITICAL: Only {active_wallet_count} active alpha wallets remaining! Triggering immediate discovery...")
@@ -2014,13 +2016,13 @@ class MemecoinTradingBot:
         # Stop wallet rotation
         self.wallet_rotation_manager.stop_rotation()
         
-        # Stop Bitquery monitor
+        # Stop Moralis monitor
         try:
-            if hasattr(self, 'bitquery_monitor'):
-                await self.bitquery_monitor.stop()
-                self.logger.info("Bitquery monitor stopped")
+            if hasattr(self, 'moralis_monitor'):
+                await self.moralis_monitor.stop()
+                self.logger.info("Moralis monitor stopped")
         except Exception as e:
-            self.logger.error(f"Error stopping Bitquery monitor: {e}")
+            self.logger.error(f"Error stopping Moralis monitor: {e}")
         
         # Clean up real-time price tracking
         try:
