@@ -416,7 +416,8 @@ class MemecoinTradingBot:
                                                 await self.process_new_token(token_event)
                                     
                                     # PRICE MONITORING: Check if this trade is for one of our monitored positions
-                                    if mint and mint in self.monitored_positions:
+                                    # BUT EXCLUDE our own trades (they include fees and don't represent market price)
+                                    if mint and mint in self.monitored_positions and trader != our_wallet:
                                         # DEBUG: Log the entire event structure for our token
                                         self.logger.info(f"🔍 DEBUG: Trade event for monitored token {mint[:8]}...: {event}")
                                         
