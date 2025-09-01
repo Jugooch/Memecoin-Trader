@@ -93,47 +93,70 @@ class BitqueryPositionMonitor:
     
     async def _connect(self):
         """Establish WebSocket connection using BitqueryClient's token rotation"""
-        try:
-            # Get current token from BitqueryClient with rotation
-            token_index, api_token = self.bitquery_client._get_next_available_token()
-            if not api_token:
-                raise Exception("No available Bitquery API tokens")
-            
-            # Build WebSocket URL with current token
-            ws_url = f"wss://streaming.bitquery.io/graphql?token={api_token}"
-            
-            logger.info(f"Connecting with token #{token_index}...")
-            
-            self.websocket = await websockets.connect(
-                ws_url,
-                subprotocols=["graphql-transport-ws"],
-                additional_headers={"Content-Type": "application/json"}
-            )
-            
-            # Send connection init
-            await self.websocket.send(json.dumps({
-                "type": "connection_init",
-                "payload": {}
-            }))
-            
-            # Wait for ack
-            response = await self.websocket.recv()
-            response_data = json.loads(response)
-            
-            if response_data.get("type") != "connection_ack":
-                raise Exception(f"Connection not acknowledged: {response_data}")
-            
-            logger.info(f"✅ Bitquery WebSocket connected with token #{token_index}")
-            self.running = True
-            
-        except Exception as e:
-            logger.error(f"Failed to connect to Bitquery: {e}")
-            # Check if this is a token issue and should trigger rotation
-            error_str = str(e).lower()
-            if '402' in error_str or 'payment required' in error_str or '403' in error_str:
-                logger.warning("Connection failed due to token issue - BitqueryClient will rotate on next attempt")
-                # The BitqueryClient will handle token rotation on next call to _get_next_available_token
-            raise
+        max_retries = len(self.bitquery_client.api_tokens) if hasattr(self.bitquery_client, 'api_tokens') else 5
+        
+        for attempt in range(max_retries):
+            try:
+                # Get current token from BitqueryClient with rotation
+                token_index, api_token = self.bitquery_client._get_next_available_token()
+                if not api_token:
+                    if attempt == max_retries - 1:
+                        raise Exception("No available Bitquery API tokens after trying all")
+                    continue
+                
+                # Build WebSocket URL with current token
+                ws_url = f"wss://streaming.bitquery.io/graphql?token={api_token}"
+                
+                logger.info(f"Connecting with token #{token_index} (attempt {attempt + 1}/{max_retries})...")
+                
+                self.websocket = await websockets.connect(
+                    ws_url,
+                    subprotocols=["graphql-transport-ws"],
+                    additional_headers={"Content-Type": "application/json"}
+                )
+                
+                # Send connection init
+                await self.websocket.send(json.dumps({
+                    "type": "connection_init",
+                    "payload": {}
+                }))
+                
+                # Wait for ack
+                response = await self.websocket.recv()
+                response_data = json.loads(response)
+                
+                if response_data.get("type") != "connection_ack":
+                    raise Exception(f"Connection not acknowledged: {response_data}")
+                
+                logger.info(f"✅ Bitquery WebSocket connected with token #{token_index}")
+                self.running = True
+                return  # Success!
+                
+            except Exception as e:
+                logger.error(f"Failed to connect to Bitquery (attempt {attempt + 1}): {e}")
+                
+                # Check if this is a token issue that should trigger rotation
+                error_str = str(e).lower()
+                if '402' in error_str or 'payment required' in error_str or '403' in error_str or 'forbidden' in error_str:
+                    logger.warning(f"Token #{token_index} has payment/auth issues, marking and trying next...")
+                    # Mark this token as having issues in the BitqueryClient
+                    if hasattr(self.bitquery_client, 'token_stats') and token_index is not None:
+                        if '402' in error_str or 'payment required' in error_str:
+                            self.bitquery_client.token_stats[token_index]['payment_required'] = True
+                        elif '403' in error_str or 'forbidden' in error_str:
+                            self.bitquery_client.token_stats[token_index]['forbidden'] = True
+                    
+                    # Try next token immediately
+                    continue
+                else:
+                    # Non-token error - wait a bit before retrying
+                    if attempt < max_retries - 1:
+                        logger.info(f"Non-token error, waiting 2s before retry...")
+                        await asyncio.sleep(2)
+                    continue
+        
+        # If we get here, all attempts failed
+        raise Exception(f"Failed to connect to Bitquery after {max_retries} attempts with different tokens")
     
     async def add_position_for_monitoring(self, mint_address: str, metadata: Dict = None):
         """
