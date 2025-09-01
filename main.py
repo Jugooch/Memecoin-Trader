@@ -417,8 +417,14 @@ class MemecoinTradingBot:
                                     
                                     # PRICE MONITORING: Check if this trade is for one of our monitored positions
                                     if mint and mint in self.monitored_positions:
+                                        # DEBUG: Log the entire event structure for our token
+                                        self.logger.info(f"🔍 DEBUG: Trade event for monitored token {mint[:8]}...: {event}")
+                                        
                                         sol_amount = event.get('sol_amount', 0) 
                                         token_amount = event.get('token_amount', 0)
+                                        
+                                        # DEBUG: Log the amounts we extracted
+                                        self.logger.info(f"🔍 DEBUG: Extracted amounts - SOL: {sol_amount}, Tokens: {token_amount}")
                                         
                                         if sol_amount > 0 and token_amount > 0:
                                             # Calculate price from this trade
@@ -1371,6 +1377,7 @@ class MemecoinTradingBot:
         self.price_cache[mint_address] = position.entry_price
         
         self.logger.info(f"⚡ Real-time price tracking started: {symbol} ({mint_address[:8]}...) - using main stream")
+        self.logger.info(f"🔍 DEBUG: Added to monitored_positions - mint: {mint_address}, symbol: {symbol}")
         
         # Heartbeat tracking  
         last_heartbeat = time.time()
