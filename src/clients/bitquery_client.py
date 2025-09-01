@@ -148,7 +148,6 @@ class BitqueryClient:
         
         # Required headers (only these two)
         headers = {
-            "Sec-WebSocket-Protocol": "graphql-ws",
             "Content-Type": "application/json"
         }
         

@@ -28,6 +28,7 @@ from src.clients.pumpfun_client import PumpFunClient
 from src.core.wallet_tracker import WalletTracker
 from src.core.trading_engine import TradingEngine
 from src.core.database import Database
+from src.core.bitquery_position_monitor import BitqueryPositionMonitor
 from src.core.wallet_rotation_manager import WalletRotationManager
 from src.core.safety_checks import SafetyChecker
 from src.core.risk_manager import AdaptiveRiskManager
@@ -175,6 +176,20 @@ class MemecoinTradingBot:
         }
         self.last_token_cleanup = time.time()
 
+    @property
+    def monitored_positions(self):
+        """Legacy compatibility for monitored_positions"""
+        if hasattr(self, 'bitquery_monitor'):
+            return self.bitquery_monitor.get_monitored_positions()
+        return self._monitored_positions
+
+    @property 
+    def price_cache(self):
+        """Legacy compatibility for price_cache"""
+        if hasattr(self, 'bitquery_monitor'):
+            return self.bitquery_monitor.price_cache
+        return self._price_cache
+
     def _load_config(self, config_path: str) -> TradingConfig:
         # Use shared config loader
         config_data = load_config(config_path)
@@ -283,9 +298,20 @@ class MemecoinTradingBot:
         await self.realtime_client.initialize()
         self.logger.info(f"Realtime client initialized with source: {self.realtime_client.get_source()}")
         
-        # Real-time price tracking - use existing main PumpPortal stream
-        self.monitored_positions = {}  # mint_address -> {'symbol': str, 'entry_price': float, 'callback': callable}
-        self.price_cache = {}  # mint_address -> current_price
+        # Initialize and start Bitquery position monitor (replaces PumpPortal price tracking)
+        self.logger.info("Initializing Bitquery position monitor...")
+        self.bitquery_monitor = BitqueryPositionMonitor(
+            self.trading_engine, 
+            self.config, 
+            self.config.bitquery_token
+        )
+        
+        # Legacy properties for backward compatibility
+        self._monitored_positions = {}
+        self._price_cache = {}
+        
+        self.logger.info("Starting Bitquery position monitor...")
+        await self.bitquery_monitor.start()
         
         # Start monitoring tasks
         tasks = [
@@ -431,12 +457,19 @@ class MemecoinTradingBot:
                                         self.logger.info(f"🔍 DEBUG: Extracted amounts - SOL: {sol_amount}, Tokens: {token_amount} (from buy_amount: {buy_amount}, sell_amount: {sell_amount})")
                                         
                                         if sol_amount > 0 and token_amount > 0:
+                                            # DEBUG: Log the raw calculation
+                                            self.logger.info(f"🔍 DEBUG: Raw price calculation - SOL: {sol_amount}, Tokens: {token_amount}")
+                                            self.logger.info(f"🔍 DEBUG: Division: {sol_amount} / {token_amount} = {sol_amount / token_amount}")
+                                            
                                             # Calculate price from this trade
                                             trade_price = sol_amount / token_amount
                                             old_price = self.price_cache.get(mint, 0.0)
                                             
-                                            # Update price cache
-                                            self.price_cache[mint] = trade_price
+                                            # DEBUG: Log the comparison
+                                            self.logger.info(f"🔍 DEBUG: Old cached price: {old_price}, New calculated price: {trade_price}")
+                                            
+                                            # Update price cache (legacy - now handled by Bitquery)
+                                            # self.price_cache[mint] = trade_price
                                             
                                             # Calculate change percentage
                                             change_pct = ((trade_price - old_price) / old_price * 100) if old_price > 0 else 0
@@ -451,10 +484,10 @@ class MemecoinTradingBot:
                                             if abs(change_pct) >= 5.0:
                                                 self.logger.info(f"📈 MAJOR PRICE MOVE: {symbol} ${old_price:.8f} → ${trade_price:.8f} ({change_pct:+.2f}%)")
                                             
-                                            # Check exit conditions instantly
-                                            if mint in self.trading_engine.active_positions:
-                                                self.logger.info(f"🔍 DEBUG: Checking exit conditions for {symbol} at ${trade_price:.8f}")
-                                                await self._check_exit_conditions_instantly(mint, trade_price, symbol)
+                                            # Check exit conditions instantly (legacy - now handled by Bitquery)
+                                            # if mint in self.trading_engine.active_positions:
+                                            #     self.logger.info(f"🔍 DEBUG: Checking exit conditions for {symbol} at ${trade_price:.8f}")
+                                            #     await self._check_exit_conditions_instantly(mint, trade_price, symbol)
                                     
                                     else:
                                         # Log non-alpha trades for debugging (limited)
@@ -1357,50 +1390,20 @@ class MemecoinTradingBot:
         self.logger.error(f"❌ This usually means QuickNode verification failed")
 
     async def monitor_position(self, mint_address: str, entry_data: Dict, metadata: Dict = None):
-        """Monitor position using sophisticated exit strategy from trading_engine"""
+        """Monitor position using Bitquery real-time price monitoring"""
         symbol = metadata.get('symbol', 'UNKNOWN') if metadata else 'UNKNOWN'
         
         # Ensure position exists in trading_engine
         if mint_address not in self.trading_engine.active_positions:
             self.logger.error(f"Position {mint_address} not found in trading_engine!")
             return
-            
-        position = self.trading_engine.active_positions[mint_address]
         
-        self.logger.info(f"🎯 SMART MONITORING {mint_address[:8]}... "
-                        f"Entry: ${position.entry_price:.8f}, "
-                        f"TP: ${position.tp_price:.8f}, "
-                        f"SL: ${position.sl_price:.8f}")
+        # Use Bitquery monitor instead of PumpPortal
+        await self.bitquery_monitor.add_position_for_monitoring(mint_address, metadata)
         
-        # Add to monitored positions (uses existing main PumpPortal stream)
-        self.monitored_positions[mint_address] = {
-            'symbol': symbol,
-            'entry_price': position.entry_price,
-            'start_time': time.time()
-        }
-        self.price_cache[mint_address] = position.entry_price
-        
-        self.logger.info(f"⚡ Real-time price tracking started: {symbol} ({mint_address[:8]}...) - using main stream")
-        self.logger.info(f"🔍 DEBUG: Added to monitored_positions - mint: {mint_address}, symbol: {symbol}")
-        
-        # Heartbeat tracking  
-        last_heartbeat = time.time()
-        heartbeat_interval = 300  # 5 minutes
-        
-        # Simple wait loop - real work happens in the main PumpPortal event handler
+        # Wait for position to complete (the monitor handles all the real-time logic)
         while mint_address in self.trading_engine.active_positions:
-            await asyncio.sleep(30)  # Keep monitoring alive
-            
-            # Heartbeat every 5 minutes
-            current_time = time.time()
-            if current_time - last_heartbeat >= heartbeat_interval:
-                await self._log_position_heartbeat(mint_address, symbol, self.monitored_positions[mint_address]['start_time'])
-                last_heartbeat = current_time
-        
-        # Clean up when position closes
-        self.monitored_positions.pop(mint_address, None)
-        self.price_cache.pop(mint_address, None)
-        self.logger.info(f"🔕 Real-time price tracking stopped: {symbol}")
+            await asyncio.sleep(30)  # Keep function alive while position is active
         
         self.logger.info(f"🏁 Position monitoring ended for {mint_address[:8]}...")
     
@@ -1481,10 +1484,20 @@ class MemecoinTradingBot:
             try:
                 position = self.trading_engine.active_positions[mint_address]
                 
-                # Get current price - prefer cached price from main stream, fallback to Moralis  
-                current_price = self.price_cache.get(mint_address)
+                # Get current price - prefer Bitquery price, fallback to Moralis
+                current_price = None
                 
-                # Fallback to Moralis if real-time price not available
+                # Try Bitquery price first (real-time)
+                if hasattr(self, 'bitquery_monitor'):
+                    current_price = self.bitquery_monitor.get_current_price(mint_address)
+                    if current_price and current_price > 0:
+                        self.logger.debug(f"Using Bitquery price for position management: ${current_price:.8f}")
+                
+                # Fallback to cached price if available
+                if not current_price or current_price <= 0:
+                    current_price = self.price_cache.get(mint_address)
+                
+                # Final fallback to Moralis if real-time price not available
                 if current_price is None or current_price <= 0:
                     current_price = await self.moralis.get_current_price(mint_address, fresh=True)
                 
@@ -2030,10 +2043,20 @@ class MemecoinTradingBot:
         # Stop wallet rotation
         self.wallet_rotation_manager.stop_rotation()
         
+        # Stop Bitquery monitor
+        try:
+            if hasattr(self, 'bitquery_monitor'):
+                await self.bitquery_monitor.stop()
+                self.logger.info("Bitquery monitor stopped")
+        except Exception as e:
+            self.logger.error(f"Error stopping Bitquery monitor: {e}")
+        
         # Clean up real-time price tracking
         try:
-            self.monitored_positions.clear()
-            self.price_cache.clear()
+            if hasattr(self, '_monitored_positions'):
+                self._monitored_positions.clear()
+            if hasattr(self, '_price_cache'):
+                self._price_cache.clear()
         except Exception as e:
             self.logger.error(f"Error cleaning up price tracking: {e}")
         
