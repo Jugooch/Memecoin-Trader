@@ -168,7 +168,7 @@ class BitqueryPositionMonitor:
             token_address=mint_address,
             symbol=symbol,
             entry_price=position.entry_price,
-            quantity=position.quantity,
+            quantity=position.amount,
             take_profit=position.tp_price,
             stop_loss=position.sl_price,
             side='long'  # Assuming long positions for now
@@ -312,6 +312,10 @@ class BitqueryPositionMonitor:
     
     async def _handle_price_message(self, msg_data):
         """Handle incoming price update message"""
+        if not msg_data:
+            logger.warning("Received None message data")
+            return
+            
         payload = msg_data.get("payload", {})
         data = payload.get("data", {})
         pairs = (data.get("Trading") or {}).get("Pairs", [])

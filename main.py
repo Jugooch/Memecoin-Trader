@@ -456,38 +456,9 @@ class MemecoinTradingBot:
                                         # DEBUG: Log the amounts we extracted
                                         self.logger.info(f"🔍 DEBUG: Extracted amounts - SOL: {sol_amount}, Tokens: {token_amount} (from buy_amount: {buy_amount}, sell_amount: {sell_amount})")
                                         
-                                        if sol_amount > 0 and token_amount > 0:
-                                            # DEBUG: Log the raw calculation
-                                            self.logger.info(f"🔍 DEBUG: Raw price calculation - SOL: {sol_amount}, Tokens: {token_amount}")
-                                            self.logger.info(f"🔍 DEBUG: Division: {sol_amount} / {token_amount} = {sol_amount / token_amount}")
-                                            
-                                            # Calculate price from this trade
-                                            trade_price = sol_amount / token_amount
-                                            old_price = self.price_cache.get(mint, 0.0)
-                                            
-                                            # DEBUG: Log the comparison
-                                            self.logger.info(f"🔍 DEBUG: Old cached price: {old_price}, New calculated price: {trade_price}")
-                                            
-                                            # Update price cache (legacy - now handled by Bitquery)
-                                            # self.price_cache[mint] = trade_price
-                                            
-                                            # Calculate change percentage
-                                            change_pct = ((trade_price - old_price) / old_price * 100) if old_price > 0 else 0
-                                            
-                                            symbol = self.monitored_positions[mint]['symbol']
-                                            
-                                            # DEBUG: Show we're getting price updates
-                                            if abs(change_pct) >= 0.1:  # Any meaningful change
-                                                self.logger.info(f"🔍 DEBUG: Price callback for {symbol}: ${old_price:.8f} → ${trade_price:.8f} ({change_pct:+.2f}%)")
-                                            
-                                            # Log major moves only (to avoid spam)
-                                            if abs(change_pct) >= 5.0:
-                                                self.logger.info(f"📈 MAJOR PRICE MOVE: {symbol} ${old_price:.8f} → ${trade_price:.8f} ({change_pct:+.2f}%)")
-                                            
-                                            # Check exit conditions instantly (legacy - now handled by Bitquery)
-                                            # if mint in self.trading_engine.active_positions:
-                                            #     self.logger.info(f"🔍 DEBUG: Checking exit conditions for {symbol} at ${trade_price:.8f}")
-                                            #     await self._check_exit_conditions_instantly(mint, trade_price, symbol)
+                                        # Legacy price calculation disabled - now handled by Bitquery
+                                        # Individual trade prices are not representative of true market price
+                                        # due to slippage and trade size variations
                                     
                                     else:
                                         # Log non-alpha trades for debugging (limited)
