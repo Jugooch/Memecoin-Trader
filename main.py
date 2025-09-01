@@ -421,10 +421,13 @@ class MemecoinTradingBot:
                                         self.logger.info(f"🔍 DEBUG: Trade event for monitored token {mint[:8]}...: {event}")
                                         
                                         sol_amount = event.get('sol_amount', 0) 
-                                        token_amount = event.get('token_amount', 0)
+                                        # Use buy_amount for buys, sell_amount for sells (this is the token amount)
+                                        buy_amount = event.get('buy_amount', 0)
+                                        sell_amount = event.get('sell_amount', 0) 
+                                        token_amount = buy_amount if buy_amount > 0 else sell_amount
                                         
                                         # DEBUG: Log the amounts we extracted
-                                        self.logger.info(f"🔍 DEBUG: Extracted amounts - SOL: {sol_amount}, Tokens: {token_amount}")
+                                        self.logger.info(f"🔍 DEBUG: Extracted amounts - SOL: {sol_amount}, Tokens: {token_amount} (from buy_amount: {buy_amount}, sell_amount: {sell_amount})")
                                         
                                         if sol_amount > 0 and token_amount > 0:
                                             # Calculate price from this trade
