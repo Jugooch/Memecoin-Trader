@@ -303,7 +303,7 @@ class MemecoinTradingBot:
         self.bitquery_monitor = BitqueryPositionMonitor(
             self.trading_engine, 
             self.config, 
-            self.config.bitquery_token
+            self.realtime_client.bitquery_client  # Use existing BitqueryClient with token rotation
         )
         
         # Legacy properties for backward compatibility

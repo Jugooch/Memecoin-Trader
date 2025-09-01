@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 import websockets
-from typing import Dict, List, Callable, Optional
+from typing import Dict, Callable, Optional
 from datetime import datetime
 from dataclasses import dataclass
 import time
@@ -46,29 +46,23 @@ class BitqueryPositionMonitor:
     All-in-one solution with direct WebSocket connection
     """
     
-    def __init__(self, trading_engine, config, bitquery_tokens: List[str]):
+    def __init__(self, trading_engine, config, bitquery_client):
         """
         Initialize monitor with trading engine integration
         
         Args:
             trading_engine: The bot's trading engine
             config: Bot configuration
-            bitquery_tokens: List of Bitquery API tokens
+            bitquery_client: Existing BitqueryClient with token rotation
         """
         self.trading_engine = trading_engine
         self.config = config
+        self.bitquery_client = bitquery_client
         
-        # Find a working token (use #6 based on our tests)
-        if len(bitquery_tokens) > 6:
-            self.api_token = bitquery_tokens[6]
-        else:
-            self.api_token = bitquery_tokens[0] if bitquery_tokens else None
+        if not self.bitquery_client:
+            raise ValueError("BitqueryClient is required for position monitoring")
             
-        if not self.api_token:
-            raise ValueError("No Bitquery API tokens available")
-            
-        # WebSocket connection
-        self.ws_url = f"wss://streaming.bitquery.io/graphql?token={self.api_token}"
+        # WebSocket connection will be handled by BitqueryClient with token rotation
         self.websocket = None
         self.running = False
         
@@ -98,11 +92,20 @@ class BitqueryPositionMonitor:
         logger.info("🎯 Bitquery position monitor started")
     
     async def _connect(self):
-        """Establish WebSocket connection with proper protocol"""
+        """Establish WebSocket connection using BitqueryClient's token rotation"""
         try:
-            # Use the working configuration from our tests
+            # Get current token from BitqueryClient with rotation
+            token_index, api_token = self.bitquery_client._get_next_available_token()
+            if not api_token:
+                raise Exception("No available Bitquery API tokens")
+            
+            # Build WebSocket URL with current token
+            ws_url = f"wss://streaming.bitquery.io/graphql?token={api_token}"
+            
+            logger.info(f"Connecting with token #{token_index}...")
+            
             self.websocket = await websockets.connect(
-                self.ws_url,
+                ws_url,
                 subprotocols=["graphql-transport-ws"],
                 additional_headers={"Content-Type": "application/json"}
             )
@@ -120,11 +123,16 @@ class BitqueryPositionMonitor:
             if response_data.get("type") != "connection_ack":
                 raise Exception(f"Connection not acknowledged: {response_data}")
             
-            logger.info("✅ Bitquery WebSocket connected and acknowledged")
+            logger.info(f"✅ Bitquery WebSocket connected with token #{token_index}")
             self.running = True
             
         except Exception as e:
             logger.error(f"Failed to connect to Bitquery: {e}")
+            # Check if this is a token issue and should trigger rotation
+            error_str = str(e).lower()
+            if '402' in error_str or 'payment required' in error_str or '403' in error_str:
+                logger.warning("Connection failed due to token issue - BitqueryClient will rotate on next attempt")
+                # The BitqueryClient will handle token rotation on next call to _get_next_available_token
             raise
     
     async def add_position_for_monitoring(self, mint_address: str, metadata: Dict = None):
@@ -303,12 +311,22 @@ class BitqueryPositionMonitor:
                     # Send pong
                     await self.websocket.send(json.dumps({"type": "pong"}))
                     
-            except websockets.exceptions.ConnectionClosed:
-                logger.warning("Bitquery WebSocket connection closed, reconnecting...")
+            except websockets.exceptions.ConnectionClosed as e:
+                logger.warning(f"Bitquery WebSocket connection closed: {e}")
+                # Check if this is due to token issues
+                error_str = str(e).lower()
+                if '402' in error_str or 'payment required' in error_str or '403' in error_str:
+                    logger.warning("Connection closed due to token issue - will try with rotated token")
                 await self._reconnect()
             except Exception as e:
                 logger.error(f"Error in Bitquery listen loop: {e}")
-                await asyncio.sleep(1)
+                # Check if this is a token-related error
+                error_str = str(e).lower()
+                if '402' in error_str or 'payment required' in error_str or '403' in error_str or 'forbidden' in error_str:
+                    logger.warning("API error indicates token issue - will reconnect with rotated token")
+                    await self._reconnect()
+                else:
+                    await asyncio.sleep(1)
     
     async def _handle_price_message(self, msg_data):
         """Handle incoming price update message"""
