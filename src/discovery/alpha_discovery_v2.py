@@ -72,8 +72,13 @@ class ProvenAlphaFinder:
             'tier_3': 4       # Emerging wallets: 4+ low success tokens
         })
         
+        # Get additional discovery configs
+        self.max_moralis_tokens = api_opt.get('discovery_max_moralis_tokens', 30)
+        self.bitquery_success_threshold = api_opt.get('discovery_bitquery_success_threshold', 30)
+        
         self.logger.info(f"Discovery config loaded: thresholds={self.success_thresholds}, "
-                        f"early_window={self.early_window_seconds}s, appearances={self.min_wallet_appearances}")
+                        f"early_window={self.early_window_seconds}s, appearances={self.min_wallet_appearances}, "
+                        f"max_moralis={self.max_moralis_tokens}, bitquery_threshold={self.bitquery_success_threshold}")
         
     async def discover_alpha_wallets(self) -> List[str]:
         """Optimized discovery process - Bitquery-first approach with comprehensive diagnostics"""
@@ -112,7 +117,8 @@ class ProvenAlphaFinder:
         self.logger.info(f"✅ Prefilter completed in {prefilter_time:.1f}s: {len(promising_tokens)} promising ({prefilter_rate:.1f}%)")
         
         # Step 3: Validate with Moralis (limit to reasonable number)
-        top_k = min(30, len(promising_tokens))  # Reduced to 30 for better performance
+        # Use config value for max Moralis tokens
+        top_k = min(self.max_moralis_tokens, len(promising_tokens))
         validated_tokens = []
         
         if top_k > 0:
@@ -462,6 +468,8 @@ class ProvenAlphaFinder:
             success_tier = None
             score = 0
             
+            # Use the threshold from config (loaded in __init__)
+            
             # PRICE-BASED TIERS (if available)
             if performance_multiplier is not None:
                 if performance_multiplier >= 2.0:
@@ -516,8 +524,9 @@ class ProvenAlphaFinder:
             token_data['bitquery_success_score'] = score
             token_data['success_tier'] = success_tier
             
-            # Include tokens that have a tier (price-based or activity-based)
-            if success_tier is not None:
+            # Include tokens that have a tier AND meet the threshold score
+            # Use the config threshold to filter tokens
+            if success_tier is not None and score >= self.bitquery_success_threshold:
                 promising_tokens.append(token_data)
                 price_str = f"{performance_multiplier:.2f}x" if performance_multiplier else "no_price"
                 self.logger.debug(f"Token {mint[:8]}... promising: score={score}, "
