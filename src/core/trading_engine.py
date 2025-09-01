@@ -1042,6 +1042,19 @@ class TradingEngine:
             if current_price <= 0:
                 current_price = position.entry_price
             
+            # Smart token availability check for high-risk sells
+            if await self._should_check_token_availability(mint_address, position, exit_reason):
+                availability_result = await self._smart_availability_check(mint_address, int(conservative_sell_amount))
+                
+                if not availability_result['available'] and availability_result['confidence'] in ['high', 'medium']:
+                    # High confidence tokens aren't available - trigger smart retry
+                    self.logger.warning(f"🔍 Tokens not available ({availability_result['balance']} < {conservative_sell_amount:.0f}) - triggering smart retry")
+                    retry_result = await self._smart_sell_retry(mint_address, symbol, exit_reason)
+                    return retry_result
+                elif not availability_result['available']:
+                    # Low confidence - proceed but expect potential failure
+                    self.logger.warning(f"❓ Uncertain token availability - proceeding with sell attempt")
+            
             # Create sell transaction
             self.logger.info(f"Creating live sell transaction: {percentage*100:.0f}% of {symbol} position ({tokens_to_sell:.2f} tokens)")
             
@@ -1258,6 +1271,8 @@ class TradingEngine:
                 
                 # For NotEnoughTokensToSell on recent buys, it's likely an indexing delay
                 if ('NotEnoughTokensToSell' in error_msg or '0x1787' in error_msg) and buy_age < 120:
+                    # Record this failure for future availability checks
+                    self._record_sell_failure(mint_address, 'NotEnoughTokensToSell')
                     self.logger.warning(f"🕐 INDEXING DELAY - {symbol}: Buy is {buy_age:.0f}s old, retrying with smart evaluation")
                     retry_result = await self._smart_sell_retry(
                         mint_address, symbol, exit_reason
@@ -2731,3 +2746,96 @@ class TradingEngine:
         await self.pumpfun.close()
         await self.moralis.close()
         await self.pool_calculator.close()
+
+    async def _should_check_token_availability(self, mint_address: str, position: Position, exit_reason: str) -> bool:
+        """
+        Determine if we need to check token availability based on risk factors.
+        Only check when there's high risk of indexing delays.
+        """
+        hold_time_seconds = (datetime.now() - position.entry_time).total_seconds()
+        
+        # 1. Very fresh position (high indexing delay risk)
+        if hold_time_seconds < 30:
+            self.logger.debug(f"🔍 Checking availability: Fresh position ({hold_time_seconds:.0f}s old)")
+            return True
+            
+        # 2. Take profit on fast-moving tokens (hit TP very quickly)
+        if exit_reason.startswith("take_profit") and hold_time_seconds < 60:
+            self.logger.debug(f"🔍 Checking availability: Fast TP trigger ({hold_time_seconds:.0f}s)")
+            return True
+            
+        # 3. Position was created from simulation data (not verified from blockchain)
+        if hasattr(position, 'verified_from_blockchain') and not position.verified_from_blockchain:
+            self.logger.debug(f"🔍 Checking availability: Unverified position")
+            return True
+            
+        # 4. Previous sell failures on this token
+        if self._has_recent_sell_failures(mint_address):
+            self.logger.debug(f"🔍 Checking availability: Recent sell failures")
+            return True
+            
+        # Low risk - skip availability check for speed
+        return False
+
+    async def _smart_availability_check(self, mint_address: str, expected_amount: int) -> Dict:
+        """
+        Multi-tier availability check with intelligent fallbacks.
+        Returns: {'available': bool, 'confidence': str, 'balance': int}
+        """
+        # Tier 1: Quick primary check (500ms timeout)
+        try:
+            balance = await asyncio.wait_for(
+                self.transaction_signer.get_token_balance(mint_address),
+                timeout=0.5
+            )
+            if balance >= expected_amount:
+                return {'available': True, 'confidence': 'high', 'balance': balance}
+            elif balance is not None:
+                return {'available': False, 'confidence': 'high', 'balance': balance}
+        except asyncio.TimeoutError:
+            self.logger.warning("⏱️ Primary balance check timed out")
+        except Exception as e:
+            self.logger.debug(f"⚠️ Primary balance check failed: {e}")
+        
+        # Tier 2: Fallback to a simple existence check
+        try:
+            balance = await asyncio.wait_for(
+                self.transaction_signer.get_token_balance(mint_address),
+                timeout=1.0
+            )
+            if balance is not None and balance >= expected_amount:
+                return {'available': True, 'confidence': 'medium', 'balance': balance}
+            elif balance is not None:
+                return {'available': False, 'confidence': 'medium', 'balance': balance}
+        except Exception as e:
+            self.logger.warning(f"⚠️ All balance checks failed: {e}")
+        
+        # If all checks fail, assume NOT available (safer than assuming available)
+        return {'available': False, 'confidence': 'none', 'balance': 0}
+
+    def _has_recent_sell_failures(self, mint_address: str) -> bool:
+        """Track tokens that have had recent sell failures"""
+        if not hasattr(self, '_sell_failure_cache'):
+            self._sell_failure_cache = {}
+            
+        failure_record = self._sell_failure_cache.get(mint_address)
+        if not failure_record:
+            return False
+            
+        # Consider failures in last 5 minutes as "recent"
+        recent_failures = [f for f in failure_record if (datetime.now() - f).total_seconds() < 300]
+        return len(recent_failures) > 0
+
+    def _record_sell_failure(self, mint_address: str, error_type: str):
+        """Record sell failure for this token"""
+        if not hasattr(self, '_sell_failure_cache'):
+            self._sell_failure_cache = {}
+            
+        if mint_address not in self._sell_failure_cache:
+            self._sell_failure_cache[mint_address] = []
+            
+        self._sell_failure_cache[mint_address].append(datetime.now())
+        
+        # Only keep last 10 failures to prevent memory bloat
+        if len(self._sell_failure_cache[mint_address]) > 10:
+            self._sell_failure_cache[mint_address] = self._sell_failure_cache[mint_address][-10:]

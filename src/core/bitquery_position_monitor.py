@@ -425,7 +425,7 @@ class BitqueryPositionMonitor:
         await self._maybe_log_heartbeat(mint_address, symbol)
     
     async def _check_tp_sl(self, price_update: PriceUpdate):
-        """Check if price update triggers TP or SL"""
+        """Check if price update triggers TP or SL but respect buffer periods"""
         token_address = price_update.token_address
         
         if token_address not in self.tp_sl_positions:
@@ -433,6 +433,14 @@ class BitqueryPositionMonitor:
         
         position = self.tp_sl_positions[token_address]
         current_price = price_update.close
+        
+        # CRITICAL FIX: Check if trading engine position is in buffer period
+        if token_address in self.trading_engine.active_positions:
+            trading_position = self.trading_engine.active_positions[token_address]
+            if trading_position.buffer_end_time and datetime.now() < trading_position.buffer_end_time:
+                time_remaining = (trading_position.buffer_end_time - datetime.now()).total_seconds()
+                logger.debug(f"🛡️ BITQUERY: Skipping TP/SL check for {position.symbol} - buffer period active ({time_remaining:.0f}s remaining)")
+                return  # Skip TP/SL during buffer period
         
         # Check for TP/SL trigger
         triggered = False
