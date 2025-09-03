@@ -1115,11 +1115,24 @@ class TradingEngine:
             
             # Prevent race conditions - check if position is already being sold
             if hasattr(position, 'is_selling') and position.is_selling:
-                self.logger.warning(f"🔒 Sell blocked - {actual_symbol} position already being sold")
-                return {"success": False, "error": "Position already being sold"}
+                # Check if selling flag is stuck (over 60 seconds)
+                if hasattr(position, 'selling_started_time'):
+                    time_since_sell_start = (datetime.now() - position.selling_started_time).total_seconds()
+                    if time_since_sell_start > 60:  # 60 second timeout
+                        self.logger.warning(f"⚠️ STUCK SELL FLAG: Resetting {actual_symbol} after {time_since_sell_start:.0f}s")
+                        position.is_selling = False
+                        delattr(position, 'selling_started_time')
+                    else:
+                        self.logger.warning(f"🔒 Sell blocked - {actual_symbol} position already being sold ({time_since_sell_start:.0f}s ago)")
+                        return {"success": False, "error": "Position already being sold"}
+                else:
+                    # No timestamp - assume it's stuck, reset it
+                    self.logger.warning(f"⚠️ STUCK SELL FLAG: Resetting {actual_symbol} (no timestamp)")
+                    position.is_selling = False
             
             # Mark as selling to prevent concurrent sells
             position.is_selling = True
+            position.selling_started_time = datetime.now()  # Track when selling started
             
             # Check if we have transaction signer
             if not self.transaction_signer:
@@ -2925,14 +2938,79 @@ class TradingEngine:
                             position.amount = actual_balance
                             tokens_to_sell = actual_balance * percentage
                         
-                        # Try the actual sell
-                        result = await self._execute_sell_transaction(
+                        # Try the actual sell - use simplified transaction execution
+                        tx_result = await self._execute_sell_transaction(
                             mint_address, tokens_to_sell, percentage, symbol, exit_reason, current_price
                         )
                         
-                        if result.get('success'):
+                        if tx_result.get('success'):
                             self.logger.info(f"✅ Smart retry {retry_attempt + 1} SUCCESS: {exit_reason} executed!")
-                            return result
+                            
+                            # PROCESS THE SELL LIKE NORMAL SELL FLOW (lines 1377-1404 in normal sell)
+                            tx_signature = tx_result.get('tx_signature')
+                            
+                            # Calculate P&L (simplified version of normal sell logic)
+                            usd_value = tokens_to_sell * current_price
+                            cost_basis = (position.cost_usd_remaining or position.sol_invested) * percentage if percentage < 1 else (position.cost_usd_remaining or position.sol_invested)
+                            profit_usd = usd_value - cost_basis
+                            profit_pct = (profit_usd / cost_basis) * 100 if cost_basis > 0 else 0
+                            
+                            self.logger.info(f"📊 Smart retry P&L: ${cost_basis:.2f} cost → ${usd_value:.2f} received = ${profit_usd:+.2f} ({profit_pct:+.1f}%)")
+                            
+                            # Update position (like normal sell flow)
+                            if percentage >= 0.99:  # Full sell
+                                if mint_address in self.active_positions:
+                                    del self.active_positions[mint_address]
+                                    self.logger.info(f"✅ Position fully closed: {symbol}")
+                            else:  # Partial sell
+                                position.amount -= tokens_to_sell
+                                position.cost_usd_remaining -= cost_basis
+                                position.avg_cost_per_token = position.cost_usd_remaining / position.amount if position.amount > 0 else 0
+                                self.logger.info(f"📊 Partial sell: {position.amount:.0f} tokens remaining")
+                            
+                            # Record in P&L store (like normal sell flow)
+                            self.pnl_store.add_trade(
+                                action="SELL",
+                                symbol=symbol,
+                                mint_address=mint_address,
+                                amount=tokens_to_sell,
+                                price=current_price,
+                                usd_value=usd_value,
+                                realized_pnl=profit_usd,
+                                paper_mode=False
+                            )
+                            
+                            # Send Discord notification (like normal sell flow)
+                            if self.notifier:
+                                await self.notifier.send_trade_notification(
+                                    side="SELL",
+                                    symbol=symbol,
+                                    mint_address=mint_address,
+                                    quantity=tokens_to_sell,
+                                    price=current_price,
+                                    usd_amount=usd_value,
+                                    equity=self.pnl_store.current_equity,
+                                    realized_pnl=profit_usd,
+                                    paper_mode=False
+                                )
+                            
+                            # Reset selling flag and timestamp
+                            position.is_selling = False
+                            if hasattr(position, 'selling_started_time'):
+                                delattr(position, 'selling_started_time')
+                            
+                            return {
+                                "success": True,
+                                "tx_signature": tx_signature,
+                                "tokens_sold": tokens_to_sell,
+                                "exit_reason": exit_reason,
+                                "price": current_price,
+                                "usd_value": usd_value,
+                                "profit": profit_usd,
+                                "profit_pct": profit_pct,
+                                "realized_pnl": profit_usd,
+                                "paper_mode": False
+                            }
                         else:
                             retry_error = result.get('error', '')
                             self.logger.warning(f"🔄 Smart retry {retry_attempt + 1} failed: {retry_error}")
@@ -2959,7 +3037,10 @@ class TradingEngine:
                 del self.active_positions[mint_address]
             return {"success": False, "error": "ghost_position_removed", "ghost_position": True}
         
+        # CRITICAL: Always reset selling flag and clear timestamp
         position.is_selling = False
+        if hasattr(position, 'selling_started_time'):
+            delattr(position, 'selling_started_time')
         return {"success": False, "error": f"All {max_retries} smart retries failed"}
     
     async def _execute_sell_transaction(self, mint_address: str, tokens_to_sell: float, 
