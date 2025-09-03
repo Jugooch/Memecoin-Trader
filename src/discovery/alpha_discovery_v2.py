@@ -1078,14 +1078,21 @@ class ProvenAlphaFinder:
             # NEW: Layer 3 - Check performance consistency
             consistency_score = self._calculate_consistency(performance_multipliers, recency_weights)
             
-            # NEW: Layer 4 - Apply quality filters
+            # NEW: Layer 4 - Calculate early entry rate
+            early_entry_rate = self._calculate_early_entry_rate(wallet, token_list)
+            
+            # NEW: Layer 5 - Apply quality filters
             min_exit_quality = self.config.get('discovery_quality_checks', {}).get('min_exit_quality', 0.3)
             min_consistency = self.config.get('discovery_quality_checks', {}).get('min_consistency', 0.2)
+            min_early_entry_rate = self.config.get('discovery_quality_checks', {}).get('min_early_entry_rate', 0.4)
             
-            if avg_exit_quality < min_exit_quality or consistency_score < min_consistency:
+            if (avg_exit_quality < min_exit_quality or 
+                consistency_score < min_consistency or 
+                early_entry_rate < min_early_entry_rate):
                 # Skip wallets that fail quality checks
                 self.logger.debug(f"Wallet {wallet[:8]}... failed quality check: "
-                               f"exit={avg_exit_quality:.2f}, consistency={consistency_score:.2f}")
+                               f"exit={avg_exit_quality:.2f}, consistency={consistency_score:.2f}, "
+                               f"early_entry={early_entry_rate:.2f}")
                 continue
             
             # Calculate enhanced tier-weighted final score with quality layers
@@ -1117,6 +1124,7 @@ class ProvenAlphaFinder:
                 'avg_recency': avg_recency,
                 'avg_exit_quality': avg_exit_quality,  # NEW: Store exit quality
                 'consistency_score': consistency_score,  # NEW: Store consistency
+                'early_entry_rate': early_entry_rate,  # NEW: Store early entry rate
                 'tokens': token_list
             })
         
@@ -1143,7 +1151,8 @@ class ProvenAlphaFinder:
                            f"Perf: {w['avg_performance']:.1f}x | "
                            f"Success: {w['success_rate']:.1%} | "
                            f"Exit: {w.get('avg_exit_quality', 0):.2f} | "
-                           f"Consistency: {w.get('consistency_score', 0):.2f}")
+                           f"Consistency: {w.get('consistency_score', 0):.2f} | "
+                           f"EarlyEntry: {w.get('early_entry_rate', 0):.1%}")
         
         # Return more wallets but with tier diversity (up to 100 total)
         max_wallets = min(100, len(scored_wallets))
@@ -1327,6 +1336,46 @@ class ProvenAlphaFinder:
                 continue
         
         return sum(exit_scores) / len(exit_scores) if exit_scores else 0.5  # Default neutral
+
+    def _calculate_early_entry_rate(self, wallet: str, token_list: List[Dict]) -> float:
+        """Calculate the percentage of trades that were early entries (within 2 minutes of launch)"""
+        if not token_list:
+            return 0.0
+        
+        early_entries = 0
+        total_entries = 0
+        
+        for token_entry in token_list:
+            raw_token_data = token_entry.get("token", {})
+            launch_time = raw_token_data.get('launch_time')
+            
+            if not launch_time:
+                continue
+                
+            # Look for the wallet's trades in the raw_trades data
+            raw_trades = raw_token_data.get('raw_trades', [])
+            wallet_trades = [
+                trade for trade in raw_trades 
+                if str(trade.get('signer', '')) == wallet and trade.get('side') == 'buy'
+            ]
+            
+            for trade in wallet_trades:
+                total_entries += 1
+                trade_time = trade.get('timestamp')
+                
+                if trade_time and launch_time:
+                    # Check if trade was within 2 minutes (120 seconds) of launch
+                    time_diff = trade_time - launch_time
+                    if time_diff <= 120:  # 2 minutes in seconds
+                        early_entries += 1
+        
+        if total_entries == 0:
+            return 0.0
+            
+        early_entry_rate = early_entries / total_entries
+        self.logger.debug(f"Wallet {wallet[:8]}... early entry rate: {early_entries}/{total_entries} = {early_entry_rate:.1%}")
+        
+        return early_entry_rate
 
     def _calculate_consistency(self, performance_multipliers: List[float], recency_weights: List[float]) -> float:
         """

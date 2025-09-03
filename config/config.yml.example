@@ -54,11 +54,12 @@ threshold_alpha_buys: 5       # Minimum alpha wallets required (increased from 4
 
 # Discovery Quality Controls (Phase 3: Quality Improvements)
 discovery_position_filters:
-  min_position_usd: 50        # Minimum position size to avoid noise traders
+  min_position_usd: 10        # Minimum position size to avoid noise traders (LOWERED from 50)
   max_position_usd: 5000      # Maximum position size to focus on skill vs capital
   
 discovery_quality_checks:
   max_co_occurrence_rate: 0.8 # Flag wallets with >80% coordination with others
+  min_early_entry_rate: 0.4   # Minimum 40% early entries (within 2 minutes of launch)
   min_tokens_for_check: 3     # Only check wallets with 3+ tokens for wash trading
   enable_wash_trading_detection: true  # Enable wash trading pattern detection
   enable_risk_adjusted_scoring: true   # Enable risk-adjusted performance scoring
