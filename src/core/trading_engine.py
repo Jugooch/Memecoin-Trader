@@ -2948,7 +2948,17 @@ class TradingEngine:
                 self.logger.error(f"🔄 Smart retry {retry_attempt + 1} exception: {e}")
                 continue
         
+        # ENHANCED: After all retries failed, check for ghost position
         self.logger.error(f"❌ All {max_retries} smart retries exhausted for {symbol}")
+        
+        # Final ghost position detection
+        ghost_detected = await self._detect_ghost_position(mint_address, symbol, position)
+        if ghost_detected:
+            self.logger.error(f"👻 GHOST POSITION CONFIRMED: Removing {symbol} from tracking")
+            if mint_address in self.active_positions:
+                del self.active_positions[mint_address]
+            return {"success": False, "error": "ghost_position_removed", "ghost_position": True}
+        
         position.is_selling = False
         return {"success": False, "error": f"All {max_retries} smart retries failed"}
     
@@ -3014,6 +3024,85 @@ class TradingEngine:
         await self.pumpfun.close()
         await self.moralis.close()
         await self.pool_calculator.close()
+    
+    async def _detect_ghost_position(self, mint_address: str, symbol: str, position: Position) -> bool:
+        """
+        Comprehensive ghost position detection after multiple sell failures
+        Returns True if position is confirmed to be a ghost (we don't actually own the tokens)
+        """
+        try:
+            self.logger.info(f"🔍 GHOST DETECTION: Analyzing {symbol} position...")
+            
+            # Check 1: Multiple balance checks
+            balance_checks = []
+            for i in range(3):
+                try:
+                    balance = await self.transaction_signer.get_token_balance(mint_address)
+                    balance_checks.append(balance if balance is not None else 0)
+                    if i < 2:  # Don't wait after last check
+                        await asyncio.sleep(2)  # Wait 2s between checks
+                except Exception as e:
+                    self.logger.warning(f"Ghost detection balance check {i+1} failed: {e}")
+                    balance_checks.append(0)
+            
+            avg_balance = sum(balance_checks) / len(balance_checks)
+            max_balance = max(balance_checks)
+            
+            self.logger.info(f"🔍 Balance checks: {balance_checks}, avg={avg_balance:.0f}, max={max_balance:.0f}")
+            
+            # Check 2: Position age analysis
+            position_age = (datetime.now() - position.entry_time).total_seconds()
+            
+            # Check 3: Compare expected vs actual balance
+            expected_balance = position.amount
+            balance_discrepancy = abs(max_balance - expected_balance) / expected_balance if expected_balance > 0 else 1.0
+            
+            # Ghost position criteria:
+            ghost_indicators = 0
+            reasons = []
+            
+            # Indicator 1: Consistently zero or very low balance
+            if max_balance < expected_balance * 0.01:  # Less than 1% of expected
+                ghost_indicators += 2
+                reasons.append(f"Very low balance: {max_balance:.0f} vs expected {expected_balance:.0f}")
+            elif max_balance < expected_balance * 0.1:  # Less than 10% of expected
+                ghost_indicators += 1
+                reasons.append(f"Low balance: {max_balance:.0f} vs expected {expected_balance:.0f}")
+            
+            # Indicator 2: Old position that should be indexed by now
+            if position_age > 300:  # 5+ minutes old
+                ghost_indicators += 1
+                reasons.append(f"Old position ({position_age/60:.1f}min) still failing")
+            
+            # Indicator 3: High balance discrepancy
+            if balance_discrepancy > 0.9:  # 90%+ difference
+                ghost_indicators += 1
+                reasons.append(f"High discrepancy: {balance_discrepancy:.1%}")
+            
+            # Ghost detection threshold
+            is_ghost = ghost_indicators >= 2
+            
+            if is_ghost:
+                self.logger.warning(f"👻 GHOST POSITION DETECTED for {symbol}: {'; '.join(reasons)}")
+                
+                # Send ghost position alert
+                if self.notifier:
+                    await self.notifier.send_text(
+                        f"👻 **Ghost Position Removed**\n"
+                        f"Token: {symbol}\n"
+                        f"Mint: {mint_address[:8]}...\n"
+                        f"Expected: {expected_balance:,.0f} tokens\n"
+                        f"Actual: {max_balance:,.0f} tokens\n"
+                        f"Reasons: {'; '.join(reasons)}"
+                    )
+            else:
+                self.logger.info(f"🔍 Not a ghost position: {ghost_indicators}/2 indicators ({'; '.join(reasons)})")
+            
+            return is_ghost
+            
+        except Exception as e:
+            self.logger.error(f"Error in ghost position detection: {e}")
+            return False  # Conservative: don't remove position on detection errors
 
     async def _should_check_token_availability(self, mint_address: str, position: Position, exit_reason: str) -> bool:
         """

@@ -108,37 +108,58 @@ class PnLStore:
         self.data["total_trades"] += 1
         
         if action.upper() == "BUY":
-            # Track position
+            # Track position (DON'T subtract from capital - equity tracks realized P&L)
             self.data["positions"][mint_address] = {
                 "symbol": symbol,
                 "amount": amount,
                 "entry_price": price,
                 "usd_invested": usd_value,
-                "entry_time": datetime.utcnow().isoformat()
+                "entry_time": datetime.utcnow().isoformat(),
+                "total_invested": usd_value  # Track total cost basis
             }
-            # Deduct from capital
-            self.data["current_capital"] -= usd_value
             
         elif action.upper() == "SELL":
-            # Update realized P&L
-            if realized_pnl is not None:
+            # Calculate realized P&L properly
+            if mint_address in self.data["positions"]:
+                position = self.data["positions"][mint_address]
+                
+                # Calculate cost basis for this portion
+                sell_ratio = min(amount / position["amount"], 1.0) if position["amount"] > 0 else 0
+                cost_basis = position["total_invested"] * sell_ratio
+                
+                # Realized P&L = Sale proceeds - Cost basis
+                calculated_realized_pnl = usd_value - cost_basis
+                
+                # Use calculated P&L if not provided
+                if realized_pnl is None:
+                    realized_pnl = calculated_realized_pnl
+                    trade_record["realized_pnl"] = round(realized_pnl, 2)
+                
+                self.logger.info(f"SELL P&L calculation: Sale=${usd_value:.2f}, Cost=${cost_basis:.2f}, P&L=${realized_pnl:.2f}")
+                
+                # Update realized P&L
                 self.add_realized(realized_pnl)
                 
                 if realized_pnl > 0:
                     self.data["winning_trades"] += 1
                 else:
                     self.data["losing_trades"] += 1
-            
-            # Add back to capital
-            self.data["current_capital"] += usd_value
-            
-            # Remove or reduce position
-            if mint_address in self.data["positions"]:
-                position = self.data["positions"][mint_address]
+                
+                # Update position tracking
                 if amount >= position["amount"] * 0.99:  # Full sell
                     del self.data["positions"][mint_address]
                 else:  # Partial sell
                     position["amount"] -= amount
+                    position["total_invested"] -= cost_basis  # Reduce cost basis
+            else:
+                self.logger.warning(f"GHOST POSITION DETECTED: Selling {symbol} ({mint_address[:8]}...) but no buy record found!")
+                # Still record the sell, but flag it as ghost
+                trade_record["ghost_position"] = True
+                # Treat entire sale as P&L since we have no cost basis
+                if realized_pnl is None:
+                    realized_pnl = usd_value  # Conservative: assume 0 cost basis
+                    trade_record["realized_pnl"] = round(realized_pnl, 2)
+                self.add_realized(realized_pnl)
         
         # Add to trade history (keep last 100 trades)
         self.data["trade_history"].append(trade_record)
@@ -177,11 +198,11 @@ class PnLStore:
     
     @property
     def current_equity(self) -> float:
-        """Get current total equity (current capital + position values at current prices)"""
-        # For live trading: current_capital reflects actual SOL balance changes
-        # Position values would require real-time price fetching, so we use current_capital
-        # which already includes the net effect of all trades
-        return round(self.data["current_capital"], 2)
+        """Get current total equity: starting capital + all realized P&L"""
+        # Correct equity calculation: starting capital + net realized P&L
+        starting_capital = self.data["starting_capital"]
+        total_realized_pnl = self.data.get("realized_pnl", 0.0)
+        return round(starting_capital + total_realized_pnl, 2)
     
     @property
     def total_pnl(self) -> float:
@@ -211,7 +232,6 @@ class PnLStore:
         return {
             "equity": self.current_equity,
             "starting_capital": self.data["starting_capital"],
-            "current_capital": self.data["current_capital"],
             "realized_pnl": self.data.get("realized_pnl", 0.0),
             "unrealized_pnl": self.data.get("unrealized_pnl", 0.0),
             "total_pnl": self.total_pnl,
