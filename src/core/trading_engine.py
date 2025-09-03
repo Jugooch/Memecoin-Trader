@@ -532,14 +532,14 @@ class TradingEngine:
                     recent_peak = price
                     peak_time = trade_time
             
-            # Check if we're too close to a recent peak
-            time_since_peak = current_time - peak_time if peak_time > 0 else 999
-            near_peak = time_since_peak < avoid_peaks_seconds and current_price > recent_peak * 0.95
-            
-            # Determine if dump protection should trigger
+            # Get configuration values first
             min_momentum = dump_config.get('min_momentum_threshold', -0.15)
             max_sell_ratio = dump_config.get('max_sell_ratio', 0.7)
             avoid_peaks_seconds = dump_config.get('avoid_peaks_seconds', 30)
+            
+            # Check if we're too close to a recent peak
+            time_since_peak = current_time - peak_time if peak_time > 0 else 999
+            near_peak = time_since_peak < avoid_peaks_seconds and current_price > recent_peak * 0.95
             
             reasons = []
             if momentum < min_momentum:
@@ -1853,8 +1853,9 @@ class TradingEngine:
                 position.price_history = []
                 return 0  # No ATR calculation possible yet
             
-            # Need at least 10 price points for ATR
-            if len(position.price_history) < 10:
+            # Need at least 20 price points for ATR (40 seconds at 2s intervals)
+            # This prevents premature ATR calculations on brand new positions
+            if len(position.price_history) < 20:
                 return 0
             
             # Calculate simple ATR (average true range)
@@ -1872,13 +1873,23 @@ class TradingEngine:
             current_price = position.price_history[-1] if position.price_history else position.entry_price
             unrealized_gain = (current_price / position.entry_price - 1) * 100
             
-            # Scale k with profit level (wider stops for bigger gains)
+            # AGGRESSIVE TRADING: Much wider stops to handle volatility
+            # Only protect against real dumps, not normal price action
             if unrealized_gain >= 300:
-                k = 4.5  # Very wide for moonshots
+                k = 6.0  # Ultra wide for moonshots
             elif unrealized_gain >= 100:
-                k = 3.5  # Wide for strong gains
+                k = 5.0  # Very wide for strong gains
+            elif unrealized_gain >= 50:
+                k = 4.5  # Wide for good gains
+            elif hold_time_seconds < 60:
+                # First minute: MAXIMUM tolerance for volatility
+                k = 7.0  # Extremely wide - only catch catastrophic dumps
+            elif hold_time_seconds < 180:
+                # First 3 minutes: still very tolerant
+                k = 5.5  # Very wide for new positions establishing direction
             else:
-                k = 2.5  # Standard for normal trading
+                # After 3 minutes: still more tolerant than before
+                k = 4.0  # Wide stop for aggressive trading (was 2.5)
             
             # Calculate ATR-based stop
             atr_stop = position.peak_price - (k * atr)
