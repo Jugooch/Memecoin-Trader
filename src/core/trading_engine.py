@@ -656,7 +656,7 @@ class TradingEngine:
         network_fee_usd = (base_tx_fee_sol + priority_fee_sol) * sol_price_usd
         
         # Slippage (lower since we're not competing with MEV bots)
-        buy_slip_bps = paper_config.get("buy_slippage_bps", 50)  # Reduced from 75
+        buy_slip_bps = paper_config.get("buy_slippage_bps", 300)  # 3% buy slippage
         max_slippage_bps = paper_config.get("max_slippage_bps", 150)
         
         # Slippage rejection gate
@@ -798,8 +798,8 @@ class TradingEngine:
             # Create buy transaction via QuickNode pump-fun API
             self.logger.info(f"Creating live buy transaction: ${usd_amount} ({sol_amount:.4f} SOL) for {symbol}")
             
-            # Tightened slippage for better fills and more accurate P&L
-            slippage_bps = 300  # 3% slippage to handle volatile tokens
+            # Higher slippage for aggressive entry fills
+            slippage_bps = 500  # 5% slippage to handle volatile tokens
             
             tx_result = await self.pumpfun.create_buy_transaction(
                 wallet_pubkey=wallet_pubkey,
@@ -1003,7 +1003,7 @@ class TradingEngine:
         network_fee_usd = (base_tx_fee_sol + priority_fee_sol) * sol_price_usd
         
         # Slippage (slightly higher on sells due to market impact)
-        sell_slip_bps = paper_config.get("sell_slippage_bps", 75)  # Reduced from 100
+        sell_slip_bps = paper_config.get("sell_slippage_bps", 300)  # 3% sell slippage
         
         # Calculate fill price with slippage
         fill_price = current_price * (1 - sell_slip_bps/10000)
@@ -1198,8 +1198,8 @@ class TradingEngine:
             # Create sell transaction
             self.logger.info(f"Creating live sell transaction: {percentage*100:.0f}% of {symbol} position ({tokens_to_sell:.2f} tokens)")
             
-            # Use 1.5% slippage to match our conservative tracking
-            slippage_bps = 150  # 1.5% slippage
+            # Use 3% slippage for live sells
+            slippage_bps = 300  # 3% slippage
             
             tx_result = await self.pumpfun.create_sell_transaction(
                 wallet_pubkey=wallet_pubkey,

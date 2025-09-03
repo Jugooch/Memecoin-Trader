@@ -71,7 +71,7 @@ class PumpFunClient:
         
         return {"error": "max_retries_exceeded"}
 
-    async def create_buy_transaction(self, wallet_pubkey: str, mint_address: str, sol_amount: float, slippage_bps: int = 100) -> Dict:
+    async def create_buy_transaction(self, wallet_pubkey: str, mint_address: str, sol_amount: float, slippage_bps: int = 500) -> Dict:
         """Create a buy transaction via Pump Portal Local Trading API"""
         try:
             # DON'T convert to lamports - Pump Portal expects SOL as decimal when denominatedInSol=true
@@ -124,7 +124,7 @@ class PumpFunClient:
                 "message": str(e)
             }
 
-    async def create_sell_transaction(self, wallet_pubkey: str, mint_address: str, token_amount: float, slippage_bps: int = 100) -> Dict:
+    async def create_sell_transaction(self, wallet_pubkey: str, mint_address: str, token_amount: float, slippage_bps: int = 300) -> Dict:
         """Create a sell transaction via Pump Portal Local Trading API"""
         try:
             # Use raw token amount (not converted to smallest units) when denominatedInSol=false
