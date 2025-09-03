@@ -918,6 +918,7 @@ class ProvenAlphaFinder:
     def _detect_wash_trading_patterns(self, candidates: Dict) -> set:
         """Detect wallets with suspicious coordination patterns"""
         from collections import defaultdict
+        import time
         
         # Check if wash trading detection is enabled
         quality_checks = self.config.get('discovery_quality_checks', {})
@@ -925,25 +926,36 @@ class ProvenAlphaFinder:
             self.logger.debug("Wash trading detection disabled in config")
             return set()
         
-        max_co_occurrence_rate = quality_checks.get('max_co_occurrence_rate', 0.8)
-        min_tokens_for_check = quality_checks.get('min_tokens_for_check', 3)
+        # STRICTER parameters as requested
+        max_co_occurrence_rate = quality_checks.get('max_co_occurrence_rate', 0.2)  # Reduced from 0.3
+        min_tokens_for_check = quality_checks.get('min_tokens_for_check', 3)  # Check with fewer tokens
         
         suspicious_wallets = set()
         
         # Build co-occurrence matrix
         co_occurrence_matrix = defaultdict(lambda: defaultdict(int))
+        timing_correlations = defaultdict(lambda: defaultdict(list))
         
         for wallet, token_list in candidates.items():
             for token_entry in token_list:
                 mint = token_entry['token']['mint']
+                entry_time = token_entry.get('entry_time', 0)
+                
                 # Count how often wallet pairs appear on same tokens
                 for other_wallet in candidates:
                     if other_wallet != wallet:
-                        other_tokens = [t['token']['mint'] for t in candidates[other_wallet]]
-                        if mint in other_tokens:
-                            co_occurrence_matrix[wallet][other_wallet] += 1
+                        other_tokens = candidates[other_wallet]
+                        for other_token in other_tokens:
+                            if other_token['token']['mint'] == mint:
+                                co_occurrence_matrix[wallet][other_wallet] += 1
+                                
+                                # Track timing correlation (NEW)
+                                other_entry_time = other_token.get('entry_time', 0)
+                                if entry_time and other_entry_time:
+                                    time_diff = abs(entry_time - other_entry_time)
+                                    timing_correlations[wallet][other_wallet].append(time_diff)
         
-        # Flag wallets with excessive co-occurrence
+        # Flag wallets with excessive co-occurrence or timing correlation
         for wallet, co_occurrences in co_occurrence_matrix.items():
             wallet_token_count = len(candidates[wallet])
             
@@ -952,10 +964,21 @@ class ProvenAlphaFinder:
                 max_co_occurrence = max(co_occurrences.values()) if co_occurrences else 0
                 co_occurrence_rate = max_co_occurrence / wallet_token_count
                 
+                # Check timing correlation (NEW)
+                rapid_coordination = False
+                for other_wallet, time_diffs in timing_correlations[wallet].items():
+                    if time_diffs:
+                        # Check if wallets trade within 5 seconds of each other
+                        avg_time_diff = sum(time_diffs) / len(time_diffs)
+                        if avg_time_diff < 5 and len(time_diffs) >= 2:
+                            rapid_coordination = True
+                            self.logger.warning(f"Rapid coordination detected: {wallet[:8]}... and {other_wallet[:8]}... trade within {avg_time_diff:.1f}s")
+                
                 # Flag wallets with excessive coordination
-                if co_occurrence_rate > max_co_occurrence_rate:
+                if co_occurrence_rate > max_co_occurrence_rate or rapid_coordination:
                     suspicious_wallets.add(wallet)
-                    self.logger.warning(f"Suspicious coordination: {wallet[:8]}... co-occurs {co_occurrence_rate:.0%} with another wallet (threshold: {max_co_occurrence_rate:.0%})")
+                    if co_occurrence_rate > max_co_occurrence_rate:
+                        self.logger.warning(f"Suspicious coordination: {wallet[:8]}... co-occurs {co_occurrence_rate:.0%} with another wallet (threshold: {max_co_occurrence_rate:.0%})")
         
         if suspicious_wallets:
             self.logger.info(f"Wash trading detection: flagged {len(suspicious_wallets)} suspicious wallets")

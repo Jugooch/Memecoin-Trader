@@ -99,6 +99,8 @@ class TradingConfig:
     volatility_buffer: Dict = None  # Buffer strategy settings
     buffer_stop_loss_pct: float = 0.65  # 35% stop loss for buffer strategy
     remaining_position: Dict = None  # Remaining position management after partial exits
+    # Dump protection configuration
+    dump_protection: Dict = None  # Dump protection settings
 
 
 class MemecoinTradingBot:
@@ -259,7 +261,9 @@ class MemecoinTradingBot:
             # Buffer strategy configuration
             volatility_buffer=config_data.get('volatility_buffer', {}),
             buffer_stop_loss_pct=config_data.get('buffer_stop_loss_pct', 0.65),
-            remaining_position=config_data.get('remaining_position', {})
+            remaining_position=config_data.get('remaining_position', {}),
+            # Dump protection configuration
+            dump_protection=config_data.get('dump_protection', {})
         )
 
     def _get_realtime_config(self) -> Dict:

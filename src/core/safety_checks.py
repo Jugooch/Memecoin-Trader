@@ -269,6 +269,7 @@ class SafetyChecker:
             warnings.append("Order size may be too large for liquidity")
         if extension_result['is_extended']:
             warnings.append(f"Price extended: {extension_result['reason']}")
+        # Dump protection now runs in trading engine before safety checks
             
         result = {
             'safe': safe_to_trade,
@@ -277,6 +278,7 @@ class SafetyChecker:
             'sellable': is_sellable,  # Backward compatibility
             'price_impact': price_impact,
             'extension_guard': extension_result,  # Price extension data
+            # 'dump_protection': moved to trading engine
             'warnings': warnings,
             'recommendation': 'TRADE' if safe_to_trade else 'SKIP',
             'max_impact_threshold': max_impact
@@ -299,6 +301,147 @@ class SafetyChecker:
             except:
                 return datetime.now()
         return datetime.now()
+    
+    def calculate_avwap(self, recent_trades: List[Dict], window_seconds: int = 60) -> float:
+        """
+        Calculate Anchored Volume Weighted Average Price from recent trades
+        
+        Args:
+            recent_trades: List of recent swap transactions
+            window_seconds: Time window for AVWAP calculation
+            
+        Returns:
+            AVWAP price
+        """
+        if not recent_trades:
+            return 0
+            
+        import time
+        current_time = time.time()
+        cutoff_time = current_time - window_seconds
+        
+        total_volume_usd = 0
+        total_weighted_price = 0
+        
+        for trade in recent_trades:
+            trade_time = self._parse_timestamp_to_unix(trade.get('timestamp'))
+            if trade_time < cutoff_time:
+                continue
+                
+            price = trade.get('price', 0)
+            volume_usd = trade.get('amount_usd', 0)
+            
+            if price > 0 and volume_usd > 0:
+                total_weighted_price += price * volume_usd
+                total_volume_usd += volume_usd
+        
+        if total_volume_usd > 0:
+            return total_weighted_price / total_volume_usd
+        return 0
+    
+    def check_dump_protection(self, mint: str, recent_trades: List[Dict], current_price: float) -> Dict:
+        """
+        Check if token is dumping and should be avoided
+        
+        Args:
+            mint: Token mint address
+            recent_trades: List of recent swap transactions
+            current_price: Current token price
+            
+        Returns:
+            Dictionary with dump protection results
+        """
+        import time
+        current_time = time.time()
+        
+        # Check price momentum over last 30 seconds
+        momentum_window = 30
+        cutoff_time = current_time - momentum_window
+        
+        prices_in_window = []
+        buy_volume = 0
+        sell_volume = 0
+        
+        for trade in recent_trades:
+            trade_time = self._parse_timestamp_to_unix(trade.get('timestamp'))
+            if trade_time < cutoff_time:
+                continue
+                
+            price = trade.get('price', 0)
+            if price > 0:
+                prices_in_window.append(price)
+                
+            # Track buy/sell volume
+            if trade.get('side') == 'buy':
+                buy_volume += trade.get('amount_usd', 0)
+            else:
+                sell_volume += trade.get('amount_usd', 0)
+        
+        # Calculate momentum
+        if len(prices_in_window) >= 2:
+            price_30s_ago = prices_in_window[0]
+            momentum = (current_price - price_30s_ago) / price_30s_ago if price_30s_ago > 0 else 0
+        else:
+            momentum = 0
+            
+        # Calculate buy/sell ratio
+        total_volume = buy_volume + sell_volume
+        buy_ratio = buy_volume / total_volume if total_volume > 0 else 0.5
+        
+        # Check AVWAP recapture
+        avwap = self.calculate_avwap(recent_trades, 60)
+        above_avwap = current_price > avwap if avwap > 0 else True
+        
+        # Find recent peak (5 min window)
+        peak_window = 300
+        peak_cutoff = current_time - peak_window
+        recent_peak = 0
+        peak_time = 0
+        
+        for trade in recent_trades:
+            trade_time = self._parse_timestamp_to_unix(trade.get('timestamp'))
+            if trade_time < peak_cutoff:
+                continue
+            price = trade.get('price', 0)
+            if price > recent_peak:
+                recent_peak = price
+                peak_time = trade_time
+        
+        # Check if we're too close to a recent peak
+        time_since_peak = current_time - peak_time if peak_time > 0 else 999
+        near_peak = time_since_peak < 30 and current_price > recent_peak * 0.95
+        
+        # Determine if dump protection should trigger
+        is_dumping = (
+            momentum < -0.15 or  # Price dropped >15% in 30s
+            buy_ratio < 0.3 or   # Sells dominate (>70% of volume)
+            (near_peak and not above_avwap)  # Near peak but below AVWAP
+        )
+        
+        # Support bounce detection
+        has_bounce = False
+        if len(prices_in_window) >= 3:
+            # Check for higher low pattern
+            min_price = min(prices_in_window[:-1])
+            recent_price = prices_in_window[-1]
+            has_bounce = recent_price > min_price * 1.03  # 3% bounce from low
+        
+        result = {
+            'is_dumping': is_dumping,
+            'momentum_30s': momentum,
+            'buy_ratio': buy_ratio,
+            'above_avwap': above_avwap,
+            'avwap': avwap,
+            'near_peak': near_peak,
+            'time_since_peak': time_since_peak,
+            'has_support_bounce': has_bounce,
+            'safe_to_enter': not is_dumping and (above_avwap or has_bounce)
+        }
+        
+        if is_dumping:
+            self.logger.warning(f"🚨 Dump protection triggered for {mint[:8]}... momentum:{momentum:.1%} buy_ratio:{buy_ratio:.1%}")
+        
+        return result
     
     def _parse_timestamp_to_unix(self, timestamp) -> float:
         """Parse timestamp to unix timestamp for consistent comparison"""

@@ -436,6 +436,17 @@ class TradingEngine:
         try:
             self.logger.info(f"Executing BUY for {mint_address}, amount: ${usd_amount}")
             
+            # DUMP PROTECTION - Check before any other logic
+            dump_check = await self._check_dump_protection(mint_address)
+            if not dump_check.get('safe_to_enter', True):
+                reason = dump_check.get('reason', 'Unknown dump protection trigger')
+                self.logger.warning(f"🚨 DUMP PROTECTION: Skipping {mint_address[:8]}... - {reason}")
+                return {
+                    "success": False, 
+                    "error": f"Dump protection: {reason}",
+                    "dump_protection": dump_check
+                }
+            
             if paper_mode:
                 return await self._execute_paper_buy(mint_address, usd_amount, symbol, confidence_score)
             else:
@@ -452,6 +463,135 @@ class TradingEngine:
                 )
             
             return {"success": False, "error": str(e)}
+    
+    async def _check_dump_protection(self, mint_address: str) -> Dict:
+        """
+        Check if token is dumping and should be avoided
+        Runs BEFORE safety checks in aggressive mode
+        """
+        try:
+            # Get recent trades for analysis
+            recent_trades = await self.moralis.get_token_swaps(mint_address, limit=50)
+            if not recent_trades:
+                return {'safe_to_enter': True, 'reason': 'No trade data available'}
+            
+            # Get current price
+            current_price = await self.moralis.get_current_price(mint_address)
+            if not current_price or current_price <= 0:
+                return {'safe_to_enter': True, 'reason': 'No current price available'}
+            
+            import time
+            current_time = time.time()
+            
+            # Get dump protection config
+            dump_config = getattr(self.config, 'dump_protection', {})
+            momentum_window = dump_config.get('momentum_check_seconds', 30)
+            cutoff_time = current_time - momentum_window
+            
+            prices_in_window = []
+            buy_volume = 0
+            sell_volume = 0
+            
+            for trade in recent_trades:
+                trade_time = self._parse_timestamp_to_unix(trade.get('timestamp', ''))
+                if trade_time < cutoff_time:
+                    continue
+                    
+                price = trade.get('price', 0)
+                if price > 0:
+                    prices_in_window.append(price)
+                    
+                # Track buy/sell volume
+                if trade.get('side') == 'buy':
+                    buy_volume += trade.get('amount_usd', 0)
+                else:
+                    sell_volume += trade.get('amount_usd', 0)
+            
+            # Calculate momentum
+            momentum = 0
+            if len(prices_in_window) >= 2:
+                price_30s_ago = prices_in_window[0]
+                momentum = (current_price - price_30s_ago) / price_30s_ago if price_30s_ago > 0 else 0
+            
+            # Calculate buy/sell ratio
+            total_volume = buy_volume + sell_volume
+            buy_ratio = buy_volume / total_volume if total_volume > 0 else 0.5
+            
+            # Find recent peak (5 min window)
+            peak_window = 300
+            peak_cutoff = current_time - peak_window
+            recent_peak = 0
+            peak_time = 0
+            
+            for trade in recent_trades:
+                trade_time = self._parse_timestamp_to_unix(trade.get('timestamp', ''))
+                if trade_time < peak_cutoff:
+                    continue
+                price = trade.get('price', 0)
+                if price > recent_peak:
+                    recent_peak = price
+                    peak_time = trade_time
+            
+            # Check if we're too close to a recent peak
+            time_since_peak = current_time - peak_time if peak_time > 0 else 999
+            near_peak = time_since_peak < avoid_peaks_seconds and current_price > recent_peak * 0.95
+            
+            # Determine if dump protection should trigger
+            min_momentum = dump_config.get('min_momentum_threshold', -0.15)
+            max_sell_ratio = dump_config.get('max_sell_ratio', 0.7)
+            avoid_peaks_seconds = dump_config.get('avoid_peaks_seconds', 30)
+            
+            reasons = []
+            if momentum < min_momentum:
+                reasons.append(f"Price momentum: {momentum:.1%} (dropped >{abs(min_momentum):.0%} in {momentum_window}s)")
+            if buy_ratio < (1 - max_sell_ratio):
+                reasons.append(f"Sell pressure: {buy_ratio:.1%} buy ratio (>{max_sell_ratio:.0%} sells)")
+            if near_peak:
+                reasons.append(f"Near peak: {time_since_peak:.0f}s since peak at ${recent_peak:.8f}")
+            
+            is_dumping = len(reasons) > 0
+            
+            result = {
+                'safe_to_enter': not is_dumping,
+                'momentum_30s': momentum,
+                'buy_ratio': buy_ratio,
+                'near_peak': near_peak,
+                'time_since_peak': time_since_peak,
+                'recent_peak': recent_peak,
+                'current_price': current_price,
+                'reason': '; '.join(reasons) if reasons else 'Safe to enter'
+            }
+            
+            if is_dumping:
+                self.logger.warning(f"🚨 Dump detected for {mint_address[:8]}...: {'; '.join(reasons)}")
+            else:
+                self.logger.debug(f"✅ Dump protection passed for {mint_address[:8]}...")
+                
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Error in dump protection check: {e}")
+            return {'safe_to_enter': True, 'reason': f'Error in check: {e}'}
+    
+    def _parse_timestamp_to_unix(self, timestamp) -> float:
+        """
+        Parse timestamp to unix timestamp
+        """
+        try:
+            if isinstance(timestamp, (int, float)):
+                return float(timestamp)
+            if isinstance(timestamp, str):
+                if 'T' in timestamp:
+                    # ISO format
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    return dt.timestamp()
+                else:
+                    return float(timestamp)
+        except:
+            pass
+        import time
+        return time.time()
 
     async def sell_token(self, mint_address: str, percentage: float, paper_mode: bool = True, symbol: str = "UNKNOWN", exit_reason: str = "unknown") -> Dict:
         """Execute a sell order for a token"""
@@ -1441,15 +1581,37 @@ class TradingEngine:
         
         # PHASE 3.2: Optimized Intelligent Trailing Stops
         
-        # MOONSHOT trailing for exceptional gains (looser to capture full runs)
-        if position.high_gain_peak >= 100:  # Triple digit gains
-            trailing_pct = 0.75  # Trail at 75% of peak - very loose for moonshots
+        # Check velocity stop FIRST (rapid crash protection)
+        if await self._check_velocity_stop(position, current_price):
+            return ("velocity_stop", 1.0)
+        
+        # Check profit floor (ratchet system)
+        profit_floor = self._get_profit_floor(current_gain_pct)
+        if current_gain_pct < profit_floor:
+            self.logger.info(f"💎 PROFIT FLOOR: Protecting gains at {profit_floor:.0f}% minimum")
+            return ("profit_floor", 1.0)
+        
+        # MOONSHOT trailing with wider stops as requested
+        if position.high_gain_peak >= 400:  # Massive moonshot
+            trailing_pct = 0.60  # Trail at 60% of peak - 40% drawdown allowed
             trailing_stop = position.peak_price * trailing_pct
             if current_price <= trailing_stop:
-                self.logger.info(f"MOONSHOT EXIT: {position.high_gain_peak:.0f}% peak, exiting at {current_gain_pct:.0f}%")
+                self.logger.info(f"🚀 MOONSHOT EXIT (400%+): {position.high_gain_peak:.0f}% peak, exiting at {current_gain_pct:.0f}%")
+                return ("trailing_stop_moonshot_massive", 1.0)
+        elif position.high_gain_peak >= 200:  # Strong moonshot
+            trailing_pct = 0.65  # Trail at 65% of peak - 35% drawdown allowed
+            trailing_stop = position.peak_price * trailing_pct
+            if current_price <= trailing_stop:
+                self.logger.info(f"🌙 MOONSHOT EXIT (200%+): {position.high_gain_peak:.0f}% peak, exiting at {current_gain_pct:.0f}%")
+                return ("trailing_stop_moonshot_strong", 1.0)
+        elif position.high_gain_peak >= 100:  # Regular moonshot
+            trailing_pct = 0.70  # Trail at 70% of peak - 30% drawdown allowed
+            trailing_stop = position.peak_price * trailing_pct
+            if current_price <= trailing_stop:
+                self.logger.info(f"✨ MOONSHOT EXIT (100%+): {position.high_gain_peak:.0f}% peak, exiting at {current_gain_pct:.0f}%")
                 return ("trailing_stop_moonshot", 1.0)
         elif position.high_gain_peak >= 60:  # High gains
-            trailing_pct = 0.80  # Trail at 80% of peak (loosened from 82%)
+            trailing_pct = 0.80  # Trail at 80% of peak
             trailing_stop = position.peak_price * trailing_pct
             if current_price <= trailing_stop:
                 return ("trailing_stop_high_gain", 1.0)
@@ -1542,15 +1704,19 @@ class TradingEngine:
                     self.logger.info(f"Trailing stop hit: {trail_pct}% drawdown from peak (banked {total_sold_pct:.0%})")
                     return ("trailing_stop", 1.0)
         
-        # VOLATILITY-BASED STOP LOSS (already checked buffer period above)
-        if not in_buffer_period:
-            # Instead of fixed 8%, adjust based on token volatility and time
-            volatility_stop = await self._calculate_dynamic_stop_loss(mint_address, position, hold_time_seconds)
-            
-            if current_price <= volatility_stop:
-                stop_pct = ((volatility_stop / position.entry_price) - 1) * 100
-                self.logger.info(f"DYNAMIC STOP HIT: Volatility-adjusted stop at {stop_pct:.1f}%")
-                return ("stop_loss", 1.0)
+        # STOP LOSS SYSTEM - No buffer period, straight stops
+        # Hard 35% catastrophe stop
+        catastrophe_stop = position.entry_price * 0.65
+        if current_price <= catastrophe_stop:
+            self.logger.warning(f"🛑 CATASTROPHE STOP: -35% hard stop hit")
+            return ("catastrophe_stop", 1.0)
+        
+        # ATR-based dynamic stop (if we have enough data)
+        atr_stop = await self._calculate_atr_stop(position, hold_time_seconds)
+        if atr_stop > 0 and current_price <= atr_stop:
+            stop_pct = ((atr_stop / position.entry_price) - 1) * 100
+            self.logger.info(f"📊 ATR STOP: Volatility-adjusted stop at {stop_pct:.1f}%")
+            return ("atr_stop", 1.0)
         
         # AGGRESSIVE TIME-BASED EXITS (Friend's Strategy Refined)
         max_hold = getattr(self.config, 'max_hold_seconds', 1800)  # 30 minutes for aggressive
@@ -1656,6 +1822,125 @@ class TradingEngine:
         # For now, return slightly negative to be conservative
         return -0.5
     
+    async def _calculate_atr_stop(self, position: Position, hold_time_seconds: float) -> float:
+        """
+        Calculate ATR-based trailing stop that adapts to volatility
+        
+        Args:
+            position: Current position
+            hold_time_seconds: How long we've held the position
+            
+        Returns:
+            ATR-based stop price
+        """
+        try:
+            # Get recent price history if available
+            if not hasattr(position, 'price_history'):
+                # Initialize price history tracking if not present
+                position.price_history = []
+                return 0  # No ATR calculation possible yet
+            
+            # Need at least 10 price points for ATR
+            if len(position.price_history) < 10:
+                return 0
+            
+            # Calculate simple ATR (average true range)
+            price_changes = []
+            for i in range(1, len(position.price_history[-45:])):
+                change = abs(position.price_history[i] - position.price_history[i-1])
+                price_changes.append(change)
+            
+            if not price_changes:
+                return 0
+                
+            atr = sum(price_changes) / len(price_changes)
+            
+            # Determine multiplier based on unrealized gain
+            current_price = position.price_history[-1] if position.price_history else position.entry_price
+            unrealized_gain = (current_price / position.entry_price - 1) * 100
+            
+            # Scale k with profit level (wider stops for bigger gains)
+            if unrealized_gain >= 300:
+                k = 4.5  # Very wide for moonshots
+            elif unrealized_gain >= 100:
+                k = 3.5  # Wide for strong gains
+            else:
+                k = 2.5  # Standard for normal trading
+            
+            # Calculate ATR-based stop
+            atr_stop = position.peak_price - (k * atr)
+            
+            return atr_stop
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating ATR stop: {e}")
+            return 0
+    
+    async def _check_velocity_stop(self, position: Position, current_price: float) -> bool:
+        """
+        Check for rapid price drops (velocity stop)
+        
+        Args:
+            position: Current position
+            current_price: Current token price
+            
+        Returns:
+            True if velocity stop triggered
+        """
+        try:
+            # Store price history for velocity calculation
+            if not hasattr(position, 'price_history'):
+                position.price_history = []
+            
+            # Add current price to history
+            position.price_history.append(current_price)
+            
+            # Keep only last 60 seconds of prices (assuming 2s polling)
+            max_history = 30  # 30 prices = ~60 seconds at 2s intervals
+            if len(position.price_history) > max_history:
+                position.price_history = position.price_history[-max_history:]
+            
+            # Need at least 5 price points (10 seconds) for velocity
+            if len(position.price_history) < 5:
+                return False
+            
+            # Check 10-second velocity (5 price points at 2s intervals)
+            price_10s_ago = position.price_history[-5]
+            velocity = (current_price - price_10s_ago) / price_10s_ago
+            
+            # Trigger on rapid drops
+            velocity_threshold = -0.10  # -10% in 10 seconds
+            
+            if velocity < velocity_threshold:
+                self.logger.warning(f"🚨 VELOCITY STOP: {velocity*100:.1f}% drop in 10s")
+                return True
+                
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"Error checking velocity stop: {e}")
+            return False
+    
+    def _get_profit_floor(self, unrealized_gain_pct: float) -> float:
+        """
+        Get the profit floor (ratchet) based on unrealized gains
+        
+        Args:
+            unrealized_gain_pct: Current unrealized gain percentage
+            
+        Returns:
+            Minimum acceptable gain percentage (profit floor)
+        """
+        # Profit ratchet system - lock in gains at milestones
+        if unrealized_gain_pct >= 400:
+            return 250  # Lock in 250% minimum
+        elif unrealized_gain_pct >= 200:
+            return 120  # Lock in 120% minimum
+        elif unrealized_gain_pct >= 100:
+            return 40   # Lock in 40% minimum
+        else:
+            return -35  # Default to -35% stop loss
+    
     async def _calculate_dynamic_stop_loss(self, mint_address: str, position: Position, hold_time_seconds: float) -> float:
         """
         Calculate stop loss based on buffer strategy configuration
@@ -1669,31 +1954,14 @@ class TradingEngine:
             Stop loss price level
         """
         try:
-            # Check if buffer strategy is enabled
-            buffer_config = getattr(self.config, 'volatility_buffer', {})
-            if buffer_config.get('enabled', False):
-                # Use buffer strategy's wider stop loss (35% by default)
-                buffer_stop_loss_pct = getattr(self.config, 'buffer_stop_loss_pct', 0.65)  # 35% stop loss = 0.65 multiplier
-                stop_price = position.entry_price * buffer_stop_loss_pct
-                self.logger.debug(f"Buffer strategy stop: {(1-buffer_stop_loss_pct)*100:.0f}% stop loss")
-            else:
-                # Original aggressive stop loss strategy
-                hold_time_minutes = hold_time_seconds / 60
-                
-                if hold_time_minutes < 5:
-                    # 0-5 minutes: 15% stop loss
-                    base_stop_pct = 0.85
-                    self.logger.debug(f"Aggressive early stop: 15% (hold time: {hold_time_minutes:.1f}m)")
-                elif hold_time_minutes < 10:
-                    # 5-10 minutes: 20% stop loss
-                    base_stop_pct = 0.80
-                    self.logger.debug(f"Aggressive mid stop: 20% (hold time: {hold_time_minutes:.1f}m)")
-                else:
-                    # 10+ minutes: 25% stop loss
-                    base_stop_pct = 0.75
-                    self.logger.debug(f"Aggressive late stop: 25% (hold time: {hold_time_minutes:.1f}m)")
-                
-                stop_price = position.entry_price * base_stop_pct
+            # Always use hard 35% stop as catastrophe protection
+            catastrophe_stop = position.entry_price * 0.65  # 35% stop loss
+            
+            # Calculate ATR-based stop if we have price history
+            atr_stop = await self._calculate_atr_stop(position, hold_time_seconds)
+            
+            # Use the tighter of the two stops
+            stop_price = max(catastrophe_stop, atr_stop) if atr_stop > 0 else catastrophe_stop
             
             # Never let stop price go above entry (no positive stops)
             stop_price = min(stop_price, position.entry_price * 0.99)
