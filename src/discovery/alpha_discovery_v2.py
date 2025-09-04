@@ -43,6 +43,7 @@ from src.clients.bitquery_client import BitqueryClient
 from src.clients.moralis_client import MoralisClient
 from src.core.database import Database
 from src.utils.config_loader import load_config
+from src.discovery.farming_detector import FarmingDetector
 
 
 class ProvenAlphaFinder:
@@ -52,6 +53,9 @@ class ProvenAlphaFinder:
         self.database = database
         self.config = config or {}
         self.logger = logging.getLogger(__name__)
+        
+        # Initialize farming detector
+        self.farming_detector = FarmingDetector(config)
         
         # Strategy parameters - Read from config or use defaults
         # Get discovery success thresholds from config
@@ -65,11 +69,11 @@ class ProvenAlphaFinder:
         # Get early window from config (in minutes, convert to seconds)
         self.early_window_seconds = api_opt.get('discovery_early_window_minutes', 3) * 60
         
-        # Get minimum wallet appearances from config
+        # ADJUSTED: Require more trades for statistical significance
         self.min_wallet_appearances = api_opt.get('discovery_min_appearances', {
-            'tier_1': 2,      # High-quality wallets: 2+ high success tokens
-            'tier_2': 3,      # Medium-quality wallets: 3+ medium success tokens
-            'tier_3': 4       # Emerging wallets: 4+ low success tokens
+            'tier_1': 5,      # High-quality wallets: 5+ high success tokens (was 2)
+            'tier_2': 7,      # Medium-quality wallets: 7+ medium success tokens (was 3)
+            'tier_3': 10      # Emerging wallets: 10+ low success tokens (was 4)
         })
         
         # Get additional discovery configs
@@ -215,11 +219,11 @@ class ProvenAlphaFinder:
     
     async def _get_historical_tokens(self) -> List[Dict]:
         """Get recent tokens with comprehensive metrics computation"""
-        # Optimized for 2-3 minute pump trading: analyze recent completed pumps
-        # 20-5 minutes ago gives more data while staying fresh
+        # EXTENDED: Analyze longer window to find wallets with more trading history
+        # 120-5 minutes ago gives us 2 hours of data to find organic traders
         now = datetime.utcnow()
-        start_time = now - timedelta(minutes=60)   # 20 minutes ago UTC
-        end_time = now - timedelta(minutes=5)      # 5 minutes ago UTC
+        start_time = now - timedelta(minutes=120)   # 2 hours ago UTC (was 60)
+        end_time = now - timedelta(minutes=5)       # 5 minutes ago UTC
         
         self.logger.info(f"Analyzing recent tokens window: {start_time.isoformat()}Z -> {end_time.isoformat()}Z")
         
@@ -996,13 +1000,19 @@ class ProvenAlphaFinder:
         
         self.logger.info(f"Evaluating {len(candidates)} wallet candidates...")
         
-        # Detect and filter out suspicious wash trading patterns
-        suspicious_wallets = self._detect_wash_trading_patterns(candidates)
+        # ENHANCED: First apply farming detection to filter out manipulation wallets
+        self.logger.info("Running advanced farming detection on wallet candidates...")
+        farming_filtered_candidates = await self._filter_farming_wallets(candidates)
+        
+        # Then detect and filter out suspicious wash trading patterns
+        suspicious_wallets = self._detect_wash_trading_patterns(farming_filtered_candidates)
         if suspicious_wallets:
             # Remove suspicious wallets from candidates
-            filtered_candidates = {k: v for k, v in candidates.items() if k not in suspicious_wallets}
+            filtered_candidates = {k: v for k, v in farming_filtered_candidates.items() if k not in suspicious_wallets}
             self.logger.info(f"Filtered out {len(suspicious_wallets)} suspicious wallets, {len(filtered_candidates)} remaining")
             candidates = filtered_candidates
+        else:
+            candidates = farming_filtered_candidates
         
         # Show wallet appearance distribution for debugging
         appearance_counts = {}
@@ -1027,6 +1037,12 @@ class ProvenAlphaFinder:
             medium_count = wallet_success_tiers.count('medium') 
             low_count = wallet_success_tiers.count('low')
             
+            # CRITICAL: Require minimum trades for statistical significance
+            total_trades = len(token_list)
+            if total_trades < 5:
+                self.logger.debug(f"Wallet {wallet[:8]}... skipped: only {total_trades} trades (need 5+ for statistics)")
+                continue
+            
             # Determine wallet qualification tier
             wallet_tier = None
             if high_count >= self.min_wallet_appearances['tier_1']:
@@ -1037,7 +1053,7 @@ class ProvenAlphaFinder:
                 wallet_tier = 'tier_3'  # Emerging alpha wallet
             
             if wallet_tier is None:
-                self.logger.debug(f"Wallet {wallet[:8]}... insufficient: H:{high_count} M:{medium_count} L:{low_count}")
+                self.logger.debug(f"Wallet {wallet[:8]}... insufficient tier: H:{high_count} M:{medium_count} L:{low_count}")
                 continue
                 
             self.logger.debug(f"Wallet {wallet[:8]}... qualified as {wallet_tier}: H:{high_count} M:{medium_count} L:{low_count}")
@@ -1074,9 +1090,23 @@ class ProvenAlphaFinder:
                 total_weight = sum(recency_weights)
                 avg_performance = sum(p * w for p, w in zip(performance_multipliers, recency_weights)) / total_weight
                 
-                # Calculate success rate (performance >= 2.0x)
-                success_count = sum(w for p, w in zip(performance_multipliers, recency_weights) if p >= 2.0)
+                # ADJUSTED: Target organic wallets with 60-70% win rates instead of super high rates
+                # Calculate success rate (performance >= 1.5x for organic traders)
+                success_count = sum(w for p, w in zip(performance_multipliers, recency_weights) if p >= 1.5)
                 success_rate = success_count / total_weight
+                
+                # NEW: Apply win rate preference for organic wallets (60-70% ideal)
+                win_rate_quality = 1.0
+                if 0.60 <= success_rate <= 0.70:
+                    win_rate_quality = 2.0  # STRONG boost for ideal organic range
+                elif 0.55 <= success_rate < 0.60 or 0.70 < success_rate <= 0.75:
+                    win_rate_quality = 1.5  # Good boost for near-ideal
+                elif 0.50 <= success_rate < 0.55 or 0.75 < success_rate <= 0.80:
+                    win_rate_quality = 1.0  # Neutral for acceptable range
+                elif success_rate > 0.85:
+                    win_rate_quality = 0.3  # Strong penalty for suspiciously high
+                elif success_rate > 0.95:
+                    win_rate_quality = 0.05  # Extreme penalty for near-perfect
                 
                 # Calculate risk-adjusted performance (normalize by position size)
                 risk_adjusted_returns = []
@@ -1121,19 +1151,22 @@ class ProvenAlphaFinder:
             # Calculate enhanced tier-weighted final score with quality layers
             tier_base_score = base_score * 100  # Base score from tier multiplier
             
-            # Performance and success bonuses (existing logic)
+            # Performance and success bonuses (adjusted for organic trading)
             performance_bonus = avg_performance * 25
-            success_bonus = success_rate * 40
+            success_bonus = success_rate * 40 * win_rate_quality  # Apply win rate quality factor
             volume_bonus = len(token_list) * 10
             risk_adjusted_bonus = avg_risk_adjusted_return * 15  # Bonus for skill vs capital
             
-            # NEW: Quality bonuses
+            # Quality bonuses
             exit_timing_bonus = avg_exit_quality * 30  # Reward good exit timing
             consistency_bonus = consistency_score * 20  # Reward consistency
             
+            # NEW: Organic trading bonus (prefer moderate win rates)
+            organic_bonus = win_rate_quality * 20
+            
             final_score = (tier_base_score + performance_bonus + success_bonus + 
                           volume_bonus + risk_adjusted_bonus + exit_timing_bonus + 
-                          consistency_bonus) * avg_recency
+                          consistency_bonus + organic_bonus) * avg_recency
             
             scored_wallets.append({
                 'wallet': wallet,
@@ -1145,9 +1178,10 @@ class ProvenAlphaFinder:
                 'success_rate': success_rate,
                 'avg_risk_adjusted_return': avg_risk_adjusted_return,
                 'avg_recency': avg_recency,
-                'avg_exit_quality': avg_exit_quality,  # NEW: Store exit quality
-                'consistency_score': consistency_score,  # NEW: Store consistency
-                'early_entry_rate': early_entry_rate,  # NEW: Store early entry rate
+                'avg_exit_quality': avg_exit_quality,  # Store exit quality
+                'consistency_score': consistency_score,  # Store consistency
+                'early_entry_rate': early_entry_rate,  # Store early entry rate
+                'win_rate_quality': win_rate_quality,  # NEW: Store win rate quality factor
                 'tokens': token_list
             })
         
@@ -1173,6 +1207,7 @@ class ProvenAlphaFinder:
                            f"Counts: {w.get('tier_counts', 'N/A')} | "
                            f"Perf: {w['avg_performance']:.1f}x | "
                            f"Success: {w['success_rate']:.1%} | "
+                           f"WinQuality: {w.get('win_rate_quality', 1.0):.1f} | "
                            f"Exit: {w.get('avg_exit_quality', 0):.2f} | "
                            f"Consistency: {w.get('consistency_score', 0):.2f} | "
                            f"EarlyEntry: {w.get('early_entry_rate', 0):.1%}")
@@ -1421,6 +1456,108 @@ class ProvenAlphaFinder:
         except Exception as e:
             self.logger.debug(f"Error calculating consistency: {e}")
             return 0.5  # Default neutral
+    
+    async def _filter_farming_wallets(self, candidates: Dict) -> Dict:
+        """
+        Filter out farming/manipulation wallets using advanced detection
+        Returns filtered candidates dictionary
+        """
+        filtered_candidates = {}
+        farmer_wallets = set()
+        suspicious_count = 0
+        error_count = 0
+        
+        self.logger.info(f"Analyzing {len(candidates)} wallets for farming patterns...")
+        
+        for wallet, token_list in candidates.items():
+            try:
+                # Prepare trade data for farming analysis
+                trades_data = []
+                for entry in token_list:
+                    token_data = entry['token']
+                    
+                    # Extract relevant trade information
+                    trade_info = {
+                        'token_address': token_data.get('mint'),
+                        'timestamp': token_data.get('launch_time', 0),
+                        'side': 'buy',  # These are early buys
+                        'price': token_data.get('current_price', 0),
+                        'amount_usd': entry.get('position_size_usd', 100),
+                        'performance': entry.get('performance', 1.0)
+                    }
+                    trades_data.append(trade_info)
+                    
+                    # Add any raw trades if available
+                    raw_trades = token_data.get('raw_trades', [])
+                    for raw_trade in raw_trades:
+                        if str(raw_trade.get('signer', '')) == wallet:
+                            trades_data.append({
+                                'token_address': token_data.get('mint'),
+                                'timestamp': raw_trade.get('timestamp', 0),
+                                'side': raw_trade.get('side', 'unknown'),
+                                'price': raw_trade.get('price_usd', 0),
+                                'amount_usd': raw_trade.get('amount_usd', 0)
+                            })
+                
+                # Run farming analysis
+                farming_metrics = await self.farming_detector.analyze_wallet(
+                    wallet, 
+                    trades_data,
+                    self.moralis,
+                    self.bitquery
+                )
+                
+                # Check classification
+                classification = farming_metrics.get('classification', 'unknown')
+                farmer_score = farming_metrics.get('farmer_score', 0)
+                
+                # Log any errors from farming detection
+                if 'error' in farming_metrics:
+                    self.logger.error(f"Farming detection error for {wallet[:8]}...: {farming_metrics['error']}")
+                    error_count += 1
+                    # Include wallet if error occurred (conservative approach)
+                    filtered_candidates[wallet] = token_list
+                    continue
+                
+                if classification == 'farmer':
+                    farmer_wallets.add(wallet)
+                    self.logger.warning(f"FARMER detected: {wallet[:8]}... (score={farmer_score:.2f})")
+                    # Log detailed metrics for farmers
+                    if farming_metrics.get('red_flags'):
+                        self.logger.warning(f"  Red flags: {', '.join(farming_metrics['red_flags'])}")
+                elif classification == 'suspicious':
+                    suspicious_count += 1
+                    # Still include suspicious wallets but log them
+                    filtered_candidates[wallet] = token_list
+                    self.logger.info(f"Suspicious wallet kept: {wallet[:8]}... (score={farmer_score:.2f})")
+                else:
+                    # Safe wallet - include it
+                    filtered_candidates[wallet] = token_list
+                    
+            except Exception as e:
+                self.logger.error(f"ERROR processing wallet {wallet[:8]}... for farming detection: {e}")
+                error_count += 1
+                # Include wallet if error occurred (conservative approach)
+                filtered_candidates[wallet] = token_list
+        
+        # Log filtering summary
+        total_filtered = len(candidates) - len(filtered_candidates)
+        farmer_count = len(farmer_wallets)
+        safe_count = len(filtered_candidates) - suspicious_count - error_count
+        
+        self.logger.info(f"Farming detection complete:")
+        self.logger.info(f"  - Total wallets: {len(candidates)}")
+        self.logger.info(f"  - Farmers removed: {farmer_count}")
+        self.logger.info(f"  - Suspicious kept: {suspicious_count}")
+        self.logger.info(f"  - Safe wallets: {safe_count}")
+        if error_count > 0:
+            self.logger.warning(f"  - Errors (kept): {error_count}")
+        self.logger.info(f"  - Total remaining: {len(filtered_candidates)}")
+        
+        if farmer_wallets:
+            self.logger.info(f"Removed farmer wallets: {list(farmer_wallets)[:5]}...")
+        
+        return filtered_candidates
 
 
 async def main():

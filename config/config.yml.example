@@ -58,13 +58,62 @@ discovery_position_filters:
   max_position_usd: 5000      # Maximum position size to focus on skill vs capital
   
 discovery_quality_checks:
-  max_co_occurrence_rate: 0.8 # Flag wallets with >80% coordination with others
+  max_co_occurrence_rate: 0.2 # Flag wallets with >20% coordination (STRICTER per GPT5)
   min_early_entry_rate: 0.4   # Minimum 40% early entries (within 2 minutes of launch)
   min_tokens_for_check: 3     # Only check wallets with 3+ tokens for wash trading
   enable_wash_trading_detection: true  # Enable wash trading pattern detection
   enable_risk_adjusted_scoring: true   # Enable risk-adjusted performance scoring
-  min_exit_quality: 0.3       # Minimum exit timing quality (0.0-1.0, 0.3 = 30th percentile)
-  min_consistency: 0.2        # Minimum performance consistency (0.0-1.0, 0.2 = low variance)
+  min_exit_quality: 0.5       # Minimum exit timing quality (STRICTER: 0.5 = 50th percentile)
+  min_consistency: 0.57       # Target 60-70% consistency for organic wallets (per GPT5)
+
+# Farming Detection Parameters (NEW - based on GPT5 recommendations)
+farming_detection:
+  # 1. Holding Time Thresholds
+  max_short_hold_rate: 0.70          # Flag if >70% of profitable trades closed < 5min
+  median_hold_threshold: 180          # Flag if median hold < 3 minutes (180 seconds)
+  short_hold_window: 300              # Define "short hold" as < 5 minutes (300 seconds)
+  
+  # 2. Entry Crowding Thresholds  
+  entry_disadvantage_threshold: -0.03 # Flag if wallet consistently enters 3% better than followers
+  entry_25pct_threshold: -0.05        # Flag if 25th percentile advantage < -5%
+  
+  # 3. Follower Disadvantage (FD) Thresholds
+  max_follower_disadvantage: 0.05     # Flag if median FD > 5% (wallet gains, followers lose)
+  max_75pct_follower_disadvantage: 0.08  # Flag if 75th percentile FD > 8%
+  
+  # 4. Exit Impact Thresholds
+  max_exit_impact: 0.25               # Flag if wallet exit > 25% of pool volume
+  high_exit_impact_rate: 0.50         # Flag if >= 50% of exits show > 15% impact
+  
+  # 5. Trade Synchrony Thresholds
+  max_synchrony_rate: 0.60            # Flag if > 60% of trades have synchronized wallets
+  synchrony_window: 5                 # Consider trades within 5 seconds as synchronized
+  min_correlation: 0.70               # Minimum correlation for synchronized trading
+  
+  # 6. Funding Entropy Thresholds
+  min_entropy: 1.0                    # Minimum Shannon entropy for funding diversity
+  max_single_source_rate: 0.60        # Flag if > 60% of funds from single source
+  
+  # 7. Trade Size Uniformity
+  max_size_uniformity: 0.50           # Flag if > 50% of trades within 2% of same size
+  size_tolerance: 0.02                # 2% tolerance for uniform size detection
+  max_coefficient_variation: 0.10     # Flag if coefficient of variation < 0.10
+  
+  # 8. Win Rate vs Hold Time
+  suspicious_win_rate: 0.80           # 80% win rate with short holds = farming
+  ultra_suspicious_win_rate: 0.90     # 90%+ win rate = definitely farming
+  
+  # 9. Liquidity Contribution
+  min_lp_events: 1                    # Expect at least 1 LP event per 50 trades
+  
+  # 10. Token Survival
+  min_survival_rate: 0.20             # Flag if < 20% of tokens survive 24h
+  critical_survival_rate: 0.10        # Critical flag if < 10% survival
+  
+  # Overall Farmer Score Thresholds
+  farmer_threshold: 0.60              # Score > 0.6 = BLACKLIST (definitely farming)
+  suspicious_threshold: 0.40          # Score 0.4-0.6 = SUSPICIOUS (shadow only)
+  # Score < 0.4 = SAFE (eligible to copy with guards)
 
 # Enhanced alpha detection parameters - STRICTER ENTRY CONTROLS
 alpha_enhanced:
@@ -148,16 +197,17 @@ api_optimization:
   discovery_bitquery_success_threshold: 25  # Lower threshold (reduced from 40)
   discovery_early_window_minutes: 3   # Early buyer window (3 minutes matches entry window)
   
-  # Multi-tier alpha wallet discovery (aligned with 15-min trading)
+  # Multi-tier alpha wallet discovery (targeting organic traders)
   discovery_success_thresholds:
-    high: 1.5     # 1.5x performance = high success (15-min timeframe) 
-    medium: 1.3   # 1.3x performance = medium success (15-min timeframe)
-    low: 1.15     # 1.15x performance = low success (15-min timeframe)
+    high: 1.5     # 1.5x performance = high success (organic threshold) 
+    medium: 1.3   # 1.3x performance = medium success
+    low: 1.15     # 1.15x performance = low success (covers fees)
   
+  # ADJUSTED: Require more trades for statistical significance
   discovery_min_appearances:
-    tier_1: 2     # Premium: 2+ high success tokens
-    tier_2: 3     # Good: 3+ medium success tokens  
-    tier_3: 4     # Emerging: 4+ low success tokens
+    tier_1: 5     # Premium: 5+ high success tokens (increased from 2)
+    tier_2: 7     # Good: 7+ medium success tokens (increased from 3)
+    tier_3: 10    # Emerging: 10+ low success tokens (increased from 4)
 
 # Pump.fun configuration
 pump_fun:
