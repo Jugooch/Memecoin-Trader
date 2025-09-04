@@ -1039,8 +1039,8 @@ class ProvenAlphaFinder:
             
             # CRITICAL: Require minimum trades for statistical significance
             total_trades = len(token_list)
-            if total_trades < 3:
-                self.logger.debug(f"Wallet {wallet[:8]}... skipped: only {total_trades} trades (need 3+ for statistics)")
+            if total_trades < 2:
+                self.logger.debug(f"Wallet {wallet[:8]}... skipped: only {total_trades} trades (need 2+ for statistics)")
                 continue
             
             # Determine wallet qualification tier
