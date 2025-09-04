@@ -1,0 +1,133 @@
+# GPT5 Recommended Strategy Configuration
+# Based on GPT5's analysis and recommendations for fixing 30% win rate
+
+strategy_name: "gpt5_recommended"
+description: "GPT5's recommended improvements to fix bleeding"
+
+# Entry conditions - Graduated confirmation approach
+entry:
+  trigger_type: "graduated"
+  min_alpha_wallets: 1  # Start with probe
+  probe_size_pct: 0.4   # 40% probe on first signal
+  
+  # Confirmation requirements
+  confirmation_wallets: 2  # Require 2nd wallet for full size
+  confirmation_timeout_seconds: 90
+  independence_check: true  # Must be independent wallets
+  max_entry_delay_seconds: 20
+  
+  # Position sizing
+  base_position_size_pct: 0.008  # 0.8% of capital (reduced from 3%)
+  max_concurrent_positions: 5    # Reduced from 10
+
+# Execution settings - Dynamic slippage with guards
+execution:
+  # Dynamic slippage ladder based on timing
+  slippage_ladder:
+    "0-5": 0.04    # 4% for 0-5 seconds
+    "5-10": 0.06   # 6% for 5-10 seconds  
+    "10-20": 0.10  # 10% for 10-20 seconds
+  
+  # Leader price delta guard - never pay >12% more than alpha wallet
+  leader_price_delta_max_pct: 0.12
+  
+  # Transaction settings
+  max_retries: 2
+  priority_fee_range: [0.0005, 0.003]  # Dynamic priority fees
+  use_jito_bundles: false  # For small positions
+
+# Exit conditions - Tighter stops, graduated profits
+exits:
+  # Immediate stop loss - no buffer period
+  stop_loss:
+    enabled: true
+    percentage: -15.0  # -15% stop (tighter than current -35%)
+    buffer_seconds: 0  # No buffer period
+    atr_multiplier_disabled: true  # No wide ATR stops in first minutes
+  
+  # Take profit system - Focus on locking gains
+  take_profit:
+    enabled: true
+    
+    # TP1: Small profit lock with breakeven stop
+    tp1_percentage: 20.0   # +20% gain
+    tp1_sell_amount: 0.25  # Sell only 25% (vs current 40%)
+    tp1_then_breakeven: true  # Move stop to breakeven after TP1
+    
+    # De-risk at 2x - Pull out cost basis  
+    derisk_percentage: 100.0  # +100% gain (2x)
+    derisk_action: "recover_cost_basis"  # Pull initial investment
+    
+    # True trailing stop on remainder
+    trailing_stop_enabled: true
+    trailing_stop_percentage: 8.0  # 8% from peak (tighter than current)
+    
+    # Stagnation exit - don't let time waste
+    stagnation_check:
+      enabled: true
+      min_time_minutes: 20
+      max_time_minutes: 45
+      min_gain_threshold: 20.0  # If < +20% after 20-45 min, exit
+  
+  # Time-based limits
+  time_based:
+    max_hold_seconds: 2700  # 45 minutes max (vs current 30)
+    # Remove forced profit caps at arbitrary times
+
+# Safety settings - Re-enable protection
+safety:
+  # Sellability checks back ON
+  require_sellability: true
+  hold_through_check: true  # Leader must hold, not dump immediately
+  
+  # Liquidity requirements
+  min_liquidity_usd: 20000  # Higher than current $5000
+  liquidity_quality_score: true
+  
+  # Price extension guard
+  price_extension_guard: 
+    enabled: true
+    percentile_threshold: 90  # Don't buy at 90th percentile peaks
+  
+  # NO S-tier bypasses - safety applies to everyone
+  s_tier_bypass_safety: false
+  ultra_confidence_bypass: false
+
+# Risk management
+risk_management:
+  enabled: true
+  daily_loss_circuit_breaker: 
+    max_loss_usd: 200  # Stop after $200 daily loss
+    max_consecutive_losses: 6
+  
+  position_correlation_limit: 0.8  # Don't over-concentrate
+
+# Simulation-specific settings  
+simulation:
+  # More realistic execution parameters
+  execution_delay_seconds: 2.0  # Slightly faster than current
+  
+  # Fee structure
+  entry_priority_fee_usd: 0.70  # Lower fees with dynamic pricing
+  exit_priority_fee_usd: 0.70
+  transaction_fee_usd: 0.05
+  
+  # Dynamic slippage based on timing
+  entry_slippage_base_pct: 4.0
+  exit_slippage_pct: 2.0
+  panic_exit_slippage_pct: 4.0  # Better than current 3%
+  
+  # Lower failure rates with higher slippage tolerance
+  buy_failure_rate: 0.08  # 8% vs current 15%
+  sell_failure_rate: 0.05  # 5% vs current 10%
+  
+  # Network delays
+  reconciliation_delay_seconds: 1.0
+  indexing_delay_seconds: 5.0
+
+# Expected improvements over current strategy:
+# 1. Higher win rate from 2-wallet confirmation and independence 
+# 2. Better fill rates from dynamic slippage ladder
+# 3. Tighter loss control with immediate 15% stops
+# 4. Better profit capture with breakeven stops after TP1
+# 5. Reduced position sizing limits maximum loss per trade
