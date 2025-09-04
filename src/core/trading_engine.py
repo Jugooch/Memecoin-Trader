@@ -799,7 +799,7 @@ class TradingEngine:
             self.logger.info(f"Creating live buy transaction: ${usd_amount} ({sol_amount:.4f} SOL) for {symbol}")
             
             # Higher slippage for aggressive entry fills
-            slippage_bps = 500  # 5% slippage to handle volatile tokens
+            slippage_bps = 1500  # 15% slippage to handle volatile tokens
             
             tx_result = await self.pumpfun.create_buy_transaction(
                 wallet_pubkey=wallet_pubkey,
