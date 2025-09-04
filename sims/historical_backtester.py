@@ -132,12 +132,22 @@ class HistoricalDataExtractor:
                                 symbol_match = re.search(r'symbol[:\s]*([A-Z0-9]+)', line, re.IGNORECASE)
                                 symbol = symbol_match.group(1) if symbol_match else 'UNKNOWN'
                                 
+                                # Debug: Log what we're extracting
+                                if price <= 0:
+                                    # Try to extract price from line if not in regex groups
+                                    price_match = re.search(r'\$([0-9.e-]+)', line)
+                                    if price_match:
+                                        try:
+                                            price = float(price_match.group(1))
+                                        except:
+                                            price = 0.0
+                                
                                 signals.append(HistoricalAlphaSignal(
                                     timestamp=timestamp,
                                     mint_address=mint,
                                     wallet_address=wallet,
                                     symbol=symbol,
-                                    price=price,
+                                    price=max(price, 0.0),  # Ensure non-negative
                                     source='log'
                                 ))
                                 break
@@ -303,6 +313,11 @@ class HistoricalBacktester:
         
         # Simulate entry execution
         entry_price = entry_signal.price
+        
+        # Skip if price is zero or invalid
+        if entry_price <= 0:
+            return None
+            
         position_size_usd = min(strategy.position_size_pct * capital_usd, capital_usd * 0.1)
         
         if position_size_usd < 10:  # Minimum position size
@@ -312,6 +327,11 @@ class HistoricalBacktester:
         slippage_pct = strategy.base_slippage_pct
         execution_price = entry_price * (1 + slippage_pct)
         fees_usd = 2.0  # Simplified fee
+        
+        # Skip if execution price is still zero
+        if execution_price <= 0:
+            return None
+            
         tokens_bought = position_size_usd / execution_price
         cost_basis = position_size_usd + fees_usd
         
@@ -357,10 +377,21 @@ class HistoricalBacktester:
         
         # Calculate P&L
         exit_price = final_price * (1 - 0.02)  # 2% exit slippage
+        
+        # Skip if exit price is invalid
+        if exit_price <= 0:
+            return None
+            
         usd_received = tokens_bought * exit_price - fees_usd  # Exit fees
         
         position.final_pnl_usd = usd_received - cost_basis
-        position.final_pnl_pct = (position.final_pnl_usd / cost_basis) * 100
+        
+        # Avoid division by zero
+        if cost_basis > 0:
+            position.final_pnl_pct = (position.final_pnl_usd / cost_basis) * 100
+        else:
+            position.final_pnl_pct = 0
+            
         position.hold_duration_seconds = hold_time
         
         # Determine exit reason based on P&L
