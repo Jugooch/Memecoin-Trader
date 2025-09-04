@@ -96,15 +96,22 @@ class HistoricalDataExtractor:
         self.logger.info(f"📡 Found {len(signals)} alpha signals from logs")
         return signals
     
-    def _parse_log_file(self, log_file: Path, cutoff_date: datetime) -> List[HistoricalAlphaSignal]:
+    def _parse_log_file_old(self, log_file: Path, cutoff_date: datetime) -> List[HistoricalAlphaSignal]:
         """Parse individual log file for alpha signals"""
         signals = []
         
-        # Patterns to match alpha wallet detections
+        # Patterns to match alpha wallet detections (updated for current format)
         alpha_patterns = [
             r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*ALPHA WALLET DETECTED: (\w+).*bought (\w+)',
-            r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*REALTIME ALPHA: (\w+).*bought (\w+)',
+            r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*REALTIME ALPHA: ([\w\.]{8,}).*bought ([\w\.]{8,})',  # More flexible matching
             r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*Alpha signal: (\w+).*bought (\w+).*at \$([0-9.e-]+)',
+        ]
+        
+        # Patterns to extract actual entry prices from position creation
+        position_patterns = [
+            r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*Position created: .* tokens at \$([0-9.e-]+).*mint=(\w+)',
+            r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*derived price \$([0-9.e-]+).*(\w+pump)',
+            r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*Position created: [0-9,]+ tokens at \$([0-9.e-]+)',
         ]
         
         try:
@@ -132,15 +139,17 @@ class HistoricalDataExtractor:
                                 symbol_match = re.search(r'symbol[:\s]*([A-Z0-9]+)', line, re.IGNORECASE)
                                 symbol = symbol_match.group(1) if symbol_match else 'UNKNOWN'
                                 
-                                # Debug: Log what we're extracting
+                                # Try to extract price from line if not in regex groups
                                 if price <= 0:
-                                    # Try to extract price from line if not in regex groups
                                     price_match = re.search(r'\$([0-9.e-]+)', line)
                                     if price_match:
                                         try:
                                             price = float(price_match.group(1))
                                         except:
                                             price = 0.0
+                                    else:
+                                        # Use default price for alpha signals without explicit price  
+                                        price = 0.0  # Will be filtered out later if no actual price found
                                 
                                 signals.append(HistoricalAlphaSignal(
                                     timestamp=timestamp,
@@ -154,6 +163,92 @@ class HistoricalDataExtractor:
                     except Exception as e:
                         # Skip malformed lines
                         continue
+        except Exception as e:
+            self.logger.error(f"❌ Error reading {log_file}: {e}")
+        
+        return signals
+    
+    def _parse_log_file(self, log_file: Path, cutoff_date: datetime) -> List[HistoricalAlphaSignal]:
+        """Parse individual log file for alpha signals with actual prices"""
+        signals = []
+        
+        try:
+            # Read all lines at once for two-pass parsing
+            with open(log_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            # First pass: find alpha signals and note their positions
+            alpha_candidates = []
+            for line_num, line in enumerate(lines):
+                # Match alpha wallet detections
+                alpha_match = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*(?:ALPHA WALLET DETECTED|REALTIME ALPHA): ([\w\.]{8,}).*bought ([\w\.]{8,})', line)
+                if alpha_match:
+                    timestamp_str, wallet, mint = alpha_match.groups()
+                    try:
+                        timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                        if timestamp >= cutoff_date:
+                            alpha_candidates.append({
+                                'timestamp': timestamp,
+                                'wallet': wallet,
+                                'mint': mint,
+                                'line_num': line_num
+                            })
+                    except:
+                        continue
+            
+            # Second pass: find corresponding prices for each alpha signal
+            for candidate in alpha_candidates:
+                mint = candidate['mint']
+                start_line = candidate['line_num']
+                price = None
+                
+                # Look in the next 20 lines for price information related to this mint
+                for i in range(start_line, min(start_line + 20, len(lines))):
+                    line = lines[i]
+                    
+                    # Skip lines that don't contain our mint address
+                    if mint not in line:
+                        continue
+                    
+                    # Look for price patterns
+                    price_patterns = [
+                        r'derived price \$([0-9.e-]+)',  # "derived price $0.00001300"
+                        r'Position created: [0-9,]+ tokens at \$([0-9.e-]+)',  # "Position created: 461,429 tokens at $0.00001300"
+                        r'tokens at \$([0-9.e-]+)',  # General "tokens at $price"
+                        r'price.*\$([0-9.e-]+)',  # Any "price $X" pattern
+                    ]
+                    
+                    for pattern in price_patterns:
+                        price_match = re.search(pattern, line)
+                        if price_match:
+                            try:
+                                price = float(price_match.group(1))
+                                break
+                            except:
+                                continue
+                    
+                    if price:
+                        break
+                
+                # Only create signal if we found a valid price
+                if price and price > 0:
+                    # Try to extract symbol from the context
+                    symbol = 'UNKNOWN'
+                    for i in range(max(0, start_line - 5), min(start_line + 10, len(lines))):
+                        symbol_match = re.search(r'symbol[:\s]*([A-Z0-9]+)', lines[i], re.IGNORECASE)
+                        if symbol_match:
+                            symbol = symbol_match.group(1)
+                            break
+                    
+                    signals.append(HistoricalAlphaSignal(
+                        timestamp=candidate['timestamp'],
+                        mint_address=mint,
+                        wallet_address=candidate['wallet'],
+                        symbol=symbol,
+                        price=price,
+                        source='logs'
+                    ))
+                        
         except Exception as e:
             self.logger.error(f"❌ Error reading {log_file}: {e}")
         
@@ -235,8 +330,14 @@ class HistoricalDataExtractor:
                 token_groups[mint] = []
             token_groups[mint].append(signal)
         
+        self.logger.info(f"🔍 Grouped {len(signals)} signals into {len(token_groups)} tokens")
+        
         token_data = []
         for mint, mint_signals in token_groups.items():
+            # Skip tokens with 'unknown' mint address
+            if mint == 'unknown' or not mint or len(mint) < 10:
+                continue
+                
             # Sort by timestamp
             mint_signals.sort(key=lambda s: s.timestamp)
             
