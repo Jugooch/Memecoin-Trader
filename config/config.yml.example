@@ -197,17 +197,31 @@ api_optimization:
   discovery_bitquery_success_threshold: 25  # Lower threshold (reduced from 40)
   discovery_early_window_minutes: 3   # Early buyer window (3 minutes matches entry window)
   
-  # Multi-tier alpha wallet discovery (targeting organic traders)
-  discovery_success_thresholds:
-    high: 1.5     # 1.5x performance = high success (organic threshold) 
-    medium: 1.3   # 1.3x performance = medium success
-    low: 1.15     # 1.15x performance = low success (covers fees)
+  # Discovery mode: "consistency" for steady performers, "champion" for 10x hunters  
+  discovery_mode: "consistency"  # Focus on consistent organic traders
   
-  # ADJUSTED: Require more trades for statistical significance
+  # Control whether to discover new wallets at bot startup
+  discover_new_wallets: true     # Set to false to skip discovery and use existing wallets only
+  
+  # Champion mode settings (finds wallets that caught 10x+ tokens)
+  champion_settings:
+    min_champion_hits: 1      # Require 1+ catches of 10x tokens (more realistic)
+    min_super_high_hits: 2    # Or 2+ catches of 5x tokens (lowered from 3)
+    lookback_days: 7          # Look back 7 days for champions
+  
+  # Multi-tier alpha wallet discovery (organic trader consistency focus)
+  discovery_success_thresholds:
+    excellent: 3.0  # 3x+ performance = excellent organic trade
+    high: 2.0       # 2x+ performance = solid organic trade  
+    medium: 1.5     # 1.5x+ performance = decent organic trade
+    good: 1.3       # 1.3x+ performance = good organic trade
+    modest: 1.15    # 1.15x+ performance = modest but profitable
+  
+  # ADJUSTED: Realistic requirements for consistent organic traders
   discovery_min_appearances:
-    tier_1: 5     # Premium: 5+ high success tokens (increased from 2)
-    tier_2: 7     # Good: 7+ medium success tokens (increased from 3)
-    tier_3: 10    # Emerging: 10+ low success tokens (increased from 4)
+    tier_1: 2     # Premium: 2+ high success tokens (realistic for consistency)
+    tier_2: 3     # Good: 3+ medium success tokens (organic pattern)
+    tier_3: 4     # Emerging: 4+ low success tokens (steady performers)
 
 # Pump.fun configuration
 pump_fun:

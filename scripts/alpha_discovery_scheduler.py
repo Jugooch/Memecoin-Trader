@@ -39,8 +39,8 @@ async def run_discovery():
         
         await database.initialize()
         
-        # Run alpha finder
-        finder = ProvenAlphaFinder(bitquery, moralis, database)
+        # Run alpha finder with config
+        finder = ProvenAlphaFinder(bitquery, moralis, database, config)
         alpha_wallets = await finder.discover_alpha_wallets()
         
         if alpha_wallets:

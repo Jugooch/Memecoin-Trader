@@ -69,11 +69,11 @@ class ProvenAlphaFinder:
         # Get early window from config (in minutes, convert to seconds)
         self.early_window_seconds = api_opt.get('discovery_early_window_minutes', 3) * 60
         
-        # ADJUSTED: Require more trades for statistical significance
+        # ADJUSTED: Focus on consistency over volume - reduced thresholds for organic traders
         self.min_wallet_appearances = api_opt.get('discovery_min_appearances', {
-            'tier_1': 5,      # High-quality wallets: 5+ high success tokens (was 2)
-            'tier_2': 7,      # Medium-quality wallets: 7+ medium success tokens (was 3)
-            'tier_3': 10      # Emerging wallets: 10+ low success tokens (was 4)
+            'tier_1': 2,      # High-quality wallets: 2+ high success tokens (realistic for consistency)
+            'tier_2': 3,      # Medium-quality wallets: 3+ medium success tokens (organic pattern)
+            'tier_3': 4       # Emerging wallets: 4+ low success tokens (steady performers)
         })
         
         # Get additional discovery configs
@@ -219,11 +219,15 @@ class ProvenAlphaFinder:
     
     async def _get_historical_tokens(self) -> List[Dict]:
         """Get recent tokens with comprehensive metrics computation"""
-        # EXTENDED: Analyze longer window to find wallets with more trading history
-        # 120-5 minutes ago gives us 2 hours of data to find organic traders
+        # OVERRIDE: Force consistency mode instead of champion mode
+        discovery_mode = 'consistency'  # Force consistency mode
+        
+        self.logger.info("🎯 CONSISTENCY MODE: Focusing on steady organic performers over lucky champions")
+        
         now = datetime.utcnow()
-        start_time = now - timedelta(minutes=120)   # 2 hours ago UTC (was 60)
-        end_time = now - timedelta(minutes=5)       # 5 minutes ago UTC
+        # Consistency mode: Look for steady performance over 12 hours (more data, less noise)
+        start_time = now - timedelta(hours=12)      # 12 hours for consistency analysis
+        end_time = now - timedelta(minutes=15)      # 15 minutes ago for data completeness
         
         self.logger.info(f"Analyzing recent tokens window: {start_time.isoformat()}Z -> {end_time.isoformat()}Z")
         
@@ -237,8 +241,8 @@ class ProvenAlphaFinder:
             recent_trades = await self.bitquery.get_trades_windowed_paginated(
                 start_iso=start_iso,
                 end_iso=end_iso,
-                page_limit=3000,
-                max_pages=20  # Up to 60k trades total
+                page_limit=5000,
+                max_pages=200  # Up to 1M trades total - for 7-day champion discovery
             )
             
             self.logger.info(f"Paginated BitQuery returned {len(recent_trades)} total trades")
@@ -472,28 +476,38 @@ class ProvenAlphaFinder:
             success_tier = None
             score = 0
             
-            # Use the threshold from config (loaded in __init__)
+            # ADJUSTED: Focus on realistic organic trader performance ranges
             
-            # PRICE-BASED TIERS (if available)
+            # CONSISTENCY-BASED TIERS (realistic for organic traders)
             if performance_multiplier is not None:
-                if performance_multiplier >= 2.0:
-                    success_tier = 'high'
+                # Organic trader tiers - realistic performance expectations
+                if performance_multiplier >= 3.0:
+                    success_tier = 'excellent'  # 3x+ = excellent organic trade
+                    score += 60
+                elif performance_multiplier >= 2.0:
+                    success_tier = 'high'       # 2x+ = solid organic trade
                     score += 50
                 elif performance_multiplier >= 1.5:
-                    success_tier = 'medium'
-                    score += 35
-                elif performance_multiplier >= 1.2:
-                    success_tier = 'low'
+                    success_tier = 'medium'     # 1.5x+ = decent organic trade
+                    score += 40
+                elif performance_multiplier >= 1.3:
+                    success_tier = 'good'       # 1.3x+ = good organic trade
+                    score += 30
+                elif performance_multiplier >= 1.15:
+                    success_tier = 'modest'     # 1.15x+ = modest but profitable
                     score += 20
             
-            # ACTIVITY FALLBACK (no price): allow medium/low purely on traders+swaps
+            # ACTIVITY FALLBACK (no price): allow organic activity patterns
             if success_tier is None:
-                if unique_traders >= 20 and swap_count >= 40:
-                    success_tier = 'medium'
+                if unique_traders >= 15 and swap_count >= 30:
+                    success_tier = 'medium'     # Active organic community
                     score += 30
-                elif unique_traders >= 10 and swap_count >= 20:
-                    success_tier = 'low'
+                elif unique_traders >= 8 and swap_count >= 15:
+                    success_tier = 'modest'     # Modest organic activity
                     score += 20
+                elif unique_traders >= 5 and swap_count >= 10:
+                    success_tier = 'small'      # Small but organic activity
+                    score += 15
                 else:
                     # Track rejection reasons for debugging
                     # Get prefilter thresholds from config
@@ -528,19 +542,34 @@ class ProvenAlphaFinder:
             token_data['bitquery_success_score'] = score
             token_data['success_tier'] = success_tier
             
-            # Include tokens that have a tier AND meet the threshold score
-            # Use the config threshold to filter tokens
-            if success_tier is not None and score >= self.bitquery_success_threshold:
+            # CONSISTENCY MODE: Include all tokens with organic activity patterns
+            if success_tier is not None and score >= 15:  # Lower threshold for consistency
                 promising_tokens.append(token_data)
                 price_str = f"{performance_multiplier:.2f}x" if performance_multiplier else "no_price"
                 self.logger.debug(f"Token {mint[:8]}... promising: score={score}, "
                                 f"tier={success_tier}, perf={price_str}, swaps={swap_count}, traders={unique_traders}")
         
         # Log comprehensive filtering statistics
+        # Count consistency tiers
+        excellent_count = sum(1 for t in promising_tokens if t.get('success_tier') == 'excellent')
+        high_count = sum(1 for t in promising_tokens if t.get('success_tier') == 'high')
+        medium_count = sum(1 for t in promising_tokens if t.get('success_tier') == 'medium')
+        good_count = sum(1 for t in promising_tokens if t.get('success_tier') == 'good')
+        modest_count = sum(1 for t in promising_tokens if t.get('success_tier') == 'modest')
+        small_count = sum(1 for t in promising_tokens if t.get('success_tier') == 'small')
+        
         self.logger.info(f"Prefilter results:")
         self.logger.info(f"  - Total tokens analyzed: {total_tokens}")
         self.logger.info(f"  - Tokens with price data: {tokens_with_price} ({tokens_with_price/total_tokens*100:.1f}%)")
         self.logger.info(f"  - Promising tokens found: {len(promising_tokens)}")
+        
+        # Show consistency tier distribution
+        self.logger.info(f"  - 🎯 Excellent (3x+): {excellent_count}")
+        self.logger.info(f"  - 🎯 High (2x+): {high_count}")
+        self.logger.info(f"  - 🎯 Medium (1.5x+): {medium_count}")
+        self.logger.info(f"  - 🎯 Good (1.3x+): {good_count}")
+        self.logger.info(f"  - 🎯 Modest (1.15x+): {modest_count}")
+        self.logger.info(f"  - 🎯 Small (activity): {small_count}")
         self.logger.info(f"  - Rejected - no price + low activity: {tokens_rejected_no_price_low_activity}")
         self.logger.info(f"  - Rejected - low traders: {tokens_rejected_low_traders}")
         self.logger.info(f"  - Rejected - low swaps: {tokens_rejected_low_swaps}")
@@ -574,7 +603,8 @@ class ProvenAlphaFinder:
             performance_multiplier = token_data.get('performance_multiplier', 1.0)
             bitquery_score = token_data.get('bitquery_success_score', 0)
             success_tier = token_data.get('success_tier', None)
-            success_threshold = self.success_thresholds['low']
+            # Use the lowest threshold from our consistency-focused thresholds
+            success_threshold = self.success_thresholds.get('modest', 1.15)
 
             # Handle None price and performance safely
             price_str = f"${current_price:.8f}" if current_price is not None else "None"
@@ -1029,13 +1059,16 @@ class ProvenAlphaFinder:
             # Multi-tier approach: different requirements based on success tier
             wallet_success_tiers = []
             for token_entry in token_list:
-                tier = token_entry["token"].get('success_tier', 'low')
+                tier = token_entry["token"].get('success_tier', 'small')
                 wallet_success_tiers.append(tier)
             
-            # Count successes by tier
+            # Count successes by consistency tier
+            excellent_count = wallet_success_tiers.count('excellent')
             high_count = wallet_success_tiers.count('high')
             medium_count = wallet_success_tiers.count('medium') 
-            low_count = wallet_success_tiers.count('low')
+            good_count = wallet_success_tiers.count('good')
+            modest_count = wallet_success_tiers.count('modest')
+            small_count = wallet_success_tiers.count('small')
             
             # CRITICAL: Require minimum trades for statistical significance
             total_trades = len(token_list)
@@ -1043,24 +1076,34 @@ class ProvenAlphaFinder:
                 self.logger.debug(f"Wallet {wallet[:8]}... skipped: only {total_trades} trades (need 2+ for statistics)")
                 continue
             
-            # Determine wallet qualification tier
+            # Determine wallet tier based on CONSISTENCY of organic performance
             wallet_tier = None
-            if high_count >= self.min_wallet_appearances['tier_1']:
-                wallet_tier = 'tier_1'  # Premium alpha wallet
-            elif medium_count >= self.min_wallet_appearances['tier_2']:
-                wallet_tier = 'tier_2'  # Good alpha wallet  
-            elif low_count >= self.min_wallet_appearances['tier_3']:
-                wallet_tier = 'tier_3'  # Emerging alpha wallet
+            
+            # Count different success types for organic trader evaluation
+            excellent_count = wallet_success_tiers.count('excellent')
+            high_count = wallet_success_tiers.count('high')
+            medium_count = wallet_success_tiers.count('medium') 
+            good_count = wallet_success_tiers.count('good')
+            modest_count = wallet_success_tiers.count('modest')
+            small_count = wallet_success_tiers.count('small')
+            
+            # CONSISTENCY TIER LOGIC - focus on steady performance patterns
+            if excellent_count >= 1 or high_count >= 2:
+                wallet_tier = 'tier_1'  # Premium organic trader (some excellent/high hits)
+            elif high_count >= 1 and (medium_count + good_count) >= 2:
+                wallet_tier = 'tier_2'  # Good organic trader (consistent performance)  
+            elif (medium_count + good_count + modest_count) >= self.min_wallet_appearances['tier_3']:
+                wallet_tier = 'tier_3'  # Steady organic trader (modest but consistent)
             
             if wallet_tier is None:
-                self.logger.debug(f"Wallet {wallet[:8]}... insufficient tier: H:{high_count} M:{medium_count} L:{low_count}")
+                self.logger.debug(f"Wallet {wallet[:8]}... insufficient consistency: E:{excellent_count} H:{high_count} M:{medium_count} G:{good_count} Mo:{modest_count}")
                 continue
                 
-            self.logger.debug(f"Wallet {wallet[:8]}... qualified as {wallet_tier}: H:{high_count} M:{medium_count} L:{low_count}")
+            self.logger.debug(f"Wallet {wallet[:8]}... qualified as {wallet_tier}: E:{excellent_count} H:{high_count} M:{medium_count} G:{good_count} Mo:{modest_count}")
             
             # Calculate tier-weighted scoring
-            tier_multipliers = {'tier_1': 3.0, 'tier_2': 2.0, 'tier_3': 1.5}
-            base_score = tier_multipliers[wallet_tier]
+            tier_multipliers = {'elite': 5.0, 'tier_1': 3.0, 'tier_2': 2.0, 'tier_3': 1.5}
+            base_score = tier_multipliers.get(wallet_tier, 1.0)
             
             # Use actual performance_multiplier from token data
             performance_multipliers = []
@@ -1090,23 +1133,23 @@ class ProvenAlphaFinder:
                 total_weight = sum(recency_weights)
                 avg_performance = sum(p * w for p, w in zip(performance_multipliers, recency_weights)) / total_weight
                 
-                # ADJUSTED: Target organic wallets with 60-70% win rates instead of super high rates
-                # Calculate success rate (performance >= 1.5x for organic traders)
-                success_count = sum(w for p, w in zip(performance_multipliers, recency_weights) if p >= 1.5)
+                # ADJUSTED: Target organic wallets with 55-75% win rates (realistic consistency)
+                # Calculate success rate (performance >= 1.3x for organic traders - lower threshold)
+                success_count = sum(w for p, w in zip(performance_multipliers, recency_weights) if p >= 1.3)
                 success_rate = success_count / total_weight
                 
-                # NEW: Apply win rate preference for organic wallets (60-70% ideal)
+                # IMPROVED: Apply win rate preference for realistic organic patterns
                 win_rate_quality = 1.0
-                if 0.60 <= success_rate <= 0.70:
-                    win_rate_quality = 2.0  # STRONG boost for ideal organic range
-                elif 0.55 <= success_rate < 0.60 or 0.70 < success_rate <= 0.75:
-                    win_rate_quality = 1.5  # Good boost for near-ideal
+                if 0.55 <= success_rate <= 0.75:
+                    win_rate_quality = 1.8  # Strong boost for realistic organic range
                 elif 0.50 <= success_rate < 0.55 or 0.75 < success_rate <= 0.80:
-                    win_rate_quality = 1.0  # Neutral for acceptable range
-                elif success_rate > 0.85:
-                    win_rate_quality = 0.3  # Strong penalty for suspiciously high
-                elif success_rate > 0.95:
-                    win_rate_quality = 0.05  # Extreme penalty for near-perfect
+                    win_rate_quality = 1.3  # Good boost for decent performance
+                elif 0.45 <= success_rate < 0.50 or 0.80 < success_rate <= 0.85:
+                    win_rate_quality = 1.0  # Neutral for borderline range
+                elif success_rate > 0.90:
+                    win_rate_quality = 0.4  # Moderate penalty for suspiciously high (not extreme)
+                elif success_rate < 0.40:
+                    win_rate_quality = 0.6  # Moderate penalty for poor consistency
                 
                 # Calculate risk-adjusted performance (normalize by position size)
                 risk_adjusted_returns = []
@@ -1134,19 +1177,25 @@ class ProvenAlphaFinder:
             # NEW: Layer 4 - Calculate early entry rate
             early_entry_rate = self._calculate_early_entry_rate(wallet, token_list)
             
-            # NEW: Layer 5 - Apply quality filters
-            min_exit_quality = self.config.get('discovery_quality_checks', {}).get('min_exit_quality', 0.3)
-            min_consistency = self.config.get('discovery_quality_checks', {}).get('min_consistency', 0.2)
-            min_early_entry_rate = self.config.get('discovery_quality_checks', {}).get('min_early_entry_rate', 0.4)
+            # RELAXED: Layer 5 - Apply realistic quality filters for organic traders
+            min_exit_quality = self.config.get('discovery_quality_checks', {}).get('min_exit_quality', 0.2)  # Relaxed
+            min_consistency = self.config.get('discovery_quality_checks', {}).get('min_consistency', 0.15)  # Relaxed 
+            min_early_entry_rate = self.config.get('discovery_quality_checks', {}).get('min_early_entry_rate', 0.3)  # Relaxed
             
-            if (avg_exit_quality < min_exit_quality or 
-                consistency_score < min_consistency or 
-                early_entry_rate < min_early_entry_rate):
-                # Skip wallets that fail quality checks
-                self.logger.debug(f"Wallet {wallet[:8]}... failed quality check: "
+            # Only apply strict filtering if we have lots of candidates (>50)
+            if len(candidates) > 50:
+                if (avg_exit_quality < min_exit_quality or 
+                    consistency_score < min_consistency or 
+                    early_entry_rate < min_early_entry_rate):
+                    self.logger.debug(f"Wallet {wallet[:8]}... failed strict quality check: "
+                                   f"exit={avg_exit_quality:.2f}, consistency={consistency_score:.2f}, "
+                                   f"early_entry={early_entry_rate:.2f}")
+                    continue
+            else:
+                # Relaxed filtering when we have few candidates
+                self.logger.debug(f"Wallet {wallet[:8]}... quality metrics: "
                                f"exit={avg_exit_quality:.2f}, consistency={consistency_score:.2f}, "
-                               f"early_entry={early_entry_rate:.2f}")
-                continue
+                               f"early_entry={early_entry_rate:.2f} (relaxed filtering active)")
             
             # Calculate enhanced tier-weighted final score with quality layers
             tier_base_score = base_score * 100  # Base score from tier multiplier
@@ -1173,7 +1222,7 @@ class ProvenAlphaFinder:
                 'score': final_score,
                 'tier': wallet_tier,
                 'total_tokens': len(token_list),
-                'tier_counts': f"H:{high_count}/M:{medium_count}/L:{low_count}",
+                'tier_counts': f"E:{excellent_count}/H:{high_count}/M:{medium_count}/G:{good_count}/Mo:{modest_count}/S:{small_count}",
                 'avg_performance': avg_performance,
                 'success_rate': success_rate,
                 'avg_risk_adjusted_return': avg_risk_adjusted_return,
@@ -1591,8 +1640,8 @@ async def main():
     await database.initialize()
     
     try:
-        # Run advanced alpha finder
-        finder = ProvenAlphaFinder(bitquery, moralis, database)
+        # Run advanced alpha finder with config
+        finder = ProvenAlphaFinder(bitquery, moralis, database, config)
         alpha_wallets = await finder.discover_alpha_wallets()
         
         print(f"\nDiscovered {len(alpha_wallets)} proven alpha wallets:")

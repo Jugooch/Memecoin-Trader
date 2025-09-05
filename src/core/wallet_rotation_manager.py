@@ -115,9 +115,14 @@ class WalletRotationManager:
         
         # Step 3: Discover new alpha wallets
         new_wallets = []
-        if target_new_wallets > 0:
+        
+        # Check if discovery is enabled
+        discover_new_wallets = self.config.get('api_optimization', {}).get('discover_new_wallets', True)
+        
+        if target_new_wallets > 0 and discover_new_wallets:
             discovery_start = time.time()
             try:
+                self.logger.info("Discovery enabled - searching for new alpha wallets...")
                 finder = ProvenAlphaFinder(self.bitquery, self.moralis, self.database, self.config)
                 discovered_wallets = await finder.discover_alpha_wallets()
                 
@@ -137,6 +142,10 @@ class WalletRotationManager:
                     
             except Exception as e:
                 self.logger.error(f"Error during alpha discovery: {e}")
+        elif target_new_wallets > 0 and not discover_new_wallets:
+            self.logger.info(f"Discovery disabled - skipping search for {target_new_wallets} new wallets")
+        elif target_new_wallets == 0:
+            self.logger.info("No new wallets needed for rotation")
         
         # Step 4: Build final wallet list
         final_wallets = set()
