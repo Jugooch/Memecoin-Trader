@@ -143,10 +143,11 @@ class FarmingDetector:
             else:
                 metrics['classification'] = 'safe'
             
-            # Log analysis summary
-            self.logger.info(f"Wallet {wallet[:8]}... farming analysis: "
-                           f"score={farmer_score:.2f}, class={metrics['classification']}, "
-                           f"flags={len(metrics['red_flags'])}")
+            # Log only suspicious/farmed wallets, not every wallet
+            if metrics['classification'] in ['farmed', 'suspicious']:
+                self.logger.info(f"Wallet {wallet[:8]}... farming analysis: "
+                               f"score={farmer_score:.2f}, class={metrics['classification']}, "
+                               f"flags={len(metrics['red_flags'])}")
             
         except Exception as e:
             self.logger.error(f"Error analyzing wallet {wallet[:8]}... for farming: {e}")

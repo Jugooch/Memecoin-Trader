@@ -1011,8 +1011,6 @@ class ProvenAlphaFinder:
                 # Flag wallets with excessive coordination
                 if co_occurrence_rate > max_co_occurrence_rate or rapid_coordination:
                     suspicious_wallets.add(wallet)
-                    if co_occurrence_rate > max_co_occurrence_rate:
-                        self.logger.warning(f"Suspicious coordination: {wallet[:8]}... co-occurs {co_occurrence_rate:.0%} with another wallet (threshold: {max_co_occurrence_rate:.0%})")
         
         if suspicious_wallets:
             self.logger.info(f"Wash trading detection: flagged {len(suspicious_wallets)} suspicious wallets")
