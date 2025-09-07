@@ -834,7 +834,25 @@ class BitqueryClient:
             return await self._get_wallet_token_trades_impl(wallet_address, token_address, limit)
     
     async def _get_wallet_token_trades_impl(self, wallet_address: str, token_address: str, limit: int = 10) -> List[Dict]:
-        """Implementation of get_wallet_token_trades with corrected query structure"""
+        """Implementation of get_wallet_token_trades with fresh transport per request"""
+        # Create a fresh transport for this specific request to avoid "Transport is already connected"
+        token_index, api_token = self._get_next_available_token()
+        
+        if not api_token:
+            self.logger.error("No available Bitquery API tokens for wallet trades")
+            return []
+        
+        from gql.transport.aiohttp import AIOHTTPTransport
+        fresh_transport = AIOHTTPTransport(
+            url=self.endpoint,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_token}"
+            }
+        )
+        
+        fresh_client = Client(transport=fresh_transport)
+        
         query = gql("""
             query($wallet: String!, $mint: String!, $limit: Int!) {
               Solana {
@@ -908,7 +926,7 @@ class BitqueryClient:
         """)
         
         try:
-            result = await self.client.execute_async(
+            result = await fresh_client.execute_async(
                 query, 
                 variable_values={
                     "wallet": wallet_address, 
@@ -917,8 +935,9 @@ class BitqueryClient:
                 }
             )
             
-            if self.current_client_token_index is not None:
-                self.token_stats[self.current_client_token_index]['calls_today'] += 1
+            # Update stats for the token we used
+            if token_index is not None:
+                self.token_stats[token_index]['calls_today'] += 1
             
             trades = result['Solana']['DEXTrades']
             parsed_trades = []
@@ -942,6 +961,12 @@ class BitqueryClient:
         except Exception as e:
             self.logger.error(f"Error fetching wallet token trades: {e}")
             return []
+        finally:
+            # Always close the transport to prevent connection leaks
+            try:
+                await fresh_transport.close()
+            except Exception as cleanup_error:
+                self.logger.debug(f"Error closing transport: {cleanup_error}")
     
     async def get_token_trades_in_window(self, token_address: str, start_time: float, end_time: float) -> List[Dict]:
         """Get all trades for a token within a time window"""
