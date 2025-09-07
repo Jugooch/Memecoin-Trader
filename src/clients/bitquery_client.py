@@ -828,9 +828,6 @@ class BitqueryClient:
     
     async def get_wallet_token_trades(self, wallet_address: str, token_address: str, limit: int = 10) -> List[Dict]:
         """Get trades for a specific wallet on a specific token"""
-        if not self.client:
-            await self.initialize()
-            
         query = gql("""
             query($wallet: String!, $mint: String!, $limit: Int!) {
               Solana {
@@ -950,9 +947,6 @@ class BitqueryClient:
     
     async def get_token_trades_in_window(self, token_address: str, start_time: float, end_time: float) -> List[Dict]:
         """Get all trades for a token within a time window"""
-        if not self.client:
-            await self.initialize()
-        
         # Convert timestamps to ISO format (following existing pattern)
         from datetime import datetime, timezone
         start_dt = datetime.fromtimestamp(start_time, tz=timezone.utc)
@@ -1050,9 +1044,6 @@ class BitqueryClient:
     
     async def get_wallet_trades(self, wallet_address: str, limit: int = 50) -> List[Dict]:
         """Get all recent trades for a specific wallet across all tokens"""
-        if not self.client:
-            await self.initialize()
-            
         query = gql("""
             query($wallet: String!, $limit: Int!) {
               Solana {
