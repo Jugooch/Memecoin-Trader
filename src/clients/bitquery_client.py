@@ -826,3 +826,341 @@ class BitqueryClient:
             
             return []
     
+    async def get_wallet_token_trades(self, wallet_address: str, token_address: str, limit: int = 10) -> List[Dict]:
+        """Get trades for a specific wallet on a specific token"""
+        if not self.client:
+            await self.initialize()
+            
+        query = gql("""
+            query($wallet: String!, $mint: String!, $limit: Int!) {
+              Solana {
+                DEXTrades(
+                  limit: $limit
+                  orderBy: {descending: Block_Time}
+                  where: {
+                    Trade: {
+                      Dex: {
+                        ProgramAddress: {is: "6EF8rrecthHAuSStzpf6aXr9HWs8jgPVrj5S6fqF6P"}
+                      }
+                      Or: [
+                        {
+                          Buy: {
+                            Currency: {
+                              MintAddress: {is: $mint}
+                            }
+                            Account: {
+                              Address: {is: $wallet}
+                            }
+                          }
+                        }
+                        {
+                          Sell: {
+                            Currency: {
+                              MintAddress: {is: $mint}
+                            }
+                            Account: {
+                              Address: {is: $wallet}
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ) {
+                  Block {
+                    Time
+                  }
+                  Transaction {
+                    Signature
+                    Signer
+                  }
+                  Trade {
+                    Buy {
+                      Amount
+                      Currency {
+                        MintAddress
+                        Symbol
+                        Name
+                      }
+                      Price
+                      Account {
+                        Address
+                      }
+                    }
+                    Sell {
+                      Amount
+                      Currency {
+                        MintAddress
+                        Symbol
+                        Name
+                      }
+                      Price
+                      Account {
+                        Address
+                      }
+                    }
+                    Dex {
+                      ProgramAddress
+                      ProtocolName
+                    }
+                  }
+                }
+              }
+            }
+        """)
+        
+        try:
+            result = await self.client.execute_async(
+                query, 
+                variable_values={
+                    "wallet": wallet_address, 
+                    "mint": token_address, 
+                    "limit": limit
+                }
+            )
+            
+            if self.current_client_token_index is not None:
+                self.token_stats[self.current_client_token_index]['calls_today'] += 1
+            
+            trades = result['Solana']['DEXTrades']
+            parsed_trades = []
+            
+            for trade in trades:
+                wallet_bought = trade['Trade']['Buy']['Account']['Address'] == wallet_address
+                
+                parsed_trade = {
+                    'timestamp': self._parse_iso_timestamp(trade['Block']['Time']),
+                    'side': 'buy' if wallet_bought else 'sell',
+                    'price': float(trade['Trade']['Buy']['Price']) if wallet_bought else float(trade['Trade']['Sell']['Price']),
+                    'amount': float(trade['Trade']['Buy']['Amount']) if wallet_bought else float(trade['Trade']['Sell']['Amount']),
+                    'token_address': token_address,
+                    'wallet': wallet_address,
+                    'tx_hash': trade['Transaction']['Signature']
+                }
+                parsed_trades.append(parsed_trade)
+            
+            return parsed_trades
+            
+        except Exception as e:
+            self.logger.error(f"Error fetching wallet token trades: {e}")
+            return []
+    
+    async def get_token_trades_in_window(self, token_address: str, start_time: float, end_time: float) -> List[Dict]:
+        """Get all trades for a token within a time window"""
+        if not self.client:
+            await self.initialize()
+        
+        # Convert timestamps to ISO format (following existing pattern)
+        from datetime import datetime, timezone
+        start_dt = datetime.fromtimestamp(start_time, tz=timezone.utc)
+        end_dt = datetime.fromtimestamp(end_time, tz=timezone.utc)
+        start_iso = start_dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        end_iso = end_dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        
+        query = gql(f"""
+            query {{
+              Solana {{
+                DEXTrades(
+                  limit: 100
+                  orderBy: {{ ascending: Block_Time }}
+                  where: {{
+                    Trade: {{
+                      Dex: {{
+                        ProgramAddress: {{is: "6EF8rrecthHAuSStzpf6aXr9HWs8jgPVrj5S6fqF6P"}}
+                      }}
+                      Buy: {{
+                        Currency: {{
+                          MintAddress: {{is: "{token_address}"}}
+                        }}
+                      }}
+                    }}
+                    Block: {{
+                      Time: {{ since: "{start_iso}", till: "{end_iso}" }}
+                    }}
+                  }}
+                ) {{
+                  Block {{ Time }}
+                  Transaction {{
+                    Signature
+                    Signer
+                  }}
+                  Trade {{
+                    Buy {{
+                      Amount
+                      Currency {{
+                        MintAddress
+                        Symbol
+                        Name
+                      }}
+                      Price
+                      Account {{
+                        Address
+                      }}
+                    }}
+                    Sell {{
+                      Amount
+                      Currency {{
+                        MintAddress
+                        Symbol
+                        Name
+                      }}
+                      Price
+                      Account {{
+                        Address
+                      }}
+                    }}
+                    Dex {{
+                      ProgramAddress
+                      ProtocolName
+                    }}
+                  }}
+                }}
+              }}
+            }}
+        """)
+        
+        try:
+            result = await self.client.execute_async(query)
+            
+            if self.current_client_token_index is not None:
+                self.token_stats[self.current_client_token_index]['calls_today'] += 1
+            
+            trades = result['Solana']['DEXTrades']
+            parsed_trades = []
+            
+            for trade in trades:
+                parsed_trade = {
+                    'timestamp': self._parse_iso_timestamp(trade['Block']['Time']),
+                    'side': 'buy',  # This query filters for buys
+                    'price': float(trade['Trade']['Buy']['Price']),
+                    'amount': float(trade['Trade']['Buy']['Amount']),
+                    'token_address': token_address,
+                    'wallet': trade['Trade']['Buy']['Account']['Address'],
+                    'tx_hash': trade['Transaction']['Signature']
+                }
+                parsed_trades.append(parsed_trade)
+            
+            return parsed_trades
+            
+        except Exception as e:
+            self.logger.error(f"Error fetching token trades in window: {e}")
+            return []
+    
+    async def get_wallet_trades(self, wallet_address: str, limit: int = 50) -> List[Dict]:
+        """Get all recent trades for a specific wallet across all tokens"""
+        if not self.client:
+            await self.initialize()
+            
+        query = gql("""
+            query($wallet: String!, $limit: Int!) {
+              Solana {
+                DEXTrades(
+                  limit: $limit
+                  orderBy: {descending: Block_Time}
+                  where: {
+                    Trade: {
+                      Dex: {
+                        ProgramAddress: {is: "6EF8rrecthHAuSStzpf6aXr9HWs8jgPVrj5S6fqF6P"}
+                      }
+                      Or: [
+                        {
+                          Buy: {
+                            Account: {
+                              Address: {is: $wallet}
+                            }
+                          }
+                        }
+                        {
+                          Sell: {
+                            Account: {
+                              Address: {is: $wallet}
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ) {
+                  Block {
+                    Time
+                  }
+                  Transaction {
+                    Signature
+                    Signer
+                  }
+                  Trade {
+                    Buy {
+                      Amount
+                      Currency {
+                        MintAddress
+                        Symbol
+                        Name
+                      }
+                      Price
+                      Account {
+                        Address
+                      }
+                    }
+                    Sell {
+                      Amount
+                      Currency {
+                        MintAddress
+                        Symbol
+                        Name
+                      }
+                      Price
+                      Account {
+                        Address
+                      }
+                    }
+                    Dex {
+                      ProgramAddress
+                      ProtocolName
+                    }
+                  }
+                }
+              }
+            }
+        """)
+        
+        try:
+            result = await self.client.execute_async(
+                query, 
+                variable_values={
+                    "wallet": wallet_address, 
+                    "limit": limit
+                }
+            )
+            
+            if self.current_client_token_index is not None:
+                self.token_stats[self.current_client_token_index]['calls_today'] += 1
+            
+            trades = result['Solana']['DEXTrades']
+            parsed_trades = []
+            
+            for trade in trades:
+                wallet_bought = trade['Trade']['Buy']['Account']['Address'] == wallet_address
+                
+                parsed_trade = {
+                    'timestamp': self._parse_iso_timestamp(trade['Block']['Time']),
+                    'side': 'buy' if wallet_bought else 'sell',
+                    'token_address': trade['Trade']['Buy']['Currency']['MintAddress'] if wallet_bought else trade['Trade']['Sell']['Currency']['MintAddress'],
+                    'price': float(trade['Trade']['Buy']['Price']) if wallet_bought else float(trade['Trade']['Sell']['Price']),
+                    'amount': float(trade['Trade']['Buy']['Amount']) if wallet_bought else float(trade['Trade']['Sell']['Amount']),
+                    'wallet': wallet_address,
+                    'tx_hash': trade['Transaction']['Signature']
+                }
+                parsed_trades.append(parsed_trade)
+            
+            return parsed_trades
+            
+        except Exception as e:
+            self.logger.error(f"Error fetching wallet trades: {e}")
+            return []
+
+    def _timestamp_to_iso(self, timestamp: float) -> str:
+        """Convert Unix timestamp to ISO format for BitQuery"""
+        from datetime import datetime, timezone
+        dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+    
