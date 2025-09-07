@@ -835,13 +835,11 @@ class BitqueryClient:
             query($wallet: String!, $mint: String!, $limit: Int!) {
               Solana {
                 DEXTrades(
-                  limit: $limit
+                  limit: { count: $limit }
                   orderBy: {descending: Block_Time}
                   where: {
                     Trade: {
-                      Dex: {
-                        ProgramAddress: {is: "6EF8rrecthHAuSStzpf6aXr9HWs8jgPVrj5S6fqF6P"}
-                      }
+                      Dex: { ProtocolName: { is: "pump" } }
                       Or: [
                         {
                           Buy: {
@@ -865,6 +863,7 @@ class BitqueryClient:
                         }
                       ]
                     }
+                    Transaction: { Result: { Success: true } }
                   }
                 ) {
                   Block {
@@ -877,30 +876,34 @@ class BitqueryClient:
                   Trade {
                     Buy {
                       Amount
+                      AmountInUSD
+                      Price
+                      PriceInUSD
                       Currency {
                         MintAddress
                         Symbol
                         Name
                       }
-                      Price
                       Account {
                         Address
                       }
                     }
                     Sell {
                       Amount
+                      AmountInUSD
+                      Price
+                      PriceInUSD
                       Currency {
                         MintAddress
                         Symbol
                         Name
                       }
-                      Price
                       Account {
                         Address
                       }
                     }
                     Dex {
-                      ProgramAddress
+                      ProtocolFamily
                       ProtocolName
                     }
                   }
@@ -961,19 +964,18 @@ class BitqueryClient:
             query {{
               Solana {{
                 DEXTrades(
-                  limit: 100
+                  limit: {{ count: 100 }}
                   orderBy: {{ ascending: Block_Time }}
                   where: {{
                     Trade: {{
-                      Dex: {{
-                        ProgramAddress: {{is: "6EF8rrecthHAuSStzpf6aXr9HWs8jgPVrj5S6fqF6P"}}
-                      }}
+                      Dex: {{ ProtocolName: {{ is: "pump" }} }}
                       Buy: {{
                         Currency: {{
                           MintAddress: {{is: "{token_address}"}}
                         }}
                       }}
                     }}
+                    Transaction: {{ Result: {{ Success: true }} }}
                     Block: {{
                       Time: {{ since: "{start_iso}", till: "{end_iso}" }}
                     }}
@@ -1010,7 +1012,7 @@ class BitqueryClient:
                       }}
                     }}
                     Dex {{
-                      ProgramAddress
+                      ProtocolFamily
                       ProtocolName
                     }}
                   }}
@@ -1055,13 +1057,11 @@ class BitqueryClient:
             query($wallet: String!, $limit: Int!) {
               Solana {
                 DEXTrades(
-                  limit: $limit
+                  limit: { count: $limit }
                   orderBy: {descending: Block_Time}
                   where: {
                     Trade: {
-                      Dex: {
-                        ProgramAddress: {is: "6EF8rrecthHAuSStzpf6aXr9HWs8jgPVrj5S6fqF6P"}
-                      }
+                      Dex: { ProtocolName: { is: "pump" } }
                       Or: [
                         {
                           Buy: {
@@ -1079,6 +1079,7 @@ class BitqueryClient:
                         }
                       ]
                     }
+                    Transaction: { Result: { Success: true } }
                   }
                 ) {
                   Block {
@@ -1091,30 +1092,34 @@ class BitqueryClient:
                   Trade {
                     Buy {
                       Amount
+                      AmountInUSD
+                      Price
+                      PriceInUSD
                       Currency {
                         MintAddress
                         Symbol
                         Name
                       }
-                      Price
                       Account {
                         Address
                       }
                     }
                     Sell {
                       Amount
+                      AmountInUSD
+                      Price
+                      PriceInUSD
                       Currency {
                         MintAddress
                         Symbol
                         Name
                       }
-                      Price
                       Account {
                         Address
                       }
                     }
                     Dex {
-                      ProgramAddress
+                      ProtocolFamily
                       ProtocolName
                     }
                   }
