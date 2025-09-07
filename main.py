@@ -83,6 +83,8 @@ class TradingConfig:
     discovery_quality_checks: Dict = None
     scratch_rule: Dict = None
     safety_hybrid: Dict = None
+    entry_gate: Dict = None  # Entry gate configuration for farming detection
+    farming_detection: Dict = None  # Farming detection parameters
     # History and monitoring durations
     trade_history_duration: int = 604800  # 7 days
     latency_history_duration: int = 3600  # 1 hour
@@ -149,7 +151,7 @@ class MemecoinTradingBot:
         )
         
         # Initialize Entry Gate Manager for farming detection
-        entry_gate_config = getattr(self.config, 'entry_gate', {})
+        entry_gate_config = self.config.entry_gate or {}
         if not entry_gate_config:
             # Default configuration if not in config file
             entry_gate_config = {
@@ -270,6 +272,8 @@ class MemecoinTradingBot:
             discovery_quality_checks=config_data.get('discovery_quality_checks', {}),
             scratch_rule=config_data.get('scratch_rule', {}),
             safety_hybrid=config_data.get('safety_hybrid', {}),
+            entry_gate=config_data.get('entry_gate', {}),  # Add entry gate configuration
+            farming_detection=config_data.get('farming_detection', {}),  # Add farming detection parameters
             paper_trading=config_data.get('paper_trading', {}),
             realtime_source=config_data.get('realtime_source', 'bitquery'),
             # Dynamic TP configuration
