@@ -22,6 +22,8 @@ class BitqueryClient:
             self.api_tokens = api_tokens
             
         self.logger = logging.getLogger(__name__)
+        self._init_lock = asyncio.Lock()
+        self._concurrent_semaphore = asyncio.Semaphore(8)  # Allow up to 8 concurrent queries
         
         # GraphQL endpoint (using EAP for Solana data)
         self.endpoint = "https://streaming.bitquery.io/eap"
@@ -828,6 +830,11 @@ class BitqueryClient:
     
     async def get_wallet_token_trades(self, wallet_address: str, token_address: str, limit: int = 10) -> List[Dict]:
         """Get trades for a specific wallet on a specific token"""
+        async with self._concurrent_semaphore:
+            return await self._get_wallet_token_trades_impl(wallet_address, token_address, limit)
+    
+    async def _get_wallet_token_trades_impl(self, wallet_address: str, token_address: str, limit: int = 10) -> List[Dict]:
+        """Implementation of get_wallet_token_trades with corrected query structure"""
         query = gql("""
             query($wallet: String!, $mint: String!, $limit: Int!) {
               Solana {
@@ -837,25 +844,16 @@ class BitqueryClient:
                   where: {
                     Trade: {
                       Dex: { ProtocolName: { is: "pump" } }
+                      Currency: { MintAddress: { is: $mint } }
                       Or: [
                         {
                           Buy: {
-                            Currency: {
-                              MintAddress: {is: $mint}
-                            }
-                            Account: {
-                              Address: {is: $wallet}
-                            }
+                            Account: { Address: { is: $wallet } }
                           }
                         }
                         {
                           Sell: {
-                            Currency: {
-                              MintAddress: {is: $mint}
-                            }
-                            Account: {
-                              Address: {is: $wallet}
-                            }
+                            Account: { Address: { is: $wallet } }
                           }
                         }
                       ]
