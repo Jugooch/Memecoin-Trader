@@ -1322,8 +1322,9 @@ class MemecoinTradingBot:
             if result['success']:
                 # Start post-entry monitoring for farming detection
                 if alpha_wallets and not self.config.paper_mode:
-                    # Monitor each alpha wallet that triggered this trade
-                    for wallet in alpha_wallets[:3]:  # Monitor top 3 wallets to avoid too many API calls
+                    # Monitor each alpha wallet that triggered this trade (convert set to list for slicing)
+                    alpha_wallets_list = list(alpha_wallets)
+                    for wallet in alpha_wallets_list[:3]:  # Monitor top 3 wallets to avoid too many API calls
                         asyncio.create_task(self._monitor_alpha_wallet_post_entry(
                             wallet=wallet,
                             token=mint_address,
