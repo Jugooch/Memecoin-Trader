@@ -360,7 +360,7 @@ class FarmingDetector:
         return metrics
     
     async def _analyze_exit_impact(self, wallet: str, trades_data: List[Dict], bitquery_client) -> Dict:
-        """Analyze wallet's impact on pool during exits"""
+        """Analyze wallet's impact on pool during exits - FIXED to use price impact"""
         metrics = {
             'avg_exit_impact': 0,
             'high_impact_rate': 0,
@@ -386,19 +386,34 @@ class FarmingDetector:
                 continue
             
             try:
-                # Get pool volume around exit time (±1 minute)
-                pool_trades = await bitquery_client.get_token_trades_in_window(
+                # FIXED: Get price before and after the sell to measure actual impact
+                # Get price 5 seconds before the sell
+                price_before_trades = await bitquery_client.get_token_trades_in_window(
                     token,
-                    exit_time - 60,
-                    exit_time + 60
+                    exit_time - 10,
+                    exit_time - 5
                 )
                 
-                if pool_trades:
-                    total_volume = sum(t.get('amount_usd', 0) for t in pool_trades)
+                # Get price 10 seconds after the sell
+                price_after_trades = await bitquery_client.get_token_trades_in_window(
+                    token,
+                    exit_time + 5,
+                    exit_time + 15
+                )
+                
+                if price_before_trades and price_after_trades:
+                    # Calculate average prices
+                    prices_before = [t.get('price', 0) for t in price_before_trades if t.get('price', 0) > 0]
+                    prices_after = [t.get('price', 0) for t in price_after_trades if t.get('price', 0) > 0]
                     
-                    if total_volume > 0:
-                        exit_impact = exit_amount / total_volume
-                        exit_impacts.append(exit_impact)
+                    if prices_before and prices_after:
+                        avg_price_before = statistics.mean(prices_before)
+                        avg_price_after = statistics.mean(prices_after)
+                        
+                        # Calculate actual price impact
+                        if avg_price_before > 0:
+                            price_impact = (avg_price_before - avg_price_after) / avg_price_before
+                            exit_impacts.append(abs(price_impact))  # Use absolute value for impact
                         
             except Exception as e:
                 self.logger.debug(f"Error analyzing exit impact: {e}")
@@ -409,14 +424,14 @@ class FarmingDetector:
             metrics['avg_exit_impact'] = statistics.mean(exit_impacts)
             metrics['max_exit_impact'] = max(exit_impacts)
             
-            # Calculate high impact rate
-            high_impact = sum(1 for i in exit_impacts if i > self.max_exit_impact)
+            # Calculate high impact rate (price drops > 25%)
+            high_impact = sum(1 for i in exit_impacts if i > 0.25)
             metrics['high_impact_rate'] = high_impact / len(exit_impacts)
             
-            # Detect dump pattern
-            if (metrics['avg_exit_impact'] > self.max_exit_impact or
-                metrics['high_impact_rate'] > self.high_exit_impact_rate or
-                metrics['max_exit_impact'] > 0.40):
+            # Detect dump pattern - adjusted thresholds for price impact
+            if (metrics['avg_exit_impact'] > 0.15 or  # Average 15% price drop
+                metrics['high_impact_rate'] > 0.30 or  # 30% of exits cause >25% drops
+                metrics['max_exit_impact'] > 0.35):    # Any exit causing >35% drop
                 metrics['dump_pattern_detected'] = True
         
         return metrics

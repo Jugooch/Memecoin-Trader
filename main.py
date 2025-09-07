@@ -32,6 +32,7 @@ from src.core.moralis_position_monitor import MoralisPositionMonitor
 from src.core.wallet_rotation_manager import WalletRotationManager
 from src.core.safety_checks import SafetyChecker
 from src.core.risk_manager import AdaptiveRiskManager
+from src.core.entry_gate_manager import EntryGateManager
 from src.utils.logger_setup import setup_logging
 from src.utils.config_loader import load_config, validate_required_keys
 # Using existing main PumpPortal stream for price monitoring
@@ -145,6 +146,26 @@ class MemecoinTradingBot:
         self.risk_manager = AdaptiveRiskManager(
             pnl_store=self.trading_engine.pnl_store if hasattr(self.trading_engine, 'pnl_store') else None,
             config={'initial_capital': self.config.initial_capital}
+        )
+        
+        # Initialize Entry Gate Manager for farming detection
+        entry_gate_config = getattr(self.config, 'entry_gate', {})
+        if not entry_gate_config:
+            # Default configuration if not in config file
+            entry_gate_config = {
+                'max_decision_time_ms': 500,
+                'blacklist_after_traps': 3,
+                'trust_after_successful': 10,
+                'trust_min_success_rate': 0.7,
+                'recent_trade_window': 90,
+                'monitoring_window': 30,
+                'emergency_exit_threshold': -0.15
+            }
+        
+        # Pass bitquery client from realtime client
+        self.entry_gate = EntryGateManager(
+            bitquery_client=self.realtime_client.bitquery_client if hasattr(self.realtime_client, 'bitquery_client') else None,
+            config={'entry_gate': entry_gate_config}
         )
         
         self.running = False
@@ -658,6 +679,44 @@ class MemecoinTradingBot:
         )
         
         if signal_quality_passed:
+            # FARMING DETECTION: Validate each alpha wallet through entry gate
+            farming_blocked = False
+            gate_results = {}
+            final_confidence = confidence_score
+            
+            for wallet in alpha_wallets:
+                # Check each alpha wallet for farming behavior
+                should_follow, wallet_confidence, reason, metadata = await self.entry_gate.should_follow_buy(
+                    wallet=wallet,
+                    token=mint_address,
+                    timestamp=time.time(),
+                    alpha_score=wallet_tiers.get(wallet, 0.5)
+                )
+                
+                gate_results[wallet] = {
+                    'should_follow': should_follow,
+                    'confidence': wallet_confidence,
+                    'reason': reason,
+                    'decision_time_ms': metadata.get('decision_time_ms', 0)
+                }
+                
+                if not should_follow:
+                    self.logger.warning(f"FARMING DETECTED: Wallet {wallet[:8]}... blocked - {reason}")
+                    farming_blocked = True
+                    break  # One bad wallet blocks the whole trade
+                
+                # Use lowest confidence from all wallets
+                final_confidence = min(final_confidence, wallet_confidence * 100)
+            
+            if farming_blocked:
+                self.logger.warning(f"Trade blocked due to farming detection for {mint_address[:8]}...")
+                self._record_token_status(mint_address, 'farming_blocked', f'Wallet flagged as farmer')
+                return
+            
+            # Adjust confidence based on gate validation
+            confidence_score = final_confidence
+            self.logger.info(f"Entry gate validation passed. Final confidence: {confidence_score:.1f}%")
+            
             # NEW: Check entry timing - reject if too late after first alpha buy
             if 'alpha_wallets' in alpha_analysis and alpha_wallets:
                 # Get timestamps of alpha buys from realtime cache
@@ -788,7 +847,7 @@ class MemecoinTradingBot:
             self._record_token_status(mint_address, 'evaluated', f'Confidence: {confidence_score:.1f}')
             
             await self.execute_trade(mint_address, metadata, liquidity, 
-                                   confidence_score, investment_multiplier, wallet_tiers)
+                                   confidence_score, investment_multiplier, wallet_tiers, alpha_wallets)
         else:
             # ENHANCED: Detailed rejection logging with all failure points
             rejection_reasons = []
@@ -1233,7 +1292,7 @@ class MemecoinTradingBot:
 
     async def execute_trade(self, mint_address: str, metadata: Dict, liquidity: Dict, 
                           confidence_score: float = 50, investment_multiplier: float = 1.0, 
-                          wallet_tiers: Dict = None):
+                          wallet_tiers: Dict = None, alpha_wallets: List[str] = None):
         """Execute a trade on the token with scaled investment based on alpha wallet quality"""
         # Calculate base trade amount
         base_trade_amount = self.current_capital * self.config.max_trade_pct
@@ -1257,6 +1316,18 @@ class MemecoinTradingBot:
             )
             
             if result['success']:
+                # Start post-entry monitoring for farming detection
+                if alpha_wallets and not self.config.paper_mode:
+                    # Monitor each alpha wallet that triggered this trade
+                    for wallet in alpha_wallets[:3]:  # Monitor top 3 wallets to avoid too many API calls
+                        asyncio.create_task(self._monitor_alpha_wallet_post_entry(
+                            wallet=wallet,
+                            token=mint_address,
+                            entry_price=result.get('price', 0),
+                            entry_tx=result.get('tx_hash', ''),
+                            position_size=trade_amount,
+                            symbol=symbol
+                        ))
                 # Handle async position creation (verification_pending status)
                 if result.get('status') == 'verification_pending':
                     self.logger.info(f"✅ Trade initiated: {symbol} for ${trade_amount} - waiting for position creation")
@@ -1338,6 +1409,56 @@ class MemecoinTradingBot:
         except Exception as e:
             self.logger.error(f"Trade execution failed: {e}")
 
+    async def _monitor_alpha_wallet_post_entry(self, wallet: str, token: str, entry_price: float, 
+                                               entry_tx: str, position_size: float, symbol: str):
+        """Monitor alpha wallet after we enter a position to detect farming behavior"""
+        try:
+            self.logger.info(f"👁️ Starting post-entry monitoring for wallet {wallet[:8]}... on {symbol}")
+            
+            # Use entry gate's monitoring system
+            monitoring_result = await self.entry_gate.verify_entry_post_buy(
+                wallet=wallet,
+                token=token,
+                entry_price=entry_price,
+                entry_tx=entry_tx,
+                position_size=position_size
+            )
+            
+            if monitoring_result['detected_dump']:
+                dump_impact = monitoring_result.get('dump_impact', 0)
+                self.logger.error(f"🚨 FARMING DETECTED: Wallet {wallet[:8]}... dumped {symbol} "
+                                f"with {dump_impact:.1%} impact")
+                
+                # If emergency exit is triggered, handle it
+                if monitoring_result['emergency_exit']:
+                    self.logger.critical(f"💀 EMERGENCY EXIT TRIGGERED for {symbol} - "
+                                       f"Alpha wallet dumped at {dump_impact:.1%}")
+                    
+                    # Trigger emergency sell if we have a position
+                    if token in self.trading_engine.active_positions:
+                        try:
+                            # Sell entire position immediately
+                            position = self.trading_engine.active_positions[token]
+                            await self.trading_engine.sell_token(
+                                token,
+                                position.amount,  # Sell all tokens
+                                0,  # Accept any price
+                                self.config.paper_mode,
+                                reason="EMERGENCY: Alpha wallet dump detected"
+                            )
+                        except Exception as e:
+                            self.logger.error(f"Failed to execute emergency exit: {e}")
+                
+                # Update wallet reputation (already done in entry_gate, but log it)
+                self.logger.warning(f"Wallet {wallet[:8]}... reputation updated - "
+                                  f"trap event recorded")
+            else:
+                self.logger.info(f"✅ Wallet {wallet[:8]}... held position through monitoring window - "
+                                f"no farming detected")
+                
+        except Exception as e:
+            self.logger.error(f"Error in post-entry monitoring: {e}")
+    
     async def monitor_position_async(self, mint_address: str, entry_data: Dict, metadata: Dict = None):
         """Monitor position with async position creation - waits for verification to complete"""
         symbol = metadata.get('symbol', 'UNKNOWN') if metadata else 'UNKNOWN'

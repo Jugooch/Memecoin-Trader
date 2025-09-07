@@ -66,6 +66,16 @@ discovery_quality_checks:
   min_exit_quality: 0.5       # Minimum exit timing quality (STRICTER: 0.5 = 50th percentile)
   min_consistency: 0.57       # Target 60-70% consistency for organic wallets (per GPT5)
 
+# Entry Gate Configuration - Fast farming detection and wallet validation
+entry_gate:
+  max_decision_time_ms: 500           # Maximum time for entry decision (milliseconds)
+  blacklist_after_traps: 3           # Auto-blacklist wallet after N trap events
+  trust_after_successful: 10         # Auto-trust wallet after N successful trades
+  trust_min_success_rate: 0.7        # Minimum success rate for auto-trust (70%)
+  recent_trade_window: 90            # Window to check for recent exits (seconds)
+  monitoring_window: 30              # Post-entry monitoring duration (seconds)
+  emergency_exit_threshold: -0.15    # Trigger emergency exit if price drops 15%
+
 # Farming Detection Parameters (NEW - based on GPT5 recommendations)
 farming_detection:
   # 1. Holding Time Thresholds
