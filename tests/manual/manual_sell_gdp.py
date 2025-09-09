@@ -21,11 +21,11 @@ async def manual_sell_gdp():
     """Manually sell GDP token using pump.fun"""
     
     # GDP token details
-    mint_address = "3Xy3Ei8DhatwjePzDvgfSsmxmQZhLkL57VcEvrCXJ69t"
+    mint_address = "HHQtdVKZB5rvr7iDUPX5E48SKUpFaChqiGedq8tcLEvC"
     
     # MANUAL CONFIG - Replace these values with your actual config
-    WALLET_PRIVATE_KEY = ""  # From your config
-    WALLET_PUBLIC_KEY = ""   # From your config  
+    WALLET_PRIVATE_KEY = "3odf86BLj59eQC1hzMRt1YpYtTgZ7pVEGgpzkkFU9FvB8aroBqKXxPYQTCtSDecNDPE3NK4XSGYNr9oiAfwDW8Zu"  # From your config
+    WALLET_PUBLIC_KEY = "CP74Rwd7TsZfjt44CCEUsMe4i9xYXJ8yCHUDo82mBSw9"   # From your config  
     QUICKNODE_ENDPOINT = "https://thrumming-lingering-shard.solana-mainnet.quiknode.pro/877f3b04f53a38f4cbedcfdb51705e772b7c45ac/"  # From your config
     
     print(f"🚀 Manual GDP Token Sell")

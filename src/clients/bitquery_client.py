@@ -7,7 +7,7 @@ import aiohttp
 import json
 import logging
 import time
-from typing import Dict, List, AsyncGenerator, Union
+from typing import Dict, List, AsyncGenerator, Union, Optional, Tuple
 from gql import gql, Client
 from gql.transport.aiohttp import AIOHTTPTransport
 from gql.transport.websockets import WebsocketsTransport
@@ -22,6 +22,12 @@ class BitqueryClient:
             self.api_tokens = api_tokens
             
         self.logger = logging.getLogger(__name__)
+        
+        # Reduce GQL library verbosity to avoid log spam
+        logging.getLogger('gql').setLevel(logging.WARNING)
+        logging.getLogger('gql.transport').setLevel(logging.WARNING)
+        logging.getLogger('gql.client').setLevel(logging.WARNING)
+        
         self._init_lock = asyncio.Lock()
         self._concurrent_semaphore = asyncio.Semaphore(8)  # Allow up to 8 concurrent queries
         
@@ -41,7 +47,8 @@ class BitqueryClient:
                 'rate_limited': False,
                 'reset_time': 0,
                 'token': token,
-                'payment_required': False  # Track 402 errors
+                'payment_required': False,  # Track 402 errors
+                'forbidden': False  # Track 403 errors
             }
         
         # Global rate limiting
@@ -60,6 +67,12 @@ class BitqueryClient:
             # Check if this token has payment issues (402)
             if token_info['payment_required']:
                 self.logger.debug(f"Token {self.current_token_index} has payment issues, trying next...")
+                self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
+                continue
+            
+            # Check if this token is forbidden (403)
+            if token_info.get('forbidden', False):
+                self.logger.debug(f"Token {self.current_token_index} is forbidden, trying next...")
                 self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
                 continue
             
@@ -853,7 +866,8 @@ class BitqueryClient:
         
         fresh_client = Client(transport=fresh_transport)
         
-        query = gql("""
+        # We need two separate queries since GraphQL doesn't support OR conditions at this level
+        buy_query = gql("""
             query($wallet: String!, $mint: String!, $limit: Int!) {
               Solana {
                 DEXTrades(
@@ -862,19 +876,73 @@ class BitqueryClient:
                   where: {
                     Trade: {
                       Dex: { ProtocolName: { is: "pump" } }
-                      Currency: { MintAddress: { is: $mint } }
-                      Or: [
-                        {
-                          Buy: {
-                            Account: { Address: { is: $wallet } }
-                          }
-                        }
-                        {
-                          Sell: {
-                            Account: { Address: { is: $wallet } }
-                          }
-                        }
-                      ]
+                      Buy: { 
+                        Currency: { MintAddress: { is: $mint } }
+                        Account: { Address: { is: $wallet } }
+                      }
+                    }
+                    Transaction: { Result: { Success: true } }
+                  }
+                ) {
+                  Block {
+                    Time
+                  }
+                  Transaction {
+                    Signature
+                    Signer
+                  }
+                  Trade {
+                    Buy {
+                      Amount
+                      AmountInUSD
+                      Price
+                      PriceInUSD
+                      Currency {
+                        MintAddress
+                        Symbol
+                        Name
+                      }
+                      Account {
+                        Address
+                      }
+                    }
+                    Sell {
+                      Amount
+                      AmountInUSD
+                      Price
+                      PriceInUSD
+                      Currency {
+                        MintAddress
+                        Symbol
+                        Name
+                      }
+                      Account {
+                        Address
+                      }
+                    }
+                    Dex {
+                      ProtocolFamily
+                      ProtocolName
+                    }
+                  }
+                }
+              }
+            }
+        """)
+        
+        sell_query = gql("""
+            query($wallet: String!, $mint: String!, $limit: Int!) {
+              Solana {
+                DEXTrades(
+                  limit: { count: $limit }
+                  orderBy: {descending: Block_Time}
+                  where: {
+                    Trade: {
+                      Dex: { ProtocolName: { is: "pump" } }
+                      Sell: { 
+                        Currency: { MintAddress: { is: $mint } }
+                        Account: { Address: { is: $wallet } }
+                      }
                     }
                     Transaction: { Result: { Success: true } }
                   }
@@ -926,40 +994,99 @@ class BitqueryClient:
         """)
         
         try:
-            result = await fresh_client.execute_async(
-                query, 
+            # Execute both queries
+            buy_result = await fresh_client.execute_async(
+                buy_query, 
                 variable_values={
                     "wallet": wallet_address, 
                     "mint": token_address, 
-                    "limit": limit
+                    "limit": limit // 2  # Split limit between buy and sell queries
                 }
             )
             
-            # Update stats for the token we used
+            sell_result = await fresh_client.execute_async(
+                sell_query, 
+                variable_values={
+                    "wallet": wallet_address, 
+                    "mint": token_address, 
+                    "limit": limit // 2
+                }
+            )
+            
+            # Update stats for the token we used (count as 2 calls since we made 2 requests)
             if token_index is not None:
-                self.token_stats[token_index]['calls_today'] += 1
+                self.token_stats[token_index]['calls_today'] += 2
             
-            trades = result['Solana']['DEXTrades']
-            parsed_trades = []
+            # Combine trades from both queries
+            all_trades = []
             
-            for trade in trades:
-                wallet_bought = trade['Trade']['Buy']['Account']['Address'] == wallet_address
-                
+            # Process buy trades
+            buy_trades = buy_result['Solana']['DEXTrades']
+            for trade in buy_trades:
                 parsed_trade = {
                     'timestamp': self._parse_iso_timestamp(trade['Block']['Time']),
-                    'side': 'buy' if wallet_bought else 'sell',
-                    'price': float(trade['Trade']['Buy']['Price']) if wallet_bought else float(trade['Trade']['Sell']['Price']),
-                    'amount': float(trade['Trade']['Buy']['Amount']) if wallet_bought else float(trade['Trade']['Sell']['Amount']),
+                    'side': 'buy',
+                    'price': float(trade['Trade']['Buy']['Price']) if trade['Trade']['Buy']['Price'] else 0,
+                    'amount': float(trade['Trade']['Buy']['Amount']) if trade['Trade']['Buy']['Amount'] else 0,
                     'token_address': token_address,
                     'wallet': wallet_address,
                     'tx_hash': trade['Transaction']['Signature']
                 }
-                parsed_trades.append(parsed_trade)
+                all_trades.append(parsed_trade)
             
-            return parsed_trades
+            # Process sell trades
+            sell_trades = sell_result['Solana']['DEXTrades']
+            for trade in sell_trades:
+                parsed_trade = {
+                    'timestamp': self._parse_iso_timestamp(trade['Block']['Time']),
+                    'side': 'sell',
+                    'price': float(trade['Trade']['Sell']['Price']) if trade['Trade']['Sell']['Price'] else 0,
+                    'amount': float(trade['Trade']['Sell']['Amount']) if trade['Trade']['Sell']['Amount'] else 0,
+                    'token_address': token_address,
+                    'wallet': wallet_address,
+                    'tx_hash': trade['Transaction']['Signature']
+                }
+                all_trades.append(parsed_trade)
+            
+            # Sort by timestamp (newest first)
+            all_trades.sort(key=lambda x: x['timestamp'], reverse=True)
+            
+            # Limit to requested number of trades
+            return all_trades[:limit]
             
         except Exception as e:
-            self.logger.error(f"Error fetching wallet token trades: {e}")
+            error_str = str(e)
+            self.logger.error(f"Error fetching wallet token trades: {error_str}")
+            
+            # Handle 402 and 403 errors and token rotation same as other methods
+            if '402' in error_str or 'Payment Required' in error_str or '403' in error_str or 'Forbidden' in error_str:
+                if token_index is not None:
+                    if '402' in error_str or 'Payment Required' in error_str:
+                        self.token_stats[token_index]['payment_required'] = True
+                        self.logger.warning(f"Token #{token_index} marked as payment required")
+                    elif '403' in error_str or 'Forbidden' in error_str:
+                        self.token_stats[token_index]['forbidden'] = True
+                        self.logger.warning(f"Token #{token_index} marked as forbidden/invalid")
+                
+                # Try to rotate to next token
+                self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
+                
+                # Close current transport before retrying
+                try:
+                    await fresh_transport.close()
+                except:
+                    pass
+                
+                # Reinitialize with new token if available
+                try:
+                    await self.initialize()
+                    self.logger.info("Retrying wallet token trades query with new token...")
+                    # Retry the query with new token
+                    return await self.get_wallet_token_trades(wallet_address, token_address, limit)
+                except Exception as reinit_error:
+                    self.logger.error(f"Failed to reinitialize with new token: {reinit_error}")
+                    return []
+            
             return []
         finally:
             # Always close the transport to prevent connection leaks
@@ -977,6 +1104,8 @@ class BitqueryClient:
         start_iso = start_dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         end_iso = end_dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         
+        # Use the working pattern from existing methods - combine buy and sell in one query
+        # Following the exact structure from get_recent_trades_paginated()
         query = gql(f"""
             query {{
               Solana {{
@@ -986,11 +1115,7 @@ class BitqueryClient:
                   where: {{
                     Trade: {{
                       Dex: {{ ProtocolName: {{ is: "pump" }} }}
-                      Buy: {{
-                        Currency: {{
-                          MintAddress: {{is: "{token_address}"}}
-                        }}
-                      }}
+                      Buy: {{ Currency: {{ MintAddress: {{ is: "{token_address}" }} }} }}
                     }}
                     Transaction: {{ Result: {{ Success: true }} }}
                     Block: {{
@@ -1006,26 +1131,26 @@ class BitqueryClient:
                   Trade {{
                     Buy {{
                       Amount
+                      AmountInUSD
+                      Price
+                      PriceInUSD
+                      Account {{ Address }}
                       Currency {{
                         MintAddress
                         Symbol
                         Name
-                      }}
-                      Price
-                      Account {{
-                        Address
                       }}
                     }}
                     Sell {{
                       Amount
+                      AmountInUSD
+                      Price
+                      PriceInUSD
+                      Account {{ Address }}
                       Currency {{
                         MintAddress
                         Symbol
                         Name
-                      }}
-                      Price
-                      Account {{
-                        Address
                       }}
                     }}
                     Dex {{
@@ -1047,17 +1172,38 @@ class BitqueryClient:
             trades = result['Solana']['DEXTrades']
             parsed_trades = []
             
+            # Parse trades using the same logic as existing methods
             for trade in trades:
-                parsed_trade = {
-                    'timestamp': self._parse_iso_timestamp(trade['Block']['Time']),
-                    'side': 'buy',  # This query filters for buys
-                    'price': float(trade['Trade']['Buy']['Price']),
-                    'amount': float(trade['Trade']['Buy']['Amount']),
-                    'token_address': token_address,
-                    'wallet': trade['Trade']['Buy']['Account']['Address'],
-                    'tx_hash': trade['Transaction']['Signature']
-                }
-                parsed_trades.append(parsed_trade)
+                # Determine if this is a buy or sell based on which side has data
+                buy_data = trade['Trade']['Buy']
+                sell_data = trade['Trade']['Sell']
+                
+                # Check which side has the token we're looking for
+                is_buy = (buy_data.get('Currency', {}).get('MintAddress') == token_address and 
+                         buy_data.get('Amount') and buy_data.get('Price'))
+                
+                if is_buy:
+                    parsed_trade = {
+                        'timestamp': self._parse_iso_timestamp(trade['Block']['Time']),
+                        'side': 'buy',
+                        'price': float(buy_data['Price']) if buy_data.get('Price') else 0,
+                        'amount': float(buy_data['Amount']) if buy_data.get('Amount') else 0,
+                        'token_address': token_address,
+                        'wallet': buy_data['Account']['Address'],
+                        'tx_hash': trade['Transaction']['Signature']
+                    }
+                    parsed_trades.append(parsed_trade)
+                elif sell_data.get('Currency', {}).get('MintAddress') == token_address:
+                    parsed_trade = {
+                        'timestamp': self._parse_iso_timestamp(trade['Block']['Time']),
+                        'side': 'sell',
+                        'price': float(sell_data['Price']) if sell_data.get('Price') else 0,
+                        'amount': float(sell_data['Amount']) if sell_data.get('Amount') else 0,
+                        'token_address': token_address,
+                        'wallet': sell_data['Account']['Address'],
+                        'tx_hash': trade['Transaction']['Signature']
+                    }
+                    parsed_trades.append(parsed_trade)
             
             return parsed_trades
             
@@ -1067,7 +1213,31 @@ class BitqueryClient:
     
     async def get_wallet_trades(self, wallet_address: str, limit: int = 50) -> List[Dict]:
         """Get all recent trades for a specific wallet across all tokens"""
-        query = gql("""
+        async with self._concurrent_semaphore:
+            return await self._get_wallet_trades_impl(wallet_address, limit)
+    
+    async def _get_wallet_trades_impl(self, wallet_address: str, limit: int = 50) -> List[Dict]:
+        """Implementation of get_wallet_trades with fresh transport per request"""
+        # Create fresh transport to avoid connection issues
+        token_index, api_token = self._get_next_available_token()
+        
+        if not api_token:
+            self.logger.error("No available Bitquery API tokens for wallet trades")
+            return []
+        
+        from gql.transport.aiohttp import AIOHTTPTransport
+        fresh_transport = AIOHTTPTransport(
+            url=self.endpoint,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_token}"
+            }
+        )
+        
+        fresh_client = Client(transport=fresh_transport)
+        
+        # Split into two separate queries for buy and sell trades 
+        buy_query = gql("""
             query($wallet: String!, $limit: Int!) {
               Solana {
                 DEXTrades(
@@ -1076,22 +1246,67 @@ class BitqueryClient:
                   where: {
                     Trade: {
                       Dex: { ProtocolName: { is: "pump" } }
-                      Or: [
-                        {
-                          Buy: {
-                            Account: {
-                              Address: {is: $wallet}
-                            }
-                          }
-                        }
-                        {
-                          Sell: {
-                            Account: {
-                              Address: {is: $wallet}
-                            }
-                          }
-                        }
-                      ]
+                      Buy: { Account: { Address: { is: $wallet } } }
+                    }
+                    Transaction: { Result: { Success: true } }
+                  }
+                ) {
+                  Block {
+                    Time
+                  }
+                  Transaction {
+                    Signature
+                    Signer
+                  }
+                  Trade {
+                    Buy {
+                      Amount
+                      AmountInUSD
+                      Price
+                      PriceInUSD
+                      Currency {
+                        MintAddress
+                        Symbol
+                        Name
+                      }
+                      Account {
+                        Address
+                      }
+                    }
+                    Sell {
+                      Amount
+                      AmountInUSD
+                      Price
+                      PriceInUSD
+                      Currency {
+                        MintAddress
+                        Symbol
+                        Name
+                      }
+                      Account {
+                        Address
+                      }
+                    }
+                    Dex {
+                      ProtocolFamily
+                      ProtocolName
+                    }
+                  }
+                }
+              }
+            }
+        """)
+        
+        sell_query = gql("""
+            query($wallet: String!, $limit: Int!) {
+              Solana {
+                DEXTrades(
+                  limit: { count: $limit }
+                  orderBy: {descending: Block_Time}
+                  where: {
+                    Trade: {
+                      Dex: { ProtocolName: { is: "pump" } }
+                      Sell: { Account: { Address: { is: $wallet } } }
                     }
                     Transaction: { Result: { Success: true } }
                   }
@@ -1143,43 +1358,702 @@ class BitqueryClient:
         """)
         
         try:
-            result = await self.client.execute_async(
-                query, 
+            # Execute both queries
+            buy_result = await fresh_client.execute_async(
+                buy_query, 
                 variable_values={
                     "wallet": wallet_address, 
-                    "limit": limit
+                    "limit": limit // 2
                 }
             )
             
-            if self.current_client_token_index is not None:
-                self.token_stats[self.current_client_token_index]['calls_today'] += 1
+            sell_result = await fresh_client.execute_async(
+                sell_query, 
+                variable_values={
+                    "wallet": wallet_address, 
+                    "limit": limit // 2
+                }
+            )
             
-            trades = result['Solana']['DEXTrades']
-            parsed_trades = []
+            # Update stats (count as 2 calls)
+            if token_index is not None:
+                self.token_stats[token_index]['calls_today'] += 2
             
-            for trade in trades:
-                wallet_bought = trade['Trade']['Buy']['Account']['Address'] == wallet_address
-                
+            # Combine and parse trades
+            all_trades = []
+            
+            # Process buy trades
+            buy_trades = buy_result['Solana']['DEXTrades']
+            for trade in buy_trades:
                 parsed_trade = {
                     'timestamp': self._parse_iso_timestamp(trade['Block']['Time']),
-                    'side': 'buy' if wallet_bought else 'sell',
-                    'token_address': trade['Trade']['Buy']['Currency']['MintAddress'] if wallet_bought else trade['Trade']['Sell']['Currency']['MintAddress'],
-                    'price': float(trade['Trade']['Buy']['Price']) if wallet_bought else float(trade['Trade']['Sell']['Price']),
-                    'amount': float(trade['Trade']['Buy']['Amount']) if wallet_bought else float(trade['Trade']['Sell']['Amount']),
+                    'side': 'buy',
+                    'token_address': trade['Trade']['Buy']['Currency']['MintAddress'],
+                    'price': float(trade['Trade']['Buy']['Price']) if trade['Trade']['Buy']['Price'] else 0,
+                    'amount': float(trade['Trade']['Buy']['Amount']) if trade['Trade']['Buy']['Amount'] else 0,
                     'wallet': wallet_address,
                     'tx_hash': trade['Transaction']['Signature']
                 }
-                parsed_trades.append(parsed_trade)
+                all_trades.append(parsed_trade)
             
-            return parsed_trades
+            # Process sell trades
+            sell_trades = sell_result['Solana']['DEXTrades']
+            for trade in sell_trades:
+                parsed_trade = {
+                    'timestamp': self._parse_iso_timestamp(trade['Block']['Time']),
+                    'side': 'sell',
+                    'token_address': trade['Trade']['Sell']['Currency']['MintAddress'],
+                    'price': float(trade['Trade']['Sell']['Price']) if trade['Trade']['Sell']['Price'] else 0,
+                    'amount': float(trade['Trade']['Sell']['Amount']) if trade['Trade']['Sell']['Amount'] else 0,
+                    'wallet': wallet_address,
+                    'tx_hash': trade['Transaction']['Signature']
+                }
+                all_trades.append(parsed_trade)
+            
+            # Sort by timestamp (newest first) and limit
+            all_trades.sort(key=lambda x: x['timestamp'], reverse=True)
+            return all_trades[:limit]
             
         except Exception as e:
-            self.logger.error(f"Error fetching wallet trades: {e}")
+            error_str = str(e)
+            self.logger.error(f"Error fetching wallet trades: {error_str}")
+            
+            # Handle 402 and 403 errors and token rotation same as other methods
+            if '402' in error_str or 'Payment Required' in error_str or '403' in error_str or 'Forbidden' in error_str:
+                if token_index is not None:
+                    if '402' in error_str or 'Payment Required' in error_str:
+                        self.token_stats[token_index]['payment_required'] = True
+                        self.logger.warning(f"Token #{token_index} marked as payment required")
+                    elif '403' in error_str or 'Forbidden' in error_str:
+                        self.token_stats[token_index]['forbidden'] = True
+                        self.logger.warning(f"Token #{token_index} marked as forbidden/invalid")
+                
+                # Try to rotate to next token
+                self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
+                
+                # Close current transport before retrying
+                try:
+                    await fresh_transport.close()
+                except:
+                    pass
+                
+                # Reinitialize with new token if available
+                try:
+                    await self.initialize()
+                    self.logger.info("Retrying wallet trades query with new token...")
+                    # Retry the query with new token
+                    return await self.get_wallet_trades(wallet_address, limit)
+                except Exception as reinit_error:
+                    self.logger.error(f"Failed to reinitialize with new token: {reinit_error}")
+                    return []
+            
             return []
+        finally:
+            # Always close the transport
+            try:
+                await fresh_transport.close()
+            except Exception as cleanup_error:
+                self.logger.debug(f"Error closing transport: {cleanup_error}")
 
     def _timestamp_to_iso(self, timestamp: float) -> str:
         """Convert Unix timestamp to ISO format for BitQuery"""
         from datetime import datetime, timezone
         dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
         return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    async def get_tokens_created_by_dev(self, dev_wallet: str, lookback_days: int = 30) -> List[Dict]:
+        """Find tokens created/deployed by this dev wallet"""
+        # Calculate time range
+        from datetime import datetime, timedelta, timezone
+        end_time = datetime.now(tz=timezone.utc)
+        start_time = end_time - timedelta(days=lookback_days)
+        start_iso = start_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+        end_iso = end_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+        
+        # Get token with concurrent semaphore
+        async with self._concurrent_semaphore:
+            return await self._get_tokens_created_by_dev_impl(dev_wallet, start_iso, end_iso)
+    
+    async def _get_tokens_created_by_dev_impl(self, dev_wallet: str, start_iso: str, end_iso: str) -> List[Dict]:
+        """Implementation of get_tokens_created_by_dev with fresh transport"""
+        token_index, api_token = self._get_next_available_token()
+        
+        if not api_token:
+            self.logger.error("No available Bitquery API tokens for dev token creation")
+            return []
+        
+        from gql.transport.aiohttp import AIOHTTPTransport
+        fresh_transport = AIOHTTPTransport(
+            url=self.endpoint,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_token}"
+            }
+        )
+        
+        fresh_client = Client(transport=fresh_transport)
+        
+        # Query for DEX trades where this wallet was the transaction signer (token creator)
+        # We look at the first buy trade for each token, which happens when token is created
+        query = gql("""
+            query($dev_wallet: String!, $start: DateTime!, $end: DateTime!, $limit: Int!) {
+              Solana {
+                DEXTrades(
+                  limit: { count: $limit }
+                  orderBy: { descending: Block_Time }
+                  where: {
+                    Trade: { Dex: { ProtocolName: { is: "pump" } } }
+                    Transaction: { 
+                      Result: { Success: true }
+                      Signer: { is: $dev_wallet }
+                    }
+                    Block: { 
+                      Time: { since: $start, till: $end }
+                    }
+                  }
+                ) {
+                  Block {
+                    Time
+                  }
+                  Transaction {
+                    Signature
+                    Signer
+                  }
+                  Trade {
+                    Buy {
+                      Currency {
+                        MintAddress
+                        Symbol
+                        Name
+                      }
+                      Amount
+                      AmountInUSD
+                    }
+                    Sell {
+                      Currency {
+                        MintAddress
+                        Symbol
+                        Name
+                      }
+                      Amount
+                      AmountInUSD
+                    }
+                  }
+                }
+              }
+            }
+        """)
+        
+        try:
+            result = await fresh_client.execute_async(
+                query, 
+                variable_values={
+                    "dev_wallet": dev_wallet,
+                    "start": start_iso,
+                    "end": end_iso,
+                    "limit": 100
+                }
+            )
+            
+            trades = result.get("Solana", {}).get("DEXTrades", [])
+            
+            # Group by token to get unique tokens created by this dev
+            tokens_created = {}
+            
+            for trade in trades:
+                trade_data = trade.get("Trade", {})
+                buy_currency = trade_data.get("Buy", {}).get("Currency", {})
+                sell_currency = trade_data.get("Sell", {}).get("Currency", {})
+                
+                # Find the token mint (not SOL)
+                mint_address = None
+                token_symbol = None
+                token_name = None
+                
+                # SOL addresses to exclude
+                sol_addresses = [None, 'So11111111111111111111111111111112', '11111111111111111111111111111111']
+                
+                if buy_currency.get('MintAddress') not in sol_addresses:
+                    mint_address = buy_currency.get('MintAddress')
+                    token_symbol = buy_currency.get('Symbol', '')
+                    token_name = buy_currency.get('Name', '')
+                elif sell_currency.get('MintAddress') not in sol_addresses:
+                    mint_address = sell_currency.get('MintAddress')
+                    token_symbol = sell_currency.get('Symbol', '')
+                    token_name = sell_currency.get('Name', '')
+                
+                if mint_address:
+                    # Get USD amounts from both sides of the trade
+                    buy_usd = float(trade_data.get("Buy", {}).get("AmountInUSD", 0) or 0)
+                    sell_usd = float(trade_data.get("Sell", {}).get("AmountInUSD", 0) or 0)
+                    max_usd_this_trade = max(buy_usd, sell_usd)
+                    
+                    if mint_address not in tokens_created:
+                        tokens_created[mint_address] = {
+                            'mint_address': mint_address,
+                            'symbol': token_symbol,
+                            'name': token_name,
+                            'created_at': trade.get("Block", {}).get("Time"),
+                            'signature': trade.get("Transaction", {}).get("Signature"),
+                            'dev_wallet': dev_wallet,
+                            'max_usd_amount': max_usd_this_trade
+                        }
+                    else:
+                        # Update max USD if this trade is larger
+                        tokens_created[mint_address]['max_usd_amount'] = max(
+                            tokens_created[mint_address].get('max_usd_amount', 0),
+                            max_usd_this_trade
+                        )
+            
+            tokens_list = list(tokens_created.values())
+            self.logger.debug(f"Found {len(tokens_list)} tokens created by {dev_wallet[:8]}...")
+            
+            return tokens_list
+            
+        except Exception as e:
+            error_str = str(e)
+            self.logger.error(f"Error fetching tokens created by dev {dev_wallet[:8]}...: {e}")
+            
+            # Handle 402 and 403 errors and token rotation same as other methods
+            if '402' in error_str or 'Payment Required' in error_str or '403' in error_str or 'Forbidden' in error_str:
+                if token_index is not None:
+                    if '402' in error_str or 'Payment Required' in error_str:
+                        self.token_stats[token_index]['payment_required'] = True
+                    elif '403' in error_str or 'Forbidden' in error_str:
+                        self.token_stats[token_index]['forbidden'] = True
+                    
+                    self.logger.warning(f"Token #{token_index} marked as {'payment required' if '402' in error_str else 'forbidden/invalid'}")
+                    
+                    # Try next token
+                    next_token_index, next_api_token = self._get_next_available_token()
+                    if next_api_token:
+                        self.logger.info(f"Retrying dev token creation query with token #{next_token_index}...")
+                        try:
+                            return await self._get_tokens_created_by_dev_impl(dev_wallet, start_iso, end_iso)
+                        except Exception as retry_error:
+                            self.logger.error(f"Retry also failed: {retry_error}")
+            
+            return []
+        
+        finally:
+            await fresh_transport.close()
+    
+    async def get_dev_token_history(self, dev_wallet: str, lookback_days: int = 30) -> Dict:
+        """Get tokens created by this developer wallet"""
+        try:
+            # Get tokens actually created by this dev wallet
+            tokens_created = await self.get_tokens_created_by_dev(dev_wallet, lookback_days)
+            
+            if not tokens_created:
+                return {
+                    'total_tokens': 0,
+                    'best_peak_mc': 0,
+                    'recent_launches': 0,
+                    'token_addresses': []
+                }
+            
+            # Count recent launches (last 7 days)
+            from datetime import datetime, timedelta, timezone
+            seven_days_ago = datetime.now(tz=timezone.utc) - timedelta(days=7)
+            recent_launches = 0
+            
+            for token_data in tokens_created:
+                created_at = token_data.get('created_at')
+                if isinstance(created_at, str):
+                    from dateutil import parser
+                    creation_time = parser.parse(created_at)
+                    if creation_time >= seven_days_ago:
+                        recent_launches += 1
+            
+            token_addresses = [t.get('mint_address') for t in tokens_created if t.get('mint_address')]
+            
+            # Calculate max transaction USD from the tokens data
+            max_transaction_usd = 0
+            for token_data in tokens_created:
+                if 'max_usd_amount' in token_data:
+                    max_transaction_usd = max(max_transaction_usd, token_data['max_usd_amount'])
+            
+            return {
+                'total_tokens': len(tokens_created),
+                'best_peak_mc': 0,  # Will be updated by Moralis with real MC data
+                'recent_launches': recent_launches,
+                'token_addresses': token_addresses,
+                'max_transaction_usd': max_transaction_usd
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error getting dev token history for {dev_wallet[:8]}...: {e}")
+            return {
+                'total_tokens': 0,
+                'best_peak_mc': 0,
+                'recent_launches': 0,
+                'token_addresses': []
+            }
+    
+    async def get_batch_dev_profiles(self, dev_wallets: List[str], lookback_days: int = 60) -> Dict[str, Dict]:
+        """
+        Get multiple dev profiles in a single efficient query.
+        This dramatically reduces API usage compared to individual calls.
+        
+        Args:
+            dev_wallets: List of developer wallet addresses
+            lookback_days: How many days to look back
+        
+        Returns:
+            Dict mapping dev_wallet -> profile data
+        """
+        if not dev_wallets:
+            return {}
+        
+        # Get fresh token
+        token_index, api_token = self._get_next_available_token()
+        if not api_token:
+            self.logger.error("No available Bitquery API tokens for batch dev profiles")
+            return {}
+        
+        async with self._concurrent_semaphore:
+            # Build WHERE clause for multiple wallets - correct GraphQL syntax
+            wallet_list = ', '.join([f'"{wallet}"' for wallet in dev_wallets])
+            
+            from datetime import datetime, timedelta, timezone
+            end_time = datetime.now(tz=timezone.utc)
+            start_time = end_time - timedelta(days=lookback_days)
+            start_iso = start_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+            end_iso = end_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+            
+            # Single query to get all devs' token launches with prices
+            query = gql(f"""
+                query {{
+                  Solana {{
+                    DEXTrades(
+                      limit: {{ count: 2000 }}
+                      orderBy: {{ descending: Block_Time }}
+                      where: {{
+                        Trade: {{ 
+                          Dex: {{ ProtocolName: {{ is: "pump" }} }}
+                        }}
+                        Transaction: {{ 
+                          Result: {{ Success: true }}
+                          Signer: {{ in: [{wallet_list}] }}
+                        }}
+                        Block: {{ Time: {{ since: "{start_iso}", till: "{end_iso}" }} }}
+                      }}
+                    ) {{
+                      Block {{ Time }}
+                      Transaction {{ Signer }}
+                      Trade {{
+                        Buy {{
+                          Currency {{ MintAddress Symbol }}
+                          PriceInUSD
+                        }}
+                        Sell {{
+                          Currency {{ MintAddress Symbol }}
+                          PriceInUSD
+                        }}
+                      }}
+                    }}
+                  }}
+                }}
+            """)
+            
+            from gql.transport.aiohttp import AIOHTTPTransport
+            transport = AIOHTTPTransport(
+                url=self.endpoint,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_token}"
+                }
+            )
+            
+            # Retry logic for 402/403 errors  
+            max_retries = len(self.api_tokens)  # Try all available tokens
+            retry_count = 0
+            
+            try:
+                while retry_count < max_retries:
+                    try:
+                        from gql import Client
+                        client = Client(transport=transport)
+                        result = await client.execute_async(query)
+                        
+                        # Process results into dev profiles
+                        dev_profiles = {wallet: {
+                            'dev_wallet': wallet,
+                            'num_tokens_launched': 0,
+                            'best_peak_mc_usd': 0,
+                            'tokens_launched_7d': 0,
+                            'token_prices': {},  # token_address -> max_price
+                            'updated_at': datetime.now().isoformat()
+                        } for wallet in dev_wallets}
+                        
+                        if result and 'Solana' in result and 'DEXTrades' in result['Solana']:
+                            trades = result['Solana']['DEXTrades']
+                            
+                            # Group by dev and token
+                            seven_days_ago = datetime.now(tz=timezone.utc) - timedelta(days=7)
+                            seven_days_ago_timestamp = seven_days_ago.timestamp()
+                            
+                            for trade in trades:
+                                dev_wallet = trade['Transaction']['Signer']
+                                if dev_wallet not in dev_profiles:
+                                    continue
+                                    
+                                # Get token address and price
+                                token_address = None
+                                price_usd = 0
+                                
+                                # Check buy side (token being bought)
+                                if trade['Trade']['Buy']['Currency']['MintAddress'] != "So11111111111111111111111111111111111111112":
+                                    token_address = trade['Trade']['Buy']['Currency']['MintAddress']
+                                    price_usd = float(trade['Trade']['Buy']['PriceInUSD'] or 0)
+                                # Check sell side (token being sold)
+                                elif trade['Trade']['Sell']['Currency']['MintAddress'] != "So11111111111111111111111111111111111111112":
+                                    token_address = trade['Trade']['Sell']['Currency']['MintAddress']
+                                    price_usd = float(trade['Trade']['Sell']['PriceInUSD'] or 0)
+                                
+                                if not token_address or price_usd <= 0:
+                                    continue
+                                
+                                profile = dev_profiles[dev_wallet]
+                                
+                                # Track max price per token
+                                if token_address not in profile['token_prices']:
+                                    profile['token_prices'][token_address] = price_usd
+                                    profile['num_tokens_launched'] += 1
+                                    
+                                    # Check if recent launch
+                                    trade_time = self._parse_iso_timestamp(trade['Block']['Time'])
+                                    if trade_time >= seven_days_ago_timestamp:
+                                        profile['tokens_launched_7d'] += 1
+                                else:
+                                    # Update max price for this token
+                                    profile['token_prices'][token_address] = max(
+                                        profile['token_prices'][token_address], 
+                                        price_usd
+                                    )
+                        
+                        # Calculate best peak MC for each dev
+                        for profile in dev_profiles.values():
+                            if profile['token_prices']:
+                                max_price = max(profile['token_prices'].values())
+                                # Pump.fun standard: 1B token supply
+                                profile['best_peak_mc_usd'] = max_price * 1_000_000_000
+                            
+                            # Clean up intermediate data
+                            del profile['token_prices']
+                        
+                        # Success! Track API usage and return
+                        if token_index is not None:
+                            self.token_stats[token_index]['calls_today'] += 1
+                        
+                        self.logger.info(f"Batch enriched {len(dev_wallets)} devs with 1 API call (vs {len(dev_wallets) * 11} individual calls)")
+                        return dev_profiles
+                        
+                    except Exception as e:
+                        error_str = str(e)
+                        
+                        # Check if this is a 402/403 error that we should retry
+                        if '402' in error_str or 'Payment Required' in error_str or '403' in error_str or 'Forbidden' in error_str:
+                            if token_index is not None:
+                                if '402' in error_str or 'Payment Required' in error_str:
+                                    self.token_stats[token_index]['payment_required'] = True
+                                    self.logger.warning(f"Token #{token_index} marked as payment required")
+                                elif '403' in error_str or 'Forbidden' in error_str:
+                                    self.token_stats[token_index]['forbidden'] = True
+                                    self.logger.warning(f"Token #{token_index} marked as forbidden/invalid")
+                            
+                            # Rotate to next token and retry
+                            self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
+                            retry_count += 1
+                            
+                            if retry_count < max_retries:
+                                # Get next token and create fresh transport for retry
+                                token_index, api_token = self._get_next_available_token()
+                                if api_token:
+                                    self.logger.info(f"Retrying batch query with token #{token_index} (attempt {retry_count + 1}/{max_retries})")
+                                    
+                                    # Close old transport
+                                    try:
+                                        await transport.close()
+                                    except:
+                                        pass
+                                    
+                                    # Create new transport with fresh token
+                                    from gql.transport.aiohttp import AIOHTTPTransport
+                                    transport = AIOHTTPTransport(
+                                        url=self.endpoint,
+                                        headers={
+                                            "Content-Type": "application/json",
+                                            "Authorization": f"Bearer {api_token}"
+                                        }
+                                    )
+                                    continue
+                                else:
+                                    self.logger.error("No more available tokens for retry")
+                                    break
+                        else:
+                            # Non-auth error, don't retry
+                            self.logger.error(f"Error in batch dev profile query (non-auth): {error_str}")
+                            break
+                
+                # All retries failed
+                self.logger.error(f"Batch dev profile query failed after {retry_count} retries")
+                return {}
+                
+            except Exception as e:
+                # Catch any unexpected errors at the top level
+                self.logger.error(f"Unexpected error in batch dev profile method: {e}")
+                return {}
+            
+            finally:
+                # Clean up transport
+                if 'transport' in locals():
+                    try:
+                        await transport.close()
+                    except:
+                        pass
+    
+    async def get_token_ath_market_cap(self, mint_address: str, end_date: str = None) -> float:
+        """
+        Get the all-time high market cap for a token.
+        For pump.fun tokens: MC = Price × 1B tokens
+        
+        Args:
+            mint_address: Token mint address
+            end_date: Optional end date to get ATH up to that point (ISO format)
+            
+        Returns:
+            ATH market cap in USD
+        """
+        # Get fresh token to avoid connection issues
+        token_index, api_token = self._get_next_available_token()
+        
+        if not api_token:
+            self.logger.error("No available Bitquery API tokens for ATH market cap")
+            return 0
+        
+        # Use concurrency control
+        async with self._concurrent_semaphore:
+            # Build the where clause
+            where_clause = f'Trade: {{ Currency: {{ MintAddress: {{ is: "{mint_address}" }} }} }}'
+            if end_date:
+                where_clause += f', Block: {{ Time: {{ till: "{end_date}" }} }}'
+            
+            query = gql(f"""
+                query {{
+                  Solana {{
+                    DEXTradeByTokens(
+                      where: {{ {where_clause} }}
+                      limit: {{ count: 1 }}
+                      orderBy: {{ descending: Trade_Price }}
+                    ) {{
+                      Trade {{
+                        Price
+                        PriceInUSD
+                      }}
+                      Block {{
+                        Time
+                      }}
+                    }}
+                  }}
+                }}
+            """)
+            
+            # Create fresh transport to avoid connection issues
+            from gql.transport.aiohttp import AIOHTTPTransport
+            transport = AIOHTTPTransport(
+                url=self.endpoint,
+                headers={
+                    "Content-Type": "application/json", 
+                    "Authorization": f"Bearer {api_token}"
+                }
+            )
+            
+            try:
+                from gql import Client
+                client = Client(transport=transport)
+                result = await client.execute_async(query)
+                
+                if result and 'Solana' in result and 'DEXTradeByTokens' in result['Solana']:
+                    trades = result['Solana']['DEXTradeByTokens']
+                    if trades and len(trades) > 0:
+                        ath_price_usd = float(trades[0]['Trade'].get('PriceInUSD', 0))
+                        
+                        # For pump.fun tokens, MC = price × 1B
+                        # This is standard for pump.fun as they all have 1B supply
+                        market_cap = ath_price_usd * 1_000_000_000
+                        
+                        self.logger.debug(f"Token {mint_address[:8]}... ATH price: ${ath_price_usd:.8f}, MC: ${market_cap:,.0f}")
+                        return market_cap
+                
+                return 0
+                
+            except Exception as e:
+                error_str = str(e)
+                self.logger.error(f"Error getting ATH market cap for {mint_address}: {error_str}")
+                
+                # Handle 402 and 403 errors and token rotation same as other methods
+                if '402' in error_str or 'Payment Required' in error_str or '403' in error_str or 'Forbidden' in error_str:
+                    if token_index is not None:
+                        if '402' in error_str or 'Payment Required' in error_str:
+                            self.token_stats[token_index]['payment_required'] = True
+                            self.logger.warning(f"Token #{token_index} marked as payment required")
+                        elif '403' in error_str or 'Forbidden' in error_str:
+                            self.token_stats[token_index]['forbidden'] = True
+                            self.logger.warning(f"Token #{token_index} marked as forbidden/invalid")
+                    
+                    # Try to rotate to next token
+                    self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
+                
+                return 0
+            finally:
+                # Clean up transport
+                if 'transport' in locals():
+                    try:
+                        await transport.close()
+                    except:
+                        pass
+    
+    async def get_dev_tokens_with_ath_mc(self, dev_wallet: str, lookback_days: int = 60) -> Dict:
+        """
+        Get developer's token history with accurate ATH market caps.
+        
+        Args:
+            dev_wallet: Developer wallet address
+            lookback_days: How many days to look back
+            
+        Returns:
+            Dict with token history including best peak MC
+        """
+        # First get the basic history
+        history = await self.get_dev_token_history(dev_wallet, lookback_days)
+        
+        if not history or not history.get('token_addresses'):
+            return history
+        
+        # Get ATH MC for tokens in parallel (respects semaphore limit)
+        token_addresses = history['token_addresses'][:10]  # Limit to 10 most recent
+        
+        async def get_token_ath_safe(token_address):
+            try:
+                ath_mc = await self.get_token_ath_market_cap(token_address)
+                if ath_mc > 0:
+                    self.logger.debug(f"Token {token_address[:8]}... ATH MC: ${ath_mc:,.0f}")
+                    return ath_mc
+            except Exception as e:
+                self.logger.error(f"Error getting ATH MC for {token_address}: {e}")
+            return 0
+        
+        # Execute all ATH fetches concurrently (semaphore will limit concurrency)
+        ath_results = await asyncio.gather(*[get_token_ath_safe(addr) for addr in token_addresses])
+        token_ath_mcs = [mc for mc in ath_results if mc > 0]
+        
+        # Update history with real peak MC data
+        if token_ath_mcs:
+            history['best_peak_mc'] = max(token_ath_mcs)
+            history['median_peak_mc'] = sorted(token_ath_mcs)[len(token_ath_mcs)//2]
+            history['tokens_with_mc_data'] = len(token_ath_mcs)
+            self.logger.debug(f"Dev {dev_wallet[:8]}... Best ATH MC: ${history['best_peak_mc']:,.0f} from {len(token_ath_mcs)} tokens")
+        
+        return history
     

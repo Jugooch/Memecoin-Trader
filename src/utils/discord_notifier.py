@@ -117,6 +117,16 @@ class DiscordNotifier:
             "embeds": [embed]
         })
     
+    async def send_embed_object(self, embed: Dict) -> bool:
+        """Send a pre-built embed object (for backward compatibility)"""
+        if not self.enabled:
+            return False
+        
+        return await self._post({
+            "username": self.username,
+            "embeds": [embed]
+        })
+    
     async def send_trade_notification(self,
                                      side: str,
                                      symbol: str,

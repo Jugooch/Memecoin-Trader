@@ -327,6 +327,44 @@ class MoralisClient:
             self.logger.error(f"Error getting token liquidity for {mint_address}: {e}")
             return {'total_liquidity_usd': 0, 'pools': [], 'pool_count': 0}
 
+    async def get_token_market_cap(self, mint_address: str) -> float:
+        """Get actual token market cap by multiplying supply * price"""
+        try:
+            # Get token metadata for supply
+            metadata = await self.get_token_metadata(mint_address)
+            if not metadata:
+                self.logger.info(f"MC calc for {mint_address[:8]}... - No metadata returned")
+                return 0
+            
+            supply = metadata.get('supply', 0)
+            decimals = metadata.get('decimals', 9)
+            
+            self.logger.info(f"MC calc for {mint_address[:8]}... - Supply: {supply}, Decimals: {decimals}")
+            
+            if supply == 0:
+                self.logger.info(f"MC calc for {mint_address[:8]}... - Supply is 0, returning 0")
+                return 0
+            
+            # Adjust supply for decimals
+            actual_supply = supply / (10 ** decimals)
+            
+            # Get current price
+            price_usd = await self.get_current_price(mint_address)
+            
+            if price_usd == 0:
+                return 0
+            
+            # Calculate market cap
+            market_cap = actual_supply * price_usd
+            
+            self.logger.debug(f"Token {mint_address[:8]}... Supply: {actual_supply:,.0f}, Price: ${price_usd:.8f}, MC: ${market_cap:,.0f}")
+            
+            return market_cap
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating market cap for {mint_address}: {e}")
+            return 0
+    
     async def get_current_price(self, mint_address: str, fresh: bool = False) -> float:
         """Get current token price in USD"""
         url = f"{self.base_url}/token/mainnet/{mint_address}/price"
@@ -336,20 +374,22 @@ class MoralisClient:
             cache_type = None if fresh else 'price'
             data = await self._make_request(url, cache_type=cache_type)
             
-            # Debug logging to see what we're actually getting
+            # Debug logging to see exactly what we're getting
+            self.logger.info(f"Price response for {mint_address[:8]}...: {data}")
+            
             if data is None:
-                self.logger.error(f"CRITICAL: _make_request returned None for {mint_address}")
+                self.logger.info(f"Price request returned None for {mint_address[:8]}...")
                 return 0.0
             
             price = data.get('usdPrice', 0)
-            if price is None:
-                self.logger.error(f"CRITICAL: usdPrice is None in response for {mint_address}: {data}")
+            if price is None or price == 0:
+                self.logger.info(f"Price for {mint_address[:8]}... is {price}, full response: {data}")
                 return 0.0
                 
             return float(price)
             
         except Exception as e:
-            self.logger.error(f"Error getting price for {mint_address}: {e}")
+            self.logger.info(f"Price request failed for {mint_address[:8]}...: {e}")
             return 0.0
 
     async def get_token_ohlcv(self, mint_address: str, timeframe: str = "1m", limit: int = 100) -> List[Dict]:
