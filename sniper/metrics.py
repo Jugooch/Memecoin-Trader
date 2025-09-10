@@ -89,29 +89,41 @@ class Metrics:
             self.logger.error(f"Failed to send Discord alert: {e}")
     
     async def _send_entry_alert(self, data: Dict, success: bool):
-        """Send entry alert"""
+        """Send entry alert with comprehensive tracking info"""
         if success:
             embed = {
                 "title": "🎯 SNIPER ENTRY",
                 "color": 0x00FF00,
                 "fields": [
                     {"name": "Token", "value": data.get('ticker', 'UNKNOWN'), "inline": True},
-                    {"name": "Mint", "value": f"`{data.get('token_mint', '')[:8]}...`", "inline": True},
+                    {"name": "Name", "value": data.get('name', 'Unknown'), "inline": True},
                     {"name": "Dev Score", "value": f"{data.get('score', 0):.1f}", "inline": True},
+                    {"name": "Mint Address", "value": f"`{data.get('token_mint', 'Unknown')}`", "inline": False},
+                    {"name": "Dev Wallet", "value": f"`{data.get('dev_wallet', 'Unknown')}`", "inline": False},
                     {"name": "Position", "value": f"{data.get('position_sol', 0):.3f} SOL", "inline": True},
                     {"name": "Entry Price", "value": f"${data.get('entry_price', 0):.8f}", "inline": True},
-                    {"name": "TX", "value": f"`{data.get('tx_signature', '')[:16]}...`", "inline": True}
+                    {"name": "Liquidity", "value": f"{data.get('lp_sol', 0):.2f} SOL", "inline": True},
+                    {"name": "Dev Hold%", "value": f"{data.get('dev_hold_pct', 0):.1f}%", "inline": True},
+                    {"name": "TX", "value": f"`{data.get('tx_signature', '')[:16]}...`", "inline": True},
+                    {"name": "Detection Time", "value": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC'), "inline": True}
                 ],
                 "timestamp": datetime.utcnow().isoformat()
             }
         else:
+            # Include full mint for aborted entries to track manually
             embed = {
                 "title": "⚠️ ENTRY ABORTED",
                 "color": 0xFF9900,
                 "fields": [
                     {"name": "Token", "value": data.get('ticker', 'UNKNOWN'), "inline": True},
-                    {"name": "Reason", "value": data.get('reason', 'Unknown'), "inline": True},
-                    {"name": "Dev Score", "value": f"{data.get('score', 0):.1f}", "inline": True}
+                    {"name": "Name", "value": data.get('name', 'Unknown'), "inline": True},
+                    {"name": "Dev Score", "value": f"{data.get('score', 0):.1f}", "inline": True},
+                    {"name": "Reason", "value": data.get('reason', 'Unknown'), "inline": False},
+                    {"name": "Mint Address", "value": f"`{data.get('token_mint', 'Unknown')}`", "inline": False},
+                    {"name": "Dev Wallet", "value": f"`{data.get('dev_wallet', 'Unknown')}`", "inline": False},
+                    {"name": "Liquidity", "value": f"{data.get('lp_sol', 0):.2f} SOL", "inline": True},
+                    {"name": "Dev Hold%", "value": f"{data.get('dev_hold_pct', 0):.1f}%", "inline": True},
+                    {"name": "Detection Time", "value": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC'), "inline": True}
                 ],
                 "timestamp": datetime.utcnow().isoformat()
             }

@@ -59,6 +59,7 @@ logs/
 # Configuration files with secrets
 config.yml
 config_aggressive.yml
+config_sniper.yml
 *.env
 .env*
 

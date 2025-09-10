@@ -304,12 +304,6 @@ class DevDiscovery:
         
         self.logger.info(f"Processing enrichment batch of {len(batch)} devs ({sum(1 for t, _ in batch if t == 'urgent')} urgent, {sum(1 for t, _ in batch if t == 'stale')} stale)")
         
-        # Process devs in parallel using asyncio.gather
-        tasks = []
-        for batch_type, dev_wallet in batch:
-            task = self._enrich_dev_profile_safe(dev_wallet, batch_type)
-            tasks.append(task)
-        
         # Use efficient batch API call instead of individual calls
         dev_wallets = [dev_wallet for _, dev_wallet in batch]
         

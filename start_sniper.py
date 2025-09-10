@@ -192,8 +192,12 @@ class SniperBot:
                 
                 await self.metrics.send_alert("ENTRY_ABORTED", {
                     'ticker': ticker,
+                    'name': event.get('name', ''),
                     'reason': reason,
-                    'dev_wallet': dev_wallet
+                    'dev_wallet': dev_wallet,
+                    'token_mint': event.get('token_mint', ''),
+                    'market_cap_usd': event.get('market_cap_usd', 0),
+                    'lp_sol': event.get('lp_init', 0)
                 })
                 
                 self.store.log_event("ENTRY_ABORTED", event, reason=reason)
@@ -211,9 +215,13 @@ class SniperBot:
                 
                 await self.metrics.send_alert("ENTRY_ABORTED", {
                     'ticker': ticker,
+                    'name': event.get('name', ''),
                     'reason': reason,
                     'score': score,
-                    'dev_wallet': dev_wallet
+                    'dev_wallet': dev_wallet,
+                    'token_mint': event.get('token_mint', ''),
+                    'lp_sol': event.get('lp_init', 0),
+                    'dev_hold_pct': event.get('dev_hold_pct', 0)
                 })
                 
                 self.store.log_event("ENTRY_ABORTED", event, reason=reason)
@@ -234,12 +242,15 @@ class SniperBot:
                 
                 await self.metrics.send_alert("ENTRY_OK", {
                     'ticker': ticker,
+                    'name': event.get('name', ''),
                     'token_mint': event.get('token_mint'),
                     'score': score,
                     'position_sol': position_size,
                     'entry_price': 0.000001,  # Will be updated
                     'tx_signature': 'pending',
-                    'dev_wallet': dev_wallet
+                    'dev_wallet': dev_wallet,
+                    'lp_sol': event.get('lp_init', 0),
+                    'dev_hold_pct': event.get('dev_hold_pct', 0)
                 })
                 
                 self.store.log_event("ENTRY_OK", event)
@@ -250,9 +261,13 @@ class SniperBot:
                 
                 await self.metrics.send_alert("ENTRY_ABORTED", {
                     'ticker': ticker,
+                    'name': event.get('name', ''),
                     'reason': reason,
                     'score': score,
-                    'dev_wallet': dev_wallet
+                    'dev_wallet': dev_wallet,
+                    'token_mint': event.get('token_mint', ''),
+                    'lp_sol': event.get('lp_init', 0),
+                    'dev_hold_pct': event.get('dev_hold_pct', 0)
                 })
                 
                 self.store.log_event("ENTRY_ABORTED", event, reason=reason)
