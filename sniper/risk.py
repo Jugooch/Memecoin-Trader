@@ -50,18 +50,18 @@ class RiskManager:
         
         # 1. Peak Market Cap Score (30%)
         best_peak_mc = profile.get('best_peak_mc_usd', 0)
-        if best_peak_mc >= 10_000_000:  # $10M+
+        if best_peak_mc >= 400_000:  # $400k+
             scores['peak_mc'] = 100
-        elif best_peak_mc >= 5_000_000:  # $5M+
+        elif best_peak_mc >= 300_000:  # $300k+
             scores['peak_mc'] = 85
-        elif best_peak_mc >= 2_000_000:  # $2M+
+        elif best_peak_mc >= 200_000:  # $200k+
             scores['peak_mc'] = 70
-        elif best_peak_mc >= 1_000_000:  # $1M+
+        elif best_peak_mc >= 100_000:  # $100k+
             scores['peak_mc'] = 55
-        elif best_peak_mc >= 500_000:  # $500K+
+        elif best_peak_mc >= 50_000:  # $50K+
             scores['peak_mc'] = 40
         else:
-            scores['peak_mc'] = max(0, (best_peak_mc / 500_000) * 40)
+            scores['peak_mc'] = max(0, (best_peak_mc / 50_000) * 40)
         
         # 2. Rug Count Score (20%) - Inverse scoring
         num_rugs = profile.get('num_rugs_90d', 0)
