@@ -136,35 +136,42 @@ class RiskManager:
         
         return total_score
     
-    def allowed(self, score: float, dev_wallet: str = None, sol_amount: float = 0) -> bool:
-        """Check if trade is allowed based on score and risk limits"""
+    def allowed(self, score: float, dev_wallet: str = None, sol_amount: float = 0) -> tuple[bool, str]:
+        """Check if trade is allowed based on score and risk limits
+        Returns: (allowed, reason_if_not_allowed)
+        """
         # Check minimum score
         if score < self.min_score:
-            self.logger.warning(f"Score {score:.1f} below minimum {self.min_score}")
-            return False
+            reason = f"Score too low: {score:.1f} < {self.min_score}"
+            self.logger.warning(reason)
+            return False, reason
         
         # Check dev cooldown
         if dev_wallet and not self._check_dev_cooldown(dev_wallet):
+            reason = f"Dev cooldown active (24h between launches)"
             self.logger.warning(f"Dev {dev_wallet[:8]}... still in cooldown")
-            return False
+            return False, reason
         
         # Check global position limit
         open_positions = len(self.store.get_open_positions())
         if open_positions >= self.max_open_positions:
-            self.logger.warning(f"Max open positions reached: {open_positions}/{self.max_open_positions}")
-            return False
+            reason = f"Max positions reached: {open_positions}/{self.max_open_positions}"
+            self.logger.warning(reason)
+            return False, reason
         
         # Check hourly trade limit
         if not self._check_hourly_trades():
-            self.logger.warning(f"Max trades per hour reached: {self.max_trades_per_hour}")
-            return False
+            reason = f"Max trades/hour reached: {self.max_trades_per_hour}"
+            self.logger.warning(reason)
+            return False, reason
         
         # Check hourly risk limit
         if sol_amount > 0 and not self._check_hourly_risk(sol_amount):
-            self.logger.warning(f"Max risk per hour reached: {self.max_risk_per_hour} SOL")
-            return False
+            reason = f"Max risk/hour reached: {self.max_risk_per_hour} SOL"
+            self.logger.warning(reason)
+            return False, reason
         
-        return True
+        return True, ""
     
     def _check_dev_cooldown(self, dev_wallet: str) -> bool:
         """Check if dev is outside cooldown period"""

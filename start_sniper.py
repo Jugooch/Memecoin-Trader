@@ -209,8 +209,9 @@ class SniperBot:
             # 3. Risk gates
             position_size = self.risk.get_position_size(score, self.config)
             
-            if not self.risk.allowed(score, dev_wallet, position_size):
-                reason = f"Risk gate failed (score: {score:.1f})"
+            allowed, risk_reason = self.risk.allowed(score, dev_wallet, position_size)
+            if not allowed:
+                reason = f"Risk gate: {risk_reason}"
                 self.logger.warning(f"Risk gate failed: {reason}")
                 
                 await self.metrics.send_alert("ENTRY_ABORTED", {
