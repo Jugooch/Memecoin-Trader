@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
 Manual buy script for tokens using pump.fun infrastructure
-Follows exact flow from real bot: PumpPortal local API for transaction signing, QuickNode RPC for sending
+Uses the EXACT same client as the bot
 """
 
 import asyncio
 import sys
 import os
+import json
 import aiohttp
 import base64
 from solders.keypair import Keypair
@@ -16,16 +17,23 @@ from datetime import datetime
 # Add the src directory to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
 
+# Set up logging to see what's happening
+import logging
+logging.basicConfig(level=logging.DEBUG, format='%(name)s - %(levelname)s - %(message)s')
+
+# Import the actual PumpFun client the bot uses
+from clients.pumpfun_client import PumpFunClient
+
 async def manual_buy():
     """Manually buy a token using pump.fun"""
     
     # MANUAL CONFIG - Replace these values with your actual config
-    MINT_ADDRESS = "YOUR_TOKEN_MINT_ADDRESS"  # The token you want to buy
-    USD_AMOUNT = 10.0  # Amount in USD to spend
+    MINT_ADDRESS = "3UrMErt68aBZAgq2m9YVng1KnmJEjiyxwGHpaLditQM3"  # Your pump.fun token
+    USD_AMOUNT = 20.0  # Amount in USD to spend
     
-    WALLET_PRIVATE_KEY = "YOUR_WALLET_PRIVATE_KEY"  # From your config
-    WALLET_PUBLIC_KEY = "YOUR_WALLET_PUBLIC_KEY"   # From your config  
-    QUICKNODE_ENDPOINT = "YOUR_QUICKNODE_ENDPOINT"  # From your config
+    WALLET_PRIVATE_KEY = ""  # From your config
+    WALLET_PUBLIC_KEY = ""   # From your config  
+    QUICKNODE_ENDPOINT = "https://thrumming-lingering-shard.solana-mainnet.quiknode.pro/877f3b04f53a38f4cbedcfdb51705e772b7c45ac/"  # From your config
     
     print(f"🚀 Manual Token Buy")
     print(f"📍 Mint: {MINT_ADDRESS}")
@@ -101,13 +109,24 @@ async def manual_buy():
             
         print(f"\n📤 Creating buy transaction for ${USD_AMOUNT}...")
         
-        # Create buy transaction via pump.fun (exact same as bot)
-        tx_result = await create_buy_transaction(
-            wallet_pubkey=WALLET_PUBLIC_KEY,
-            mint_address=MINT_ADDRESS,
-            sol_amount=sol_amount,
-            slippage_bps=3000  # 30% slippage for volatile tokens (same as bot)
+        # Use the EXACT same client as the bot
+        # Note: api_key is not actually used for local trading API, but required for init
+        pumpfun_client = PumpFunClient(
+            quicknode_endpoint=QUICKNODE_ENDPOINT,
+            api_key="not_used_for_local_api"  # Placeholder - not used for pump portal local API
         )
+        
+        try:
+            # Create buy transaction using the bot's actual method
+            tx_result = await pumpfun_client.create_buy_transaction(
+                wallet_pubkey=WALLET_PUBLIC_KEY,
+                mint_address=MINT_ADDRESS,
+                sol_amount=sol_amount,
+                slippage_bps=3000  # 30% slippage for volatile tokens (same as bot)
+            )
+        finally:
+            # Clean up the client
+            await pumpfun_client.close()
         
         if not tx_result.get("success"):
             print(f"❌ Failed to create transaction: {tx_result.get('error')}")
@@ -252,46 +271,6 @@ async def get_token_info(mint_address):
         pass
     return None
 
-async def create_buy_transaction(wallet_pubkey, mint_address, sol_amount, slippage_bps=3000):
-    """Create buy transaction via pump.fun local API (exact same as bot)"""
-    trade_data = {
-        'publicKey': wallet_pubkey,
-        'action': 'buy',
-        'mint': mint_address,
-        'amount': sol_amount,
-        'denominatedInSol': 'true',  # Amount is in SOL
-        'slippage': slippage_bps / 100,  # Convert bps to percentage
-        'priorityFee': 0.003,  # Same as bot
-        'pool': 'auto'
-    }
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://pumpportal.fun/api/trade-local",
-                json=trade_data,
-                timeout=30
-            ) as response:
-                if response.status == 200:
-                    # Pump.fun returns binary transaction data
-                    response_bytes = await response.read()
-                    # Convert to base64 for consistency with our signing function
-                    response_b64 = base64.b64encode(response_bytes).decode('utf-8')
-                    return {
-                        "success": True,
-                        "transaction": response_b64
-                    }
-                else:
-                    error_text = await response.text()
-                    return {
-                        "success": False,
-                        "error": f"HTTP {response.status}: {error_text}"
-                    }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
 
 async def simulate_transaction(transaction_b64, rpc_endpoint):
     """Simulate transaction to check if it will succeed"""
