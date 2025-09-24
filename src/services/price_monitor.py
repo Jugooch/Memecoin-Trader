@@ -72,12 +72,22 @@ class PriceMonitor:
                 # Get liquidity info
                 liquidity = await self.moralis.get_token_liquidity(mint)
 
+                # Calculate market cap
+                supply = metadata.get('supply', 0)
+                decimals = metadata.get('decimals', 9)
+                if supply > 0:
+                    actual_supply = supply / (10 ** decimals)
+                    market_cap = actual_supply * price
+                else:
+                    market_cap = 0
+
                 token_info = {
                     'mint': mint,
                     'symbol': metadata.get('symbol', 'UNKNOWN'),
                     'name': metadata.get('name', 'Unknown'),
                     'price': price,
                     'liquidity_usd': liquidity.get('total_liquidity_usd', 0),
+                    'market_cap': market_cap,
                     'amount_held': token.get('amount', 0),
                     'value_usd': token.get('amount', 0) * price
                 }
@@ -140,7 +150,7 @@ class PriceMonitor:
             "color": 0x00FF00,
             "timestamp": timestamp,
             "footer": {
-                "text": "Price Monitor v1.0"
+                "text": "AZ Coin Bros Price Updates"
             }
         }
         embeds.append(main_embed)
@@ -148,7 +158,6 @@ class PriceMonitor:
         # Wallet tokens embed if any
         if wallet_tokens:
             wallet_fields = []
-            total_value = sum(t['value_usd'] for t in wallet_tokens[:10])
 
             # Add top tokens from tracked wallet
             for i, token in enumerate(wallet_tokens[:5], 1):
@@ -159,8 +168,7 @@ class PriceMonitor:
                 field_value = (
                     f"Price: ${token['price']:.8f}\n"
                     f"Change: {price_emoji} {change_pct:+.1f}%\n"
-                    f"Liq: ${token['liquidity_usd']/1000:.1f}K\n"
-                    f"Held: ${token['value_usd']:.2f}"
+                    f"MC: ${token.get('market_cap', 0)/1000:.1f}K"
                 )
 
                 wallet_fields.append({
@@ -170,8 +178,7 @@ class PriceMonitor:
                 })
 
             wallet_embed = {
-                "title": f"📊 Tracked Wallet Holdings",
-                "description": f"**Wallet:** `{self.tracked_wallet[:8]}...`\n**Total Value:** ${total_value:,.2f}",
+                "title": f"📊 AZ Coin Bros Price Updates",
                 "color": 0x3498DB,
                 "fields": wallet_fields,
                 "timestamp": timestamp
@@ -192,7 +199,7 @@ class PriceMonitor:
                     f"`{token['mint'][:16]}...`\n"
                     f"Price: ${token['price']:.8f}\n"
                     f"24h: {emoji} {change:+.1f}%\n"
-                    f"Liquidity: ${token['liquidity_usd']:,.0f}"
+                    f"MC: ${token.get('market_cap', 0):,.0f}"
                 )
 
                 mover_fields.append({
@@ -228,7 +235,7 @@ class PriceMonitor:
             embeds.append(summary_embed)
 
         return {
-            "username": "Price Monitor Bot",
+            "username": "AZ Coin Bros Price Updates",
             "avatar_url": "https://cdn.discordapp.com/attachments/1234567890/1234567890/chart.png",
             "embeds": embeds[:10]  # Discord limit
         }
