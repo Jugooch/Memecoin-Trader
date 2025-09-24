@@ -218,6 +218,8 @@ class PriceMonitor:
             embeds.append(summary_embed)
 
         return {
+            "username": "AZ Coin Bros Price Updates",
+            "avatar_url": "https://cdn.discordapp.com/attachments/1234567890/1234567890/chart.png",
             "embeds": embeds[:10]  # Discord limit
         }
 
