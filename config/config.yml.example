@@ -45,6 +45,13 @@ watched_wallets:
   # - wallet_address_1
   # - wallet_address_2
 
+# Price Monitor Service Configuration
+price_monitor:
+  webhook_url: "YOUR_DISCORD_WEBHOOK_URL"  # Discord webhook for price updates
+  update_interval_minutes: 30               # How often to send updates (in minutes)
+  tracked_wallet: "4bmuhbVQPbVmXuqPHysyqGVq3UBou8NL9ukL4MwshGob"  # Wallet to track token creations
+  top_movers_count: 10                      # Number of top gainers/losers to show
+
 # Trading parameters (Phase 2: Bayesian Scoring) - STRICTER REQUIREMENTS
 alpha_weight_min: 3.5         # Minimum weighted vote score (increased from 3.0)
 require_one_wallet_pge_55: true  # Require at least one wallet with >55% win rate (ENABLED)
