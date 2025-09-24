@@ -368,29 +368,52 @@ class MoralisClient:
     async def get_current_price(self, mint_address: str, fresh: bool = False) -> float:
         """Get current token price in USD"""
         url = f"{self.base_url}/token/mainnet/{mint_address}/price"
-        
+
         try:
             # Skip cache if fresh=True (for position monitoring)
             cache_type = None if fresh else 'price'
             data = await self._make_request(url, cache_type=cache_type)
-            
+
             # Debug logging to see exactly what we're getting
             self.logger.info(f"Price response for {mint_address[:8]}...: {data}")
-            
+
             if data is None:
                 self.logger.info(f"Price request returned None for {mint_address[:8]}...")
                 return 0.0
-            
+
             price = data.get('usdPrice', 0)
             if price is None or price == 0:
                 self.logger.info(f"Price for {mint_address[:8]}... is {price}, full response: {data}")
                 return 0.0
-                
+
             return float(price)
-            
+
         except Exception as e:
             self.logger.info(f"Price request failed for {mint_address[:8]}...: {e}")
             return 0.0
+
+    async def get_current_price_with_details(self, mint_address: str, fresh: bool = False) -> Dict:
+        """Get current token price with additional details including logo"""
+        url = f"{self.base_url}/token/mainnet/{mint_address}/price"
+
+        try:
+            # Skip cache if fresh=True (for position monitoring)
+            cache_type = None if fresh else 'price'
+            data = await self._make_request(url, cache_type=cache_type)
+
+            if data is None:
+                return {'price': 0.0, 'logo': None}
+
+            return {
+                'price': float(data.get('usdPrice', 0)),
+                'logo': data.get('logo'),
+                'symbol': data.get('symbol'),
+                'name': data.get('name')
+            }
+
+        except Exception as e:
+            self.logger.error(f"Price details request failed for {mint_address[:8]}...: {e}")
+            return {'price': 0.0, 'logo': None}
 
     async def get_token_ohlcv(self, mint_address: str, timeframe: str = "1m", limit: int = 100) -> List[Dict]:
         """Get OHLCV data for token"""

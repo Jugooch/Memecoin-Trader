@@ -62,9 +62,10 @@ class PriceMonitor:
                 if not mint or token.get('possible_spam'):
                     continue
 
-                # Get token metadata and price
+                # Get token metadata and price with details
                 metadata = await self.moralis.get_token_metadata(mint)
-                price = await self.moralis.get_current_price(mint, fresh=True)
+                price_details = await self.moralis.get_current_price_with_details(mint, fresh=True)
+                price = price_details.get('price', 0)
 
                 if price == 0:
                     continue
@@ -83,9 +84,10 @@ class PriceMonitor:
 
                 token_info = {
                     'mint': mint,
-                    'symbol': metadata.get('symbol', 'UNKNOWN'),
-                    'name': metadata.get('name', 'Unknown'),
+                    'symbol': price_details.get('symbol') or metadata.get('symbol', 'UNKNOWN'),
+                    'name': price_details.get('name') or metadata.get('name', 'Unknown'),
                     'price': price,
+                    'logo': price_details.get('logo'),
                     'liquidity_usd': liquidity.get('total_liquidity_usd', 0),
                     'market_cap': market_cap,
                     'amount_held': token.get('amount', 0),
@@ -143,90 +145,71 @@ class PriceMonitor:
         # Timestamp for the update
         timestamp = datetime.utcnow().isoformat()
 
-        # Main update embed
-        main_embed = {
-            "title": "🔥 **Periodic Price Update** 🔥",
-            "description": f"Latest market data and wallet tracking",
-            "color": 0x00FF00,
-            "timestamp": timestamp,
-            "footer": {
-                "text": "AZ Coin Bros Price Updates"
-            }
-        }
-        embeds.append(main_embed)
-
-        # Wallet tokens embed if any
+        # Create individual embeds for each token (so each can have its own thumbnail/logo)
         if wallet_tokens:
-            wallet_fields = []
+            # Single header embed
+            header_embed = {
+                "title": f"📊 AZ Coin Bros Price Updates",
+                "description": f"Tracking {len(wallet_tokens)} tokens from wallet",
+                "color": 0x3498DB,
+                "timestamp": timestamp,
+                "footer": {
+                    "text": "AZ Coin Bros"
+                }
+            }
+            embeds.append(header_embed)
 
-            # Add top tokens from tracked wallet
-            for i, token in enumerate(wallet_tokens[:5], 1):
+            # Create embed for each token (limit to 8 to stay under Discord's 10 embed limit)
+            for i, token in enumerate(wallet_tokens[:8], 1):
                 price_emoji = "📈" if token.get('price_change_pct', 0) >= 0 else "📉"
                 change_pct = token.get('price_change_pct', 0)
 
-                field_name = f"{i}. {token['symbol']}"
-                field_value = (
-                    f"Price: ${token['price']:.8f}\n"
-                    f"Change: {price_emoji} {change_pct:+.1f}%\n"
-                    f"MC: ${token.get('market_cap', 0)/1000:.1f}K"
-                )
+                # Format market cap
+                mc = token.get('market_cap', 0)
+                if mc >= 1_000_000:
+                    mc_str = f"${mc/1_000_000:.1f}M"
+                elif mc >= 1_000:
+                    mc_str = f"${mc/1_000:.1f}K"
+                else:
+                    mc_str = f"${mc:.0f}"
 
-                wallet_fields.append({
-                    "name": field_name,
-                    "value": field_value,
-                    "inline": True
-                })
+                # Determine color based on price change
+                if change_pct > 10:
+                    color = 0x00FF00  # Green
+                elif change_pct > 0:
+                    color = 0x90EE90  # Light green
+                elif change_pct < -10:
+                    color = 0xFF0000  # Red
+                else:
+                    color = 0xFFA500  # Orange
 
-            wallet_embed = {
-                "title": f"📊 AZ Coin Bros Price Updates",
-                "color": 0x3498DB,
-                "fields": wallet_fields,
-                "timestamp": timestamp
-            }
-            embeds.append(wallet_embed)
+                token_embed = {
+                    "title": f"{i}. {token['symbol']}",
+                    "description": (
+                        f"**Price:** ${token['price']:.8f}\n"
+                        f"**Change:** {price_emoji} {change_pct:+.1f}%\n"
+                        f"**Market Cap:** {mc_str}"
+                    ),
+                    "color": color,
+                    "footer": {"text": token['name'][:30]}
+                }
 
-        # Token details for significant movers
-        significant_movers = [t for t in wallet_tokens if abs(t.get('price_change_pct', 0)) > 10]
-        if significant_movers:
-            mover_fields = []
+                # Add logo as thumbnail if available
+                if token.get('logo'):
+                    token_embed["thumbnail"] = {"url": token['logo']}
 
-            for token in significant_movers[:3]:
-                change = token.get('price_change_pct', 0)
-                emoji = "🚀" if change > 20 else "📈" if change > 0 else "💀" if change < -20 else "📉"
+                embeds.append(token_embed)
 
-                field_value = (
-                    f"**{token['name']}**\n"
-                    f"`{token['mint'][:16]}...`\n"
-                    f"Price: ${token['price']:.8f}\n"
-                    f"24h: {emoji} {change:+.1f}%\n"
-                    f"MC: ${token.get('market_cap', 0):,.0f}"
-                )
-
-                mover_fields.append({
-                    "name": f"{emoji} {token['symbol']}",
-                    "value": field_value,
-                    "inline": True
-                })
-
-            movers_embed = {
-                "title": "⚡ Significant Price Movements",
-                "color": 0xE74C3C if any(t['price_change_pct'] < -10 for t in significant_movers) else 0x2ECC71,
-                "fields": mover_fields,
-                "timestamp": timestamp
-            }
-            embeds.append(movers_embed)
-
-        # Market summary
-        if wallet_tokens:
+        # Remove the significant movers section and simplify the summary
+        # Market summary is now optional - only if we have room in embeds
+        if wallet_tokens and len(embeds) < 9:  # Leave room for summary
             gainers = [t for t in wallet_tokens if t.get('price_change_pct', 0) > 0]
             losers = [t for t in wallet_tokens if t.get('price_change_pct', 0) < 0]
 
             summary_embed = {
-                "title": "📈 Market Summary",
+                "title": "📈 Summary",
                 "description": (
-                    f"**Tokens Tracked:** {len(wallet_tokens)}\n"
-                    f"**Gainers:** {len(gainers)} 📈\n"
-                    f"**Losers:** {len(losers)} 📉\n"
+                    f"**Gainers:** {len(gainers)} 📈 | **Losers:** {len(losers)} 📉\n"
                     f"**Next Update:** <t:{int((datetime.utcnow() + timedelta(seconds=self.update_interval)).timestamp())}:R>"
                 ),
                 "color": 0x9B59B6,
