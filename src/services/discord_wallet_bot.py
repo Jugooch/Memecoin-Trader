@@ -135,9 +135,8 @@ class WalletProofBot(commands.Bot):
                             price = price_details.get('price', 0)
 
                             # Calculate holdings
-                            amount = float(token.get('amount', 0))  # Ensure it's a float
-                            decimals = int(token_info['decimals'])  # Ensure it's an int
-                            actual_amount = amount / (10 ** decimals) if decimals > 0 else amount
+                            # Moralis already provides the amount as a converted float, not raw
+                            actual_amount = float(token.get('amount', 0))
                             value_usd = actual_amount * price if price > 0 else 0
 
                             holdings['tokens'][symbol] = {
