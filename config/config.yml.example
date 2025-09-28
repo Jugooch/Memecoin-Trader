@@ -52,6 +52,11 @@ price_monitor:
   tracked_wallet: "4bmuhbVQPbVmXuqPHysyqGVq3UBou8NL9ukL4MwshGob"  # Wallet to track token creations
   top_movers_count: 10                      # Number of top gainers/losers to show
 
+# Discord Bot Configuration (for /wallet-proof command)
+discord_bot:
+  bot_token: "YOUR_DISCORD_BOT_TOKEN"       # Bot token from Discord Developer Portal
+  wallet_proofs_channel_id: null            # Optional: Channel ID to restrict command to specific channel
+
 # Trading parameters (Phase 2: Bayesian Scoring) - STRICTER REQUIREMENTS
 alpha_weight_min: 3.5         # Minimum weighted vote score (increased from 3.0)
 require_one_wallet_pge_55: true  # Require at least one wallet with >55% win rate (ENABLED)

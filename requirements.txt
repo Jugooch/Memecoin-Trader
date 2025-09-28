@@ -11,3 +11,4 @@ cryptography>=41.0.3
 gql>=3.4.1
 aiofiles>=23.1.0
 aiosqlite>=0.19.0
+discord.py>=2.3.2
