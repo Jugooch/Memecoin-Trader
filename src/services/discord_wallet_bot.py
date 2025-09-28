@@ -99,21 +99,30 @@ class WalletProofBot(commands.Bot):
                 'total_value_usd': 0
             }
 
-            # Get SOL balance
-            try:
-                sol_balance = await self.moralis.get_sol_balance(wallet_address)
-                holdings['sol_balance'] = sol_balance
-
-                # Get SOL price
-                sol_price = await self.moralis.get_sol_price()
-                holdings['sol_value_usd'] = sol_balance * sol_price
-                holdings['total_value_usd'] += holdings['sol_value_usd']
-            except Exception as e:
-                self.logger.error(f"Error getting SOL balance: {e}")
-
-            # Get wallet portfolio
+            # Get wallet portfolio (includes SOL balance)
             portfolio = await self.moralis.get_wallet_portfolio(wallet_address)
 
+            # Get SOL balance from portfolio
+            if portfolio:
+                native_balance = portfolio.get('native_balance', {})
+                sol_balance = float(native_balance.get('solana', 0))
+                holdings['sol_balance'] = sol_balance
+
+                # Get SOL price using wrapped SOL address
+                sol_mint = "So11111111111111111111111111111111111111112"
+                sol_price_data = await self.moralis.get_current_price_with_details(sol_mint, fresh=True)
+                sol_price = sol_price_data.get('price', 0)
+
+                if sol_price == 0:
+                    # If Moralis fails, we can't calculate USD value
+                    self.logger.error("Failed to fetch SOL price")
+                    holdings['sol_value_usd'] = 0
+                else:
+                    holdings['sol_value_usd'] = sol_balance * sol_price
+
+                holdings['total_value_usd'] += holdings['sol_value_usd']
+
+            # Process tokens from portfolio
             if portfolio and portfolio.get('tokens'):
                 for token in portfolio['tokens']:
                     mint = token.get('mint')
@@ -126,8 +135,8 @@ class WalletProofBot(commands.Bot):
                             price = price_details.get('price', 0)
 
                             # Calculate holdings
-                            amount = token.get('amount', 0)
-                            decimals = token_info['decimals']
+                            amount = float(token.get('amount', 0))  # Ensure it's a float
+                            decimals = int(token_info['decimals'])  # Ensure it's an int
                             actual_amount = amount / (10 ** decimals) if decimals > 0 else amount
                             value_usd = actual_amount * price if price > 0 else 0
 
