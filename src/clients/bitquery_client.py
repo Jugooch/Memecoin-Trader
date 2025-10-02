@@ -2017,23 +2017,23 @@ class BitqueryClient:
     async def get_dev_tokens_with_ath_mc(self, dev_wallet: str, lookback_days: int = 60) -> Dict:
         """
         Get developer's token history with accurate ATH market caps.
-        
+
         Args:
             dev_wallet: Developer wallet address
             lookback_days: How many days to look back
-            
+
         Returns:
             Dict with token history including best peak MC
         """
         # First get the basic history
         history = await self.get_dev_token_history(dev_wallet, lookback_days)
-        
+
         if not history or not history.get('token_addresses'):
             return history
-        
+
         # Get ATH MC for tokens in parallel (respects semaphore limit)
         token_addresses = history['token_addresses'][:10]  # Limit to 10 most recent
-        
+
         async def get_token_ath_safe(token_address):
             try:
                 ath_mc = await self.get_token_ath_market_cap(token_address)
@@ -2043,17 +2043,163 @@ class BitqueryClient:
             except Exception as e:
                 self.logger.error(f"Error getting ATH MC for {token_address}: {e}")
             return 0
-        
+
         # Execute all ATH fetches concurrently (semaphore will limit concurrency)
         ath_results = await asyncio.gather(*[get_token_ath_safe(addr) for addr in token_addresses])
         token_ath_mcs = [mc for mc in ath_results if mc > 0]
-        
+
         # Update history with real peak MC data
         if token_ath_mcs:
             history['best_peak_mc'] = max(token_ath_mcs)
             history['median_peak_mc'] = sorted(token_ath_mcs)[len(token_ath_mcs)//2]
             history['tokens_with_mc_data'] = len(token_ath_mcs)
             self.logger.debug(f"Dev {dev_wallet[:8]}... Best ATH MC: ${history['best_peak_mc']:,.0f} from {len(token_ath_mcs)} tokens")
-        
+
         return history
-    
+
+    async def get_all_tokens_created_by_wallet(self, creator_wallet: str, limit: int = 100) -> List[str]:
+        """
+        Get ALL tokens created by a wallet using the Instructions API.
+        This finds tokens the wallet created, not just tokens they hold/held.
+
+        Args:
+            creator_wallet: The wallet address that created tokens
+            limit: Maximum number of tokens to return (default 100)
+
+        Returns:
+            List of token mint addresses created by this wallet
+        """
+        # Get fresh token
+        token_index, api_token = self._get_next_available_token()
+
+        if not api_token:
+            self.logger.error("No available Bitquery API tokens for token creation query")
+            return []
+
+        async with self._concurrent_semaphore:
+            # Query pump.fun program instructions signed by this wallet
+            # Program address: 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P
+            query = gql("""
+                query ($creator: String!, $limit: Int!) {
+                  Solana {
+                    Instructions(
+                      where: {
+                        Instruction: {
+                          Program: {
+                            Address: {is: "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"}
+                          }
+                        }
+                        Transaction: {
+                          Signer: {is: $creator}
+                          Result: {Success: true}
+                        }
+                      }
+                      orderBy: {descending: Block_Time}
+                      limit: {count: $limit}
+                    ) {
+                      Block {
+                        Time
+                      }
+                      Transaction {
+                        Signature
+                        Signer
+                      }
+                      Instruction {
+                        Accounts {
+                          Address
+                          IsWritable
+                        }
+                        Data
+                      }
+                    }
+                  }
+                }
+            """)
+
+            # Create fresh transport
+            from gql.transport.aiohttp import AIOHTTPTransport
+            transport = AIOHTTPTransport(
+                url=self.endpoint,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_token}"
+                }
+            )
+
+            try:
+                from gql import Client
+                client = Client(transport=transport)
+                result = await client.execute_async(
+                    query,
+                    variable_values={
+                        "creator": creator_wallet,
+                        "limit": limit
+                    }
+                )
+
+                # Update stats
+                if token_index is not None:
+                    self.token_stats[token_index]['calls_today'] += 1
+
+                # Extract token mint addresses from instructions
+                instructions = result.get('Solana', {}).get('Instructions', [])
+                token_mints = set()  # Use set to avoid duplicates
+
+                for instruction in instructions:
+                    accounts = instruction.get('Instruction', {}).get('Accounts', [])
+
+                    # The token mint is typically the first writable account
+                    # that's not the program or system account
+                    for account in accounts:
+                        address = account.get('Address')
+                        is_writable = account.get('IsWritable', False)
+
+                        # Filter out known system addresses and only include writable accounts
+                        if (address and is_writable and
+                            address not in ['11111111111111111111111111111111',
+                                          'So11111111111111111111111111111112',
+                                          '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P'] and
+                            len(address) >= 32):  # Valid Solana address length
+                            token_mints.add(address)
+                            break  # Take the first valid writable account per instruction
+
+                token_list = list(token_mints)
+                self.logger.info(f"Found {len(token_list)} tokens created by wallet {creator_wallet[:8]}...")
+
+                return token_list
+
+            except Exception as e:
+                error_str = str(e)
+                self.logger.error(f"Error fetching tokens created by {creator_wallet[:8]}...: {error_str}")
+
+                # Handle 402 and 403 errors and token rotation
+                if '402' in error_str or 'Payment Required' in error_str or '403' in error_str or 'Forbidden' in error_str:
+                    if token_index is not None:
+                        if '402' in error_str or 'Payment Required' in error_str:
+                            self.token_stats[token_index]['payment_required'] = True
+                            self.logger.warning(f"Token #{token_index} marked as payment required")
+                        elif '403' in error_str or 'Forbidden' in error_str:
+                            self.token_stats[token_index]['forbidden'] = True
+                            self.logger.warning(f"Token #{token_index} marked as forbidden/invalid")
+
+                    # Try to rotate to next token
+                    self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
+
+                    # Retry once with new token
+                    try:
+                        await self.initialize()
+                        self.logger.info("Retrying token creation query with new token...")
+                        return await self.get_all_tokens_created_by_wallet(creator_wallet, limit)
+                    except Exception as retry_error:
+                        self.logger.error(f"Retry failed: {retry_error}")
+                        return []
+
+                return []
+
+            finally:
+                # Clean up transport
+                try:
+                    await transport.close()
+                except:
+                    pass
+

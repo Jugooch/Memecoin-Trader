@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.clients.moralis_client import MoralisClient
+from src.clients.bitquery_client import BitqueryClient
 from src.utils.config_loader import load_config
 
 class WalletProofBot(commands.Bot):
@@ -51,6 +52,11 @@ class WalletProofBot(commands.Bot):
         self.moralis = MoralisClient(
             api_keys=config.get('moralis_keys', []),
             api_optimization_config=config.get('api_optimization', {})
+        )
+
+        # Initialize BitQuery client for token discovery
+        self.bitquery = BitqueryClient(
+            api_tokens=config.get('bitquery_tokens', [])
         )
 
         # Persistent token tracking (shared with price monitor)
@@ -203,45 +209,53 @@ class WalletProofBot(commands.Bot):
         return level * level * 100
 
     async def discover_all_tokens(self):
-        """Discover ALL tokens from creator wallets and save to persistent storage"""
+        """Discover ALL tokens created by wallets using BitQuery Instructions API"""
         try:
+            # Initialize BitQuery if needed
+            if not self.bitquery.client:
+                await self.bitquery.initialize()
+
             new_tokens_found = 0
 
             for creator_wallet in self.creator_wallets:
-                portfolio = await self.moralis.get_wallet_portfolio(creator_wallet)
+                # Use BitQuery to get ALL tokens CREATED by this wallet (not just held)
+                self.logger.info(f"Scanning for tokens created by {creator_wallet[:8]}...")
+                created_token_mints = await self.bitquery.get_all_tokens_created_by_wallet(
+                    creator_wallet,
+                    limit=100
+                )
 
-                if not portfolio or not portfolio.get('tokens'):
-                    continue
+                # Process each created token
+                for mint in created_token_mints:
+                    try:
+                        # Get token metadata
+                        metadata = await self.moralis.get_token_metadata(mint)
+                        price_details = await self.moralis.get_current_price_with_details(mint, fresh=True)
 
-                for token in portfolio['tokens']:
-                    mint = token.get('mint')
-                    if not mint or token.get('possible_spam'):
+                        symbol = price_details.get('symbol') or metadata.get('symbol', 'UNKNOWN')
+                        name = price_details.get('name') or metadata.get('name', 'Unknown')
+                        logo = price_details.get('logo')
+
+                        # Skip if already tracked
+                        if symbol.upper() in self.our_tokens:
+                            continue
+
+                        self.our_tokens[symbol.upper()] = {
+                            'mint': mint,
+                            'symbol': symbol,
+                            'name': name,
+                            'logo': logo,
+                            'decimals': metadata.get('decimals', 9),
+                            'creator_wallet': creator_wallet,
+                            'discovered_at': datetime.utcnow().isoformat()
+                        }
+
+                        new_tokens_found += 1
+                        self.logger.info(f"Discovered new token: {symbol} ({mint[:8]}...)")
+
+                    except Exception as token_error:
+                        self.logger.error(f"Error processing token {mint[:8]}...: {token_error}")
                         continue
-
-                    # Get token metadata
-                    metadata = await self.moralis.get_token_metadata(mint)
-                    price_details = await self.moralis.get_current_price_with_details(mint, fresh=True)
-
-                    symbol = price_details.get('symbol') or metadata.get('symbol', 'UNKNOWN')
-                    name = price_details.get('name') or metadata.get('name', 'Unknown')
-                    logo = price_details.get('logo')
-
-                    # Skip if already tracked
-                    if symbol.upper() in self.our_tokens:
-                        continue
-
-                    self.our_tokens[symbol.upper()] = {
-                        'mint': mint,
-                        'symbol': symbol,
-                        'name': name,
-                        'logo': logo,
-                        'decimals': metadata.get('decimals', 9),
-                        'creator_wallet': creator_wallet,
-                        'discovered_at': datetime.utcnow().isoformat()
-                    }
-
-                    new_tokens_found += 1
-                    self.logger.info(f"Discovered new token: {symbol} ({mint})")
 
             # Save to persistent storage
             self.save_tracked_tokens()
@@ -733,6 +747,79 @@ async def setup_bot():
                 embed=discord.Embed(
                     title="❌ Error",
                     description="Failed to retrieve leaderboard data. Please try again later.",
+                    color=0xFF0000
+                ),
+                ephemeral=True
+            )
+
+    @bot.tree.command(name='refresh-tokens', description='[Moderator] Scan creator wallets for new tokens')
+    async def refresh_tokens(interaction: discord.Interaction):
+        """Handle /refresh-tokens command - moderator only"""
+        try:
+            # Check if user has moderator permissions
+            if not interaction.user.guild_permissions.manage_messages:
+                await interaction.response.send_message(
+                    embed=discord.Embed(
+                        title="❌ Permission Denied",
+                        description="This command is only available to moderators.",
+                        color=0xFF0000
+                    ),
+                    ephemeral=True
+                )
+                return
+
+            # Defer response as this might take a moment
+            await interaction.response.defer(ephemeral=True)
+
+            # Store count before discovery
+            old_count = len(bot.our_tokens)
+
+            # Run token discovery
+            await bot.discover_all_tokens()
+
+            # Calculate new tokens found
+            new_count = len(bot.our_tokens)
+            tokens_added = new_count - old_count
+
+            # Create response embed
+            embed = discord.Embed(
+                title="🔄 Token Discovery Complete",
+                color=0x00FF00 if tokens_added > 0 else 0x3498DB
+            )
+
+            embed.add_field(
+                name="📊 Results",
+                value=f"**Total Tracked Tokens:** {new_count}\n**New Tokens Found:** {tokens_added}",
+                inline=False
+            )
+
+            if tokens_added > 0:
+                # List the new tokens
+                new_tokens = list(bot.our_tokens.keys())[-tokens_added:]
+                embed.add_field(
+                    name="✨ New Tokens",
+                    value="\n".join([f"• {symbol}" for symbol in new_tokens[:10]]),  # Limit to 10
+                    inline=False
+                )
+
+            embed.add_field(
+                name="📋 All Tracked Tokens",
+                value=", ".join(list(bot.our_tokens.keys())[:20]) + ("..." if new_count > 20 else ""),
+                inline=False
+            )
+
+            embed.set_footer(text=f"Scanned {len(bot.creator_wallets)} creator wallet(s)")
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+            bot.logger.info(f"Token refresh initiated by {interaction.user} - Found {tokens_added} new tokens")
+
+        except Exception as e:
+            bot.logger.error(f"Error processing refresh-tokens command: {e}")
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Error",
+                    description=f"Failed to refresh tokens: {str(e)}",
                     color=0xFF0000
                 ),
                 ephemeral=True

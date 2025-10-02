@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 import aiohttp
 from src.clients.moralis_client import MoralisClient
+from src.clients.bitquery_client import BitqueryClient
 from src.utils.config_loader import load_config
 import json
 from pathlib import Path
@@ -37,6 +38,11 @@ class PriceMonitor:
         self.moralis = MoralisClient(
             api_keys=config.get('moralis_keys', []),
             api_optimization_config=config.get('api_optimization', {})
+        )
+
+        # BitQuery client for token discovery
+        self.bitquery = BitqueryClient(
+            api_tokens=config.get('bitquery_tokens', [])
         )
 
         # Persistent token tracking
@@ -81,45 +87,58 @@ class PriceMonitor:
             self.logger.error(f"Error saving tracked tokens: {e}")
 
     async def discover_new_tokens(self):
-        """Discover new tokens from creator wallets and add to tracked list"""
+        """Discover ALL tokens created by wallets using BitQuery Instructions API"""
         try:
+            # Initialize BitQuery if needed
+            if not self.bitquery.client:
+                await self.bitquery.initialize()
+
+            new_tokens_count = 0
+
             for creator_wallet in self.creator_wallets:
-                portfolio = await self.moralis.get_wallet_portfolio(creator_wallet)
+                # Use BitQuery to get ALL tokens CREATED by this wallet (not just held)
+                self.logger.info(f"Scanning for tokens created by {creator_wallet[:8]}...")
+                created_token_mints = await self.bitquery.get_all_tokens_created_by_wallet(
+                    creator_wallet,
+                    limit=100
+                )
 
-                if not portfolio or not portfolio.get('tokens'):
-                    continue
-
-                # Check each token in the creator's portfolio
-                for token in portfolio.get('tokens', []):
-                    mint = token.get('mint')
-                    if not mint or token.get('possible_spam'):
-                        continue
-
+                # Process each created token
+                for mint in created_token_mints:
                     # Skip if already tracked
                     if mint in self.tracked_tokens:
                         continue
 
-                    # Get token metadata
-                    metadata = await self.moralis.get_token_metadata(mint)
-                    price_details = await self.moralis.get_current_price_with_details(mint, fresh=True)
+                    try:
+                        # Get token metadata from Moralis
+                        metadata = await self.moralis.get_token_metadata(mint)
+                        price_details = await self.moralis.get_current_price_with_details(mint, fresh=True)
 
-                    symbol = price_details.get('symbol') or metadata.get('symbol', 'UNKNOWN')
-                    name = price_details.get('name') or metadata.get('name', 'Unknown')
+                        symbol = price_details.get('symbol') or metadata.get('symbol', 'UNKNOWN')
+                        name = price_details.get('name') or metadata.get('name', 'Unknown')
 
-                    # Add to tracked tokens
-                    self.tracked_tokens[mint] = {
-                        'symbol': symbol,
-                        'name': name,
-                        'decimals': metadata.get('decimals', 9),
-                        'creator_wallet': creator_wallet,
-                        'discovered_at': datetime.utcnow().isoformat()
-                    }
+                        # Add to tracked tokens
+                        self.tracked_tokens[mint] = {
+                            'symbol': symbol,
+                            'name': name,
+                            'decimals': metadata.get('decimals', 9),
+                            'creator_wallet': creator_wallet,
+                            'discovered_at': datetime.utcnow().isoformat()
+                        }
 
-                    self.logger.info(f"Discovered new token: {symbol} ({mint})")
+                        new_tokens_count += 1
+                        self.logger.info(f"Discovered new token: {symbol} ({mint[:8]}...)")
+
+                    except Exception as token_error:
+                        self.logger.error(f"Error processing token {mint[:8]}...: {token_error}")
+                        continue
 
             # Save updated tracked tokens
-            self.save_tracked_tokens()
-            self.logger.info(f"Tracking {len(self.tracked_tokens)} total tokens")
+            if new_tokens_count > 0:
+                self.save_tracked_tokens()
+                self.logger.info(f"Added {new_tokens_count} new tokens. Now tracking {len(self.tracked_tokens)} total tokens")
+            else:
+                self.logger.info(f"No new tokens found. Still tracking {len(self.tracked_tokens)} total tokens")
 
         except Exception as e:
             self.logger.error(f"Error discovering new tokens: {e}")
@@ -342,6 +361,8 @@ class PriceMonitor:
         if self.session:
             await self.session.close()
         await self.moralis.close()
+        # BitQuery client doesn't have a close method, but we can clean up if needed
+        # The transport will be closed automatically when the program exits
 
 
 async def main():
