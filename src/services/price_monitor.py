@@ -137,17 +137,26 @@ class PriceMonitor:
                         continue
 
                     # Calculate market cap
+                    # Try to get supply from price_details first (more reliable for pump.fun tokens)
                     metadata = await self.moralis.get_token_metadata(mint)
+
+                    # Check multiple sources for supply data
                     supply_val = metadata.get('supply', 0)
-                    decimals = metadata.get('decimals', token_info.get('decimals', 9))
+
+                    # For pump.fun tokens, if no supply data, use standard supply (1 billion with 6 decimals)
+                    decimals = metadata.get('decimals', token_info.get('decimals', 6))
+
+                    if supply_val == 0:
+                        # Pump.fun standard: 1,000,000,000 tokens with 6 decimals
+                        # This gives actual supply of 1 billion
+                        self.logger.debug(f"Using standard pump.fun supply for {token_info['symbol']}")
+                        supply_val = 1_000_000_000 * (10 ** 6)  # 1 billion tokens at 6 decimals
 
                     if supply_val > 0 and decimals is not None:
                         actual_supply = supply_val / (10 ** decimals)
                         market_cap = actual_supply * price
                     else:
                         market_cap = 0
-                        if supply_val == 0:
-                            self.logger.warning(f"No supply data for {token_info['symbol']} ({mint})")
 
                     # Calculate price change
                     price_change_pct = 0
@@ -240,11 +249,11 @@ class PriceMonitor:
             else:
                 price_str = f"${price:.8f}".rstrip('0').rstrip('.')
 
-            # Format: Name - $SYMBOL on first line, address on second, price/change on third
+            # Format: Name - $SYMBOL, address below (closer), then price info
             description_lines.append(
                 f"**{i}. {token['name']} - ${token['symbol']}**\n"
                 f"`{token['mint']}`\n"
-                f"{price_emoji} {price_str} ({change_pct:+.1f}%) • MC: {mc_str}"
+                f"{price_emoji} {price_str} ({change_pct:+.1f}%) • MC: {mc_str}\n"  # Extra newline for spacing between tokens
             )
 
         # Add spacing before bottom section
