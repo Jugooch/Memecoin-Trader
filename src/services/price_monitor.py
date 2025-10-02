@@ -87,7 +87,7 @@ class PriceMonitor:
             self.logger.error(f"Error saving tracked tokens: {e}")
 
     async def discover_new_tokens(self):
-        """Discover ALL tokens created by wallets using BitQuery Instructions API"""
+        """Discover ALL tokens created by wallets using BitQuery DEXTrades API"""
         try:
             # Initialize BitQuery if needed
             if not self.bitquery.client:
@@ -96,12 +96,12 @@ class PriceMonitor:
             new_tokens_count = 0
 
             for creator_wallet in self.creator_wallets:
-                # Use BitQuery to get ALL tokens CREATED by this wallet (not just held)
+                # Use BitQuery to get ALL tokens CREATED by this wallet via DEXTrades (where they're the signer)
                 self.logger.info(f"Scanning for tokens created by {creator_wallet[:8]}...")
-                created_token_mints = await self.bitquery.get_all_tokens_created_by_wallet(
-                    creator_wallet,
-                    limit=100
-                )
+
+                # Use existing method that finds tokens by transaction signer
+                dev_history = await self.bitquery.get_dev_token_history(creator_wallet, lookback_days=365)
+                created_token_mints = dev_history.get('token_addresses', [])
 
                 # Process each created token
                 for mint in created_token_mints:

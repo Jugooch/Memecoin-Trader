@@ -2090,42 +2090,45 @@ class BitqueryClient:
         async with self._concurrent_semaphore:
             self.logger.info(f"Semaphore acquired for {creator_wallet[:8]}...")
             # Query pump.fun program instructions signed by this wallet
-            # Program address: 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P
-            query = gql("""
-                query ($creator: String!, $limit: Int!) {
-                  Solana {
+            # Use the program address from the class variable
+            program_address = self.pumpfun_program
+            self.logger.info(f"Using pump.fun program address: {program_address}")
+
+            query = gql(f"""
+                query ($creator: String!, $limit: Int!) {{
+                  Solana {{
                     Instructions(
-                      where: {
-                        Instruction: {
-                          Program: {
-                            Address: {is: "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"}
-                          }
-                        }
-                        Transaction: {
-                          Signer: {is: $creator}
-                          Result: {Success: true}
-                        }
-                      }
-                      orderBy: {descending: Block_Time}
-                      limit: {count: $limit}
-                    ) {
-                      Block {
+                      where: {{
+                        Instruction: {{
+                          Program: {{
+                            Address: {{is: "{program_address}"}}
+                          }}
+                        }}
+                        Transaction: {{
+                          Signer: {{is: $creator}}
+                          Result: {{Success: true}}
+                        }}
+                      }}
+                      orderBy: {{descending: Block_Time}}
+                      limit: {{count: $limit}}
+                    ) {{
+                      Block {{
                         Time
-                      }
-                      Transaction {
+                      }}
+                      Transaction {{
                         Signature
                         Signer
-                      }
-                      Instruction {
-                        Accounts {
+                      }}
+                      Instruction {{
+                        Accounts {{
                           Address
                           IsWritable
-                        }
+                        }}
                         Data
-                      }
-                    }
-                  }
-                }
+                      }}
+                    }}
+                  }}
+                }}
             """)
 
             # Try EAP endpoint - the Instructions API might be there
