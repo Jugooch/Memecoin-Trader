@@ -146,13 +146,19 @@ class PriceMonitor:
                     # For pump.fun tokens, if no supply data, use standard supply (1 billion with 6 decimals)
                     decimals = metadata.get('decimals', token_info.get('decimals', 6))
 
+                    # Ensure decimals is an integer
+                    if isinstance(decimals, str):
+                        decimals = int(decimals)
+                    elif decimals is None:
+                        decimals = 6
+
                     if supply_val == 0:
                         # Pump.fun standard: 1,000,000,000 tokens with 6 decimals
                         # This gives actual supply of 1 billion
                         self.logger.debug(f"Using standard pump.fun supply for {token_info['symbol']}")
                         supply_val = 1_000_000_000 * (10 ** 6)  # 1 billion tokens at 6 decimals
 
-                    if supply_val > 0 and decimals is not None:
+                    if supply_val > 0:
                         actual_supply = supply_val / (10 ** decimals)
                         market_cap = actual_supply * price
                     else:
