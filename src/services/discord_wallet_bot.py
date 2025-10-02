@@ -30,6 +30,8 @@ class WalletProofBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.members = True
+        intents.messages = True
+        intents.guilds = True
 
         super().__init__(command_prefix='!', intents=intents)
 
@@ -66,6 +68,11 @@ class WalletProofBot(commands.Bot):
         """Event triggered when bot is ready"""
         self.logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
         self.logger.info(f'Loaded {len(self.our_tokens)} tokens: {list(self.our_tokens.keys())}')
+
+        # Debug: Check intents
+        self.logger.info(f'Bot intents: {self.intents}')
+        self.logger.info(f'Message content intent: {self.intents.message_content}')
+        self.logger.info(f'Messages intent: {self.intents.messages}')
 
     async def on_message(self, message):
         """Handle message events for XP tracking"""
