@@ -38,7 +38,14 @@ class WalletProofBot(commands.Bot):
         # Get bot configuration
         bot_config = config.get('discord_bot', {})
         self.wallet_proofs_channel_id = bot_config.get('wallet_proofs_channel_id')
-        self.tracked_wallet = config.get('price_monitor', {}).get('tracked_wallet', '4bmuhbVQPbVmXuqPHysyqGVq3UBou8NL9ukL4MwshGob')
+
+        # Support multiple creator wallets (same as price monitor)
+        creator_wallets = config.get('price_monitor', {}).get('creator_wallets', [])
+        if not creator_wallets:
+            # Fallback to single tracked_wallet for backward compatibility
+            tracked_wallet = config.get('price_monitor', {}).get('tracked_wallet', '4bmuhbVQPbVmXuqPHysyqGVq3UBou8NL9ukL4MwshGob')
+            creator_wallets = [tracked_wallet]
+        self.creator_wallets = creator_wallets
 
         # Initialize Moralis client
         self.moralis = MoralisClient(
@@ -46,8 +53,9 @@ class WalletProofBot(commands.Bot):
             api_optimization_config=config.get('api_optimization', {})
         )
 
-        # Cache for our released tokens
-        self.our_tokens = {}
+        # Persistent token tracking (shared with price monitor)
+        self.tokens_file = Path(__file__).parent.parent.parent / 'data' / 'tracked_tokens.json'
+        self.our_tokens = self.load_tracked_tokens()
 
         # Leveling system
         self.xp_file = Path(__file__).parent.parent.parent / 'data' / 'discord_xp.json'
@@ -65,8 +73,8 @@ class WalletProofBot(commands.Bot):
         """Event triggered when bot is ready"""
         self.logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
 
-        # Load our released tokens on startup
-        await self.load_our_tokens()
+        # Discover and load all released tokens on startup
+        await self.discover_all_tokens()
 
     async def on_message(self, message):
         """Handle message events for XP tracking"""
@@ -79,6 +87,50 @@ class WalletProofBot(commands.Bot):
 
         # Award XP for messages
         await self.award_xp(message.author.id, message.guild.id if message.guild else None)
+
+    def load_tracked_tokens(self) -> Dict:
+        """Load tracked tokens from JSON file (shared with price monitor)"""
+        try:
+            if self.tokens_file.exists():
+                with open(self.tokens_file, 'r') as f:
+                    data = json.load(f)
+                    # Convert from price monitor format to discord bot format
+                    tokens = {}
+                    for mint, info in data.items():
+                        symbol = info.get('symbol', 'UNKNOWN')
+                        tokens[symbol.upper()] = {
+                            'mint': mint,
+                            'symbol': symbol,
+                            'name': info.get('name', 'Unknown'),
+                            'decimals': info.get('decimals', 9),
+                            'logo': None  # Will be fetched on demand
+                        }
+                    return tokens
+            else:
+                self.tokens_file.parent.mkdir(parents=True, exist_ok=True)
+                return {}
+        except Exception as e:
+            self.logger.error(f"Error loading tracked tokens: {e}")
+            return {}
+
+    def save_tracked_tokens(self):
+        """Save tracked tokens to JSON file (shared with price monitor)"""
+        try:
+            # Convert back to price monitor format
+            data = {}
+            for symbol, token_info in self.our_tokens.items():
+                mint = token_info['mint']
+                data[mint] = {
+                    'symbol': token_info['symbol'],
+                    'name': token_info['name'],
+                    'decimals': token_info['decimals'],
+                    'creator_wallet': token_info.get('creator_wallet', self.creator_wallets[0]),
+                    'discovered_at': token_info.get('discovered_at', datetime.utcnow().isoformat())
+                }
+            with open(self.tokens_file, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            self.logger.error(f"Error saving tracked tokens: {e}")
 
     def load_xp_data(self) -> Dict:
         """Load XP data from JSON file"""
@@ -150,12 +202,17 @@ class WalletProofBot(commands.Bot):
         """Calculate XP required for a level"""
         return level * level * 100
 
-    async def load_our_tokens(self):
-        """Load tokens created by our tracked wallet"""
+    async def discover_all_tokens(self):
+        """Discover ALL tokens from creator wallets and save to persistent storage"""
         try:
-            portfolio = await self.moralis.get_wallet_portfolio(self.tracked_wallet)
+            new_tokens_found = 0
 
-            if portfolio and portfolio.get('tokens'):
+            for creator_wallet in self.creator_wallets:
+                portfolio = await self.moralis.get_wallet_portfolio(creator_wallet)
+
+                if not portfolio or not portfolio.get('tokens'):
+                    continue
+
                 for token in portfolio['tokens']:
                     mint = token.get('mint')
                     if not mint or token.get('possible_spam'):
@@ -169,18 +226,32 @@ class WalletProofBot(commands.Bot):
                     name = price_details.get('name') or metadata.get('name', 'Unknown')
                     logo = price_details.get('logo')
 
+                    # Skip if already tracked
+                    if symbol.upper() in self.our_tokens:
+                        continue
+
                     self.our_tokens[symbol.upper()] = {
                         'mint': mint,
                         'symbol': symbol,
                         'name': name,
                         'logo': logo,
-                        'decimals': metadata.get('decimals', 9)
+                        'decimals': metadata.get('decimals', 9),
+                        'creator_wallet': creator_wallet,
+                        'discovered_at': datetime.utcnow().isoformat()
                     }
 
-                self.logger.info(f"Loaded {len(self.our_tokens)} tokens: {list(self.our_tokens.keys())}")
+                    new_tokens_found += 1
+                    self.logger.info(f"Discovered new token: {symbol} ({mint})")
+
+            # Save to persistent storage
+            self.save_tracked_tokens()
+
+            self.logger.info(f"Loaded {len(self.our_tokens)} total tokens: {list(self.our_tokens.keys())}")
+            if new_tokens_found > 0:
+                self.logger.info(f"Discovered {new_tokens_found} new tokens this session")
 
         except Exception as e:
-            self.logger.error(f"Error loading our tokens: {e}")
+            self.logger.error(f"Error discovering tokens: {e}")
 
     async def get_wallet_holdings(self, wallet_address: str) -> Dict:
         """Get wallet holdings for SOL and our released tokens"""
