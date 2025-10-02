@@ -87,7 +87,7 @@ class WalletProofBot(commands.Bot):
             if self.tokens_file.exists():
                 with open(self.tokens_file, 'r') as f:
                     data = json.load(f)
-                    # Convert from price monitor format to discord bot format
+                    # Convert from storage format to discord bot format
                     tokens = {}
                     for mint, info in data.items():
                         symbol = info.get('symbol', 'UNKNOWN')
@@ -96,7 +96,9 @@ class WalletProofBot(commands.Bot):
                             'symbol': symbol,
                             'name': info.get('name', 'Unknown'),
                             'decimals': info.get('decimals', 9),
-                            'logo': None  # Will be fetched on demand
+                            'logo': None,  # Will be fetched on demand
+                            'source': info.get('source', 'unknown'),
+                            'added_at': info.get('added_at', info.get('discovered_at', ''))
                         }
                     return tokens
             else:
@@ -117,8 +119,8 @@ class WalletProofBot(commands.Bot):
                     'symbol': token_info['symbol'],
                     'name': token_info['name'],
                     'decimals': token_info['decimals'],
-                    'creator_wallet': token_info.get('creator_wallet', self.creator_wallets[0]),
-                    'discovered_at': token_info.get('discovered_at', datetime.utcnow().isoformat())
+                    'source': token_info.get('source', 'discord'),
+                    'added_at': token_info.get('added_at', datetime.utcnow().isoformat())
                 }
             with open(self.tokens_file, 'w') as f:
                 json.dump(data, f, indent=2)
