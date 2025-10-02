@@ -2,6 +2,7 @@
 Discord Bot for Wallet Proof Commands
 Completely isolated from main trading bot
 Handles /wallet-proof command to show wallet holdings
+Includes leveling system and price lookup
 """
 
 import discord
@@ -13,6 +14,9 @@ from typing import Dict, Optional
 import yaml
 from pathlib import Path
 import sys
+import json
+import math
+from datetime import datetime, timedelta
 
 # Add project root to path for imports
 sys.path.append(str(Path(__file__).parent.parent.parent))
@@ -24,6 +28,7 @@ class WalletProofBot(commands.Bot):
     def __init__(self, config: Dict):
         intents = discord.Intents.default()
         intents.message_content = True
+        intents.members = True
 
         super().__init__(command_prefix='!', intents=intents)
 
@@ -44,6 +49,11 @@ class WalletProofBot(commands.Bot):
         # Cache for our released tokens
         self.our_tokens = {}
 
+        # Leveling system
+        self.xp_file = Path(__file__).parent.parent.parent / 'data' / 'discord_xp.json'
+        self.xp_data = self.load_xp_data()
+        self.xp_cooldowns = {}  # Track XP cooldowns per user
+
         self.logger.info("WalletProofBot initialized")
 
     async def setup_hook(self):
@@ -57,6 +67,88 @@ class WalletProofBot(commands.Bot):
 
         # Load our released tokens on startup
         await self.load_our_tokens()
+
+    async def on_message(self, message):
+        """Handle message events for XP tracking"""
+        # Ignore bot messages
+        if message.author.bot:
+            return
+
+        # Process commands first
+        await self.process_commands(message)
+
+        # Award XP for messages
+        await self.award_xp(message.author.id, message.guild.id if message.guild else None)
+
+    def load_xp_data(self) -> Dict:
+        """Load XP data from JSON file"""
+        try:
+            if self.xp_file.exists():
+                with open(self.xp_file, 'r') as f:
+                    return json.load(f)
+            else:
+                # Create data directory if it doesn't exist
+                self.xp_file.parent.mkdir(parents=True, exist_ok=True)
+                return {}
+        except Exception as e:
+            self.logger.error(f"Error loading XP data: {e}")
+            return {}
+
+    def save_xp_data(self):
+        """Save XP data to JSON file"""
+        try:
+            with open(self.xp_file, 'w') as f:
+                json.dump(self.xp_data, f, indent=2)
+        except Exception as e:
+            self.logger.error(f"Error saving XP data: {e}")
+
+    def get_user_key(self, user_id: int, guild_id: Optional[int] = None) -> str:
+        """Generate a unique key for user in a guild"""
+        if guild_id:
+            return f"{guild_id}:{user_id}"
+        return str(user_id)
+
+    async def award_xp(self, user_id: int, guild_id: Optional[int] = None):
+        """Award XP to a user for sending a message"""
+        user_key = self.get_user_key(user_id, guild_id)
+
+        # Check cooldown (60 seconds between XP awards)
+        now = datetime.utcnow()
+        if user_key in self.xp_cooldowns:
+            if now - self.xp_cooldowns[user_key] < timedelta(seconds=60):
+                return
+
+        self.xp_cooldowns[user_key] = now
+
+        # Initialize user data if needed
+        if user_key not in self.xp_data:
+            self.xp_data[user_key] = {
+                'xp': 0,
+                'level': 0,
+                'user_id': user_id,
+                'guild_id': guild_id
+            }
+
+        # Award random XP between 15-25
+        import random
+        xp_gain = random.randint(15, 25)
+        old_level = self.xp_data[user_key]['level']
+        self.xp_data[user_key]['xp'] += xp_gain
+
+        # Calculate new level
+        new_level = self.calculate_level(self.xp_data[user_key]['xp'])
+        self.xp_data[user_key]['level'] = new_level
+
+        # Save data
+        self.save_xp_data()
+
+    def calculate_level(self, xp: int) -> int:
+        """Calculate level from XP (level = sqrt(xp / 100))"""
+        return int(math.sqrt(xp / 100))
+
+    def xp_for_level(self, level: int) -> int:
+        """Calculate XP required for a level"""
+        return level * level * 100
 
     async def load_our_tokens(self):
         """Load tokens created by our tracked wallet"""
@@ -210,6 +302,62 @@ class WalletProofBot(commands.Bot):
 
         return embed
 
+    def format_price_embed(self, token_address: str, price_data: Dict, metadata: Dict) -> discord.Embed:
+        """Format token price info into a Discord embed"""
+        symbol = price_data.get('symbol') or metadata.get('symbol', 'UNKNOWN')
+        name = price_data.get('name') or metadata.get('name', 'Unknown')
+        price = price_data.get('price', 0)
+        logo = price_data.get('logo')
+
+        embed = discord.Embed(
+            title=f"💰 {symbol} Price",
+            description=f"**{name}**",
+            color=0x3498DB
+        )
+
+        # Add price
+        embed.add_field(
+            name="💵 Current Price",
+            value=f"${price:.10f}".rstrip('0').rstrip('.'),
+            inline=False
+        )
+
+        # Calculate market cap if we have supply data
+        supply = metadata.get('supply', 0)
+        decimals = metadata.get('decimals', 9)
+        if supply > 0 and price > 0:
+            actual_supply = supply / (10 ** decimals)
+            market_cap = actual_supply * price
+
+            if market_cap >= 1_000_000:
+                mc_str = f"${market_cap/1_000_000:.2f}M"
+            elif market_cap >= 1_000:
+                mc_str = f"${market_cap/1_000:.2f}K"
+            else:
+                mc_str = f"${market_cap:.2f}"
+
+            embed.add_field(
+                name="📊 Market Cap",
+                value=mc_str,
+                inline=True
+            )
+
+        # Add token address
+        embed.add_field(
+            name="🔗 Address",
+            value=f"`{token_address[:8]}...{token_address[-8:]}`",
+            inline=False
+        )
+
+        # Add logo as thumbnail if available
+        if logo:
+            embed.set_thumbnail(url=logo)
+
+        embed.set_footer(text="AZ Coin Bros • Price Lookup")
+        embed.timestamp = discord.utils.utcnow()
+
+        return embed
+
 
 # Create the bot instance
 bot = None
@@ -235,7 +383,7 @@ async def setup_bot():
     # Create bot instance
     bot = WalletProofBot(config)
 
-    # Register the slash command
+    # Register the slash commands
     @bot.tree.command(name='wallet-proof', description='Verify wallet holdings for SOL and AZ Coin Bros tokens')
     async def wallet_proof(interaction: discord.Interaction, address: str):
         """Handle /wallet-proof command"""
@@ -285,6 +433,238 @@ async def setup_bot():
                     description="Failed to retrieve wallet information. Please try again later.",
                     color=0xFF0000
                 )
+            )
+
+    @bot.tree.command(name='price', description='Look up the current price of a token')
+    async def price_lookup(interaction: discord.Interaction, address: str):
+        """Handle /price command"""
+
+        # Defer response as this might take a moment
+        await interaction.response.defer()
+
+        try:
+            # Validate address format (basic check)
+            if len(address) < 32 or len(address) > 44:
+                await interaction.followup.send(
+                    embed=discord.Embed(
+                        title="❌ Invalid Address",
+                        description="Please provide a valid Solana token address",
+                        color=0xFF0000
+                    )
+                )
+                return
+
+            # Get token price and metadata
+            price_data = await bot.moralis.get_current_price_with_details(address, fresh=True)
+            metadata = await bot.moralis.get_token_metadata(address)
+
+            if not price_data or price_data.get('price', 0) == 0:
+                await interaction.followup.send(
+                    embed=discord.Embed(
+                        title="❌ Price Not Found",
+                        description="Could not retrieve price data for this token. It may not be traded yet.",
+                        color=0xFF0000
+                    )
+                )
+                return
+
+            # Create and send embed
+            embed = bot.format_price_embed(address, price_data, metadata)
+            await interaction.followup.send(embed=embed)
+
+            bot.logger.info(f"Price lookup for {address[:8]}... by {interaction.user}")
+
+        except Exception as e:
+            bot.logger.error(f"Error processing price command: {e}")
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Error",
+                    description="Failed to retrieve token price. Please try again later.",
+                    color=0xFF0000
+                )
+            )
+
+    @bot.tree.command(name='level', description='Check your current level and XP')
+    async def check_level(interaction: discord.Interaction):
+        """Handle /level command"""
+        try:
+            user_key = bot.get_user_key(interaction.user.id, interaction.guild.id if interaction.guild else None)
+
+            if user_key not in bot.xp_data:
+                await interaction.response.send_message(
+                    embed=discord.Embed(
+                        title="📊 Your Level",
+                        description="You haven't earned any XP yet! Start chatting to earn XP and level up.",
+                        color=0x3498DB
+                    ),
+                    ephemeral=True
+                )
+                return
+
+            user_data = bot.xp_data[user_key]
+            current_xp = user_data['xp']
+            current_level = user_data['level']
+            next_level = current_level + 1
+            xp_needed = bot.xp_for_level(next_level)
+            xp_progress = current_xp - bot.xp_for_level(current_level)
+            xp_for_next = xp_needed - bot.xp_for_level(current_level)
+
+            embed = discord.Embed(
+                title=f"📊 {interaction.user.display_name}'s Level",
+                color=0x3498DB
+            )
+            embed.add_field(
+                name="🎯 Current Level",
+                value=f"**Level {current_level}**",
+                inline=True
+            )
+            embed.add_field(
+                name="⭐ Total XP",
+                value=f"**{current_xp:,} XP**",
+                inline=True
+            )
+            embed.add_field(
+                name="📈 Progress to Next Level",
+                value=f"**{xp_progress}/{xp_for_next} XP** ({int(xp_progress/xp_for_next*100)}%)",
+                inline=False
+            )
+            embed.set_thumbnail(url=interaction.user.display_avatar.url)
+            embed.set_footer(text="Keep chatting to earn more XP!")
+
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            bot.logger.error(f"Error processing level command: {e}")
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Error",
+                    description="Failed to retrieve level data. Please try again later.",
+                    color=0xFF0000
+                ),
+                ephemeral=True
+            )
+
+    @bot.tree.command(name='rank', description='Check the level and rank of a user')
+    async def check_rank(interaction: discord.Interaction, user: discord.User):
+        """Handle /rank command"""
+        try:
+            guild_id = interaction.guild.id if interaction.guild else None
+            user_key = bot.get_user_key(user.id, guild_id)
+
+            if user_key not in bot.xp_data:
+                await interaction.response.send_message(
+                    embed=discord.Embed(
+                        title=f"📊 {user.display_name}'s Rank",
+                        description="This user hasn't earned any XP yet!",
+                        color=0x3498DB
+                    ),
+                    ephemeral=True
+                )
+                return
+
+            # Calculate rank
+            guild_users = [(k, v) for k, v in bot.xp_data.items()
+                          if v.get('guild_id') == guild_id]
+            guild_users.sort(key=lambda x: x[1]['xp'], reverse=True)
+            rank = next((i+1 for i, (k, v) in enumerate(guild_users) if k == user_key), None)
+
+            user_data = bot.xp_data[user_key]
+            current_xp = user_data['xp']
+            current_level = user_data['level']
+
+            embed = discord.Embed(
+                title=f"📊 {user.display_name}'s Rank",
+                color=0x3498DB
+            )
+            embed.add_field(
+                name="🏆 Server Rank",
+                value=f"**#{rank}**",
+                inline=True
+            )
+            embed.add_field(
+                name="🎯 Level",
+                value=f"**{current_level}**",
+                inline=True
+            )
+            embed.add_field(
+                name="⭐ Total XP",
+                value=f"**{current_xp:,} XP**",
+                inline=True
+            )
+            embed.set_thumbnail(url=user.display_avatar.url)
+
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            bot.logger.error(f"Error processing rank command: {e}")
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Error",
+                    description="Failed to retrieve rank data. Please try again later.",
+                    color=0xFF0000
+                ),
+                ephemeral=True
+            )
+
+    @bot.tree.command(name='leaderboard', description='View the top 10 users by XP')
+    async def leaderboard(interaction: discord.Interaction):
+        """Handle /leaderboard command"""
+        try:
+            guild_id = interaction.guild.id if interaction.guild else None
+
+            # Get users from this guild
+            guild_users = [(k, v) for k, v in bot.xp_data.items()
+                          if v.get('guild_id') == guild_id]
+
+            if not guild_users:
+                await interaction.response.send_message(
+                    embed=discord.Embed(
+                        title="🏆 Leaderboard",
+                        description="No users have earned XP yet! Start chatting to be the first on the leaderboard.",
+                        color=0x3498DB
+                    ),
+                    ephemeral=True
+                )
+                return
+
+            # Sort by XP
+            guild_users.sort(key=lambda x: x[1]['xp'], reverse=True)
+
+            embed = discord.Embed(
+                title="🏆 XP Leaderboard - Top 10",
+                color=0xFFD700
+            )
+
+            medals = ["🥇", "🥈", "🥉"]
+
+            for i, (user_key, user_data) in enumerate(guild_users[:10], 1):
+                user_id = user_data['user_id']
+                try:
+                    user = await bot.fetch_user(user_id)
+                    username = user.display_name
+                except:
+                    username = f"User {user_id}"
+
+                medal = medals[i-1] if i <= 3 else f"#{i}"
+
+                embed.add_field(
+                    name=f"{medal} {username}",
+                    value=f"**Level {user_data['level']}** • {user_data['xp']:,} XP",
+                    inline=False
+                )
+
+            embed.set_footer(text="Keep chatting to climb the ranks!")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            bot.logger.error(f"Error processing leaderboard command: {e}")
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Error",
+                    description="Failed to retrieve leaderboard data. Please try again later.",
+                    color=0xFF0000
+                ),
+                ephemeral=True
             )
 
     return bot, bot_token

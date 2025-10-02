@@ -12,6 +12,7 @@ import aiohttp
 from src.clients.moralis_client import MoralisClient
 from src.utils.config_loader import load_config
 import json
+from pathlib import Path
 
 class PriceMonitor:
     def __init__(self, config: Dict):
@@ -21,7 +22,15 @@ class PriceMonitor:
         # Webhook configuration
         self.webhook_url = config['price_monitor']['webhook_url']
         self.update_interval = config['price_monitor'].get('update_interval_minutes', 30) * 60
-        self.tracked_wallet = config['price_monitor'].get('tracked_wallet', '4bmuhbVQPbVmXuqPHysyqGVq3UBou8NL9ukL4MwshGob')
+
+        # Support multiple creator wallets
+        creator_wallets = config['price_monitor'].get('creator_wallets', [])
+        if not creator_wallets:
+            # Fallback to single tracked_wallet for backward compatibility
+            tracked_wallet = config['price_monitor'].get('tracked_wallet', '4bmuhbVQPbVmXuqPHysyqGVq3UBou8NL9ukL4MwshGob')
+            creator_wallets = [tracked_wallet]
+
+        self.creator_wallets = creator_wallets
         self.top_movers_count = config['price_monitor'].get('top_movers_count', 10)
 
         # Moralis client
@@ -30,14 +39,18 @@ class PriceMonitor:
             api_optimization_config=config.get('api_optimization', {})
         )
 
+        # Persistent token tracking
+        self.tokens_file = Path(__file__).parent.parent.parent / 'data' / 'tracked_tokens.json'
+        self.tracked_tokens = self.load_tracked_tokens()
+
         # Cache for tracking price changes
         self.price_cache = {}
-        self.wallet_tokens = {}  # Tokens created by tracked wallet
 
         # Session for webhook posts
         self.session = None
 
         self.logger.info(f"Price Monitor initialized - Updates every {self.update_interval/60} minutes")
+        self.logger.info(f"Tracking {len(self.creator_wallets)} creator wallet(s): {self.creator_wallets}")
 
     async def _get_session(self):
         """Get or create aiohttp session"""
@@ -45,77 +58,132 @@ class PriceMonitor:
             self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
         return self.session
 
-    async def get_wallet_created_tokens(self) -> List[Dict]:
-        """Get tokens created by the tracked wallet"""
+    def load_tracked_tokens(self) -> Dict:
+        """Load tracked tokens from JSON file"""
         try:
-            # Get wallet portfolio to find tokens they hold
-            portfolio = await self.moralis.get_wallet_portfolio(self.tracked_wallet)
+            if self.tokens_file.exists():
+                with open(self.tokens_file, 'r') as f:
+                    return json.load(f)
+            else:
+                # Create data directory if it doesn't exist
+                self.tokens_file.parent.mkdir(parents=True, exist_ok=True)
+                return {}
+        except Exception as e:
+            self.logger.error(f"Error loading tracked tokens: {e}")
+            return {}
 
-            if not portfolio:
-                return []
+    def save_tracked_tokens(self):
+        """Save tracked tokens to JSON file"""
+        try:
+            with open(self.tokens_file, 'w') as f:
+                json.dump(self.tracked_tokens, f, indent=2)
+        except Exception as e:
+            self.logger.error(f"Error saving tracked tokens: {e}")
 
-            wallet_tokens = []
+    async def discover_new_tokens(self):
+        """Discover new tokens from creator wallets and add to tracked list"""
+        try:
+            for creator_wallet in self.creator_wallets:
+                portfolio = await self.moralis.get_wallet_portfolio(creator_wallet)
 
-            # Check each token in portfolio
-            for token in portfolio.get('tokens', []):
-                mint = token.get('mint')
-                if not mint or token.get('possible_spam'):
+                if not portfolio or not portfolio.get('tokens'):
                     continue
 
-                # Get token metadata and price with details
-                metadata = await self.moralis.get_token_metadata(mint)
-                price_details = await self.moralis.get_current_price_with_details(mint, fresh=True)
-                price = price_details.get('price', 0)
+                # Check each token in the creator's portfolio
+                for token in portfolio.get('tokens', []):
+                    mint = token.get('mint')
+                    if not mint or token.get('possible_spam'):
+                        continue
 
-                if price == 0:
-                    continue
+                    # Skip if already tracked
+                    if mint in self.tracked_tokens:
+                        continue
 
-                # Get liquidity info
-                liquidity = await self.moralis.get_token_liquidity(mint)
+                    # Get token metadata
+                    metadata = await self.moralis.get_token_metadata(mint)
+                    price_details = await self.moralis.get_current_price_with_details(mint, fresh=True)
 
-                # Calculate market cap
-                supply = metadata.get('supply', 0)
-                decimals = metadata.get('decimals', 9)
-                if supply > 0:
-                    actual_supply = supply / (10 ** decimals)
-                    market_cap = actual_supply * price
-                else:
-                    market_cap = 0
+                    symbol = price_details.get('symbol') or metadata.get('symbol', 'UNKNOWN')
+                    name = price_details.get('name') or metadata.get('name', 'Unknown')
 
-                token_info = {
-                    'mint': mint,
-                    'symbol': price_details.get('symbol') or metadata.get('symbol', 'UNKNOWN'),
-                    'name': price_details.get('name') or metadata.get('name', 'Unknown'),
-                    'price': price,
-                    'logo': price_details.get('logo'),
-                    'liquidity_usd': liquidity.get('total_liquidity_usd', 0),
-                    'market_cap': market_cap,
-                    'amount_held': token.get('amount', 0),
-                    'value_usd': token.get('amount', 0) * price
-                }
+                    # Add to tracked tokens
+                    self.tracked_tokens[mint] = {
+                        'symbol': symbol,
+                        'name': name,
+                        'decimals': metadata.get('decimals', 9),
+                        'creator_wallet': creator_wallet,
+                        'discovered_at': datetime.utcnow().isoformat()
+                    }
 
-                # Track price change if we have previous data
-                if mint in self.price_cache:
-                    prev_price = self.price_cache[mint]
-                    if prev_price > 0:
-                        token_info['price_change_pct'] = ((price - prev_price) / prev_price) * 100
-                    else:
-                        token_info['price_change_pct'] = 0
-                else:
-                    token_info['price_change_pct'] = 0
+                    self.logger.info(f"Discovered new token: {symbol} ({mint})")
 
-                # Update cache
-                self.price_cache[mint] = price
-
-                wallet_tokens.append(token_info)
-
-            # Sort by value held
-            wallet_tokens.sort(key=lambda x: x['value_usd'], reverse=True)
-
-            return wallet_tokens[:20]  # Top 20 tokens from wallet
+            # Save updated tracked tokens
+            self.save_tracked_tokens()
+            self.logger.info(f"Tracking {len(self.tracked_tokens)} total tokens")
 
         except Exception as e:
-            self.logger.error(f"Error getting wallet tokens: {e}")
+            self.logger.error(f"Error discovering new tokens: {e}")
+
+    async def get_all_tracked_tokens(self) -> List[Dict]:
+        """Get price updates for ALL tracked tokens"""
+        try:
+            token_updates = []
+
+            # Get price for each tracked token
+            for mint, token_info in self.tracked_tokens.items():
+                try:
+                    # Get current price
+                    price_details = await self.moralis.get_current_price_with_details(mint, fresh=True)
+                    price = price_details.get('price', 0)
+
+                    if price == 0:
+                        self.logger.warning(f"No price found for {token_info['symbol']} ({mint})")
+                        continue
+
+                    # Calculate market cap
+                    supply = await self.moralis.get_token_metadata(mint)
+                    supply_val = supply.get('supply', 0)
+                    decimals = token_info.get('decimals', 9)
+
+                    if supply_val > 0:
+                        actual_supply = supply_val / (10 ** decimals)
+                        market_cap = actual_supply * price
+                    else:
+                        market_cap = 0
+
+                    # Calculate price change
+                    price_change_pct = 0
+                    if mint in self.price_cache:
+                        prev_price = self.price_cache[mint]
+                        if prev_price > 0:
+                            price_change_pct = ((price - prev_price) / prev_price) * 100
+
+                    # Update cache
+                    self.price_cache[mint] = price
+
+                    token_update = {
+                        'mint': mint,
+                        'symbol': token_info['symbol'],
+                        'name': token_info['name'],
+                        'price': price,
+                        'logo': price_details.get('logo'),
+                        'market_cap': market_cap,
+                        'price_change_pct': price_change_pct
+                    }
+
+                    token_updates.append(token_update)
+
+                except Exception as e:
+                    self.logger.error(f"Error getting price for {token_info.get('symbol')}: {e}")
+                    continue
+
+            # Sort by market cap (highest first)
+            token_updates.sort(key=lambda x: x['market_cap'], reverse=True)
+
+            return token_updates
+
+        except Exception as e:
+            self.logger.error(f"Error getting tracked tokens: {e}")
             return []
 
     async def get_top_movers(self) -> Tuple[List[Dict], List[Dict]]:
@@ -136,7 +204,7 @@ class PriceMonitor:
             self.logger.error(f"Error getting top movers: {e}")
             return [], []
 
-    async def format_discord_message(self, wallet_tokens: List[Dict]) -> Dict:
+    async def format_discord_message(self, all_tokens: List[Dict]) -> Dict:
         """Format the update message for Discord"""
 
         # Create embeds for Discord
@@ -146,11 +214,11 @@ class PriceMonitor:
         timestamp = datetime.utcnow().isoformat()
 
         # Create individual embeds for each token (so each can have its own thumbnail/logo)
-        if wallet_tokens:
+        if all_tokens:
             # Single header embed
             header_embed = {
                 "title": f"📊 AZ Coin Bros Price Updates",
-                "description": f"Tracking {len(wallet_tokens)} tokens from wallet",
+                "description": f"Tracking all {len(all_tokens)} released tokens",
                 "color": 0x3498DB,
                 "timestamp": timestamp,
                 "footer": {
@@ -160,7 +228,7 @@ class PriceMonitor:
             embeds.append(header_embed)
 
             # Create embed for each token (limit to 8 to stay under Discord's 10 embed limit)
-            for i, token in enumerate(wallet_tokens[:8], 1):
+            for i, token in enumerate(all_tokens[:8], 1):
                 price_emoji = "📈" if token.get('price_change_pct', 0) >= 0 else "📉"
                 change_pct = token.get('price_change_pct', 0)
 
@@ -202,9 +270,9 @@ class PriceMonitor:
 
         # Remove the significant movers section and simplify the summary
         # Market summary is now optional - only if we have room in embeds
-        if wallet_tokens and len(embeds) < 9:  # Leave room for summary
-            gainers = [t for t in wallet_tokens if t.get('price_change_pct', 0) > 0]
-            losers = [t for t in wallet_tokens if t.get('price_change_pct', 0) < 0]
+        if all_tokens and len(embeds) < 9:  # Leave room for summary
+            gainers = [t for t in all_tokens if t.get('price_change_pct', 0) > 0]
+            losers = [t for t in all_tokens if t.get('price_change_pct', 0) < 0]
 
             summary_embed = {
                 "title": "📈 Summary",
@@ -226,21 +294,24 @@ class PriceMonitor:
     async def send_update(self):
         """Send periodic price update to Discord"""
         try:
-            # Get wallet tokens
-            wallet_tokens = await self.get_wallet_created_tokens()
+            # First, discover any new tokens from creator wallets
+            await self.discover_new_tokens()
 
-            if not wallet_tokens:
+            # Get ALL tracked tokens
+            all_tokens = await self.get_all_tracked_tokens()
+
+            if not all_tokens:
                 self.logger.info("No tokens found to report")
                 return
 
             # Format message
-            message = await self.format_discord_message(wallet_tokens)
+            message = await self.format_discord_message(all_tokens)
 
             # Send to Discord
             session = await self._get_session()
             async with session.post(self.webhook_url, json=message) as response:
                 if response.status == 204:
-                    self.logger.info(f"Price update sent successfully - {len(wallet_tokens)} tokens")
+                    self.logger.info(f"Price update sent successfully - {len(all_tokens)} tokens")
                 else:
                     self.logger.error(f"Failed to send update: {response.status} - {await response.text()}")
 

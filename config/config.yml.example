@@ -49,7 +49,15 @@ watched_wallets:
 price_monitor:
   webhook_url: "YOUR_DISCORD_WEBHOOK_URL"  # Discord webhook for price updates
   update_interval_minutes: 30               # How often to send updates (in minutes)
-  tracked_wallet: "4bmuhbVQPbVmXuqPHysyqGVq3UBou8NL9ukL4MwshGob"  # Wallet to track token creations
+
+  # Multiple creator wallets to track ALL tokens from (NEW - recommended)
+  creator_wallets:
+    - "4bmuhbVQPbVmXuqPHysyqGVq3UBou8NL9ukL4MwshGob"
+    # - "another_creator_wallet_address_here"
+
+  # Legacy single wallet support (will be used if creator_wallets is empty)
+  tracked_wallet: "4bmuhbVQPbVmXuqPHysyqGVq3UBou8NL9ukL4MwshGob"
+
   top_movers_count: 10                      # Number of top gainers/losers to show
 
 # Discord Bot Configuration (for /wallet-proof command)
