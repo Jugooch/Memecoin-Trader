@@ -255,15 +255,15 @@ class PriceMonitor:
             else:
                 price_str = f"${price:.8f}".rstrip('0').rstrip('.')
 
-            # Format: Name - $SYMBOL, address below (closer), then price info
+            # Format: Name - $SYMBOL, address below (tighter), then price info
             description_lines.append(
-                f"**{i}. {token['name']} - ${token['symbol']}**\n"
+                f"**{i}. {token['name']} - ${token['symbol']}**"
                 f"`{token['mint']}`\n"
-                f"{price_emoji} {price_str} ({change_pct:+.1f}%) • MC: {mc_str}\n"  # Extra newline for spacing between tokens
+                f"{price_emoji} {price_str} ({change_pct:+.1f}%) • MC: {mc_str}\n"  # Newline for spacing between tokens
             )
 
-        # Add spacing before bottom section
-        description_lines.append("\n\u200b")
+        # Add spacing before bottom section (one newline already exists from last token)
+        description_lines.append("\u200b")  # Just invisible character, no extra newline
 
         # Create single comprehensive embed
         embed = {
