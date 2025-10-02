@@ -2129,6 +2129,7 @@ class BitqueryClient:
             try:
                 from gql import Client
                 client = Client(transport=transport)
+
                 result = await client.execute_async(
                     query,
                     variable_values={
@@ -2141,12 +2142,22 @@ class BitqueryClient:
                 if token_index is not None:
                     self.token_stats[token_index]['calls_today'] += 1
 
-                # Extract token mint addresses from instructions
+                # Debug: Log what we got back
                 instructions = result.get('Solana', {}).get('Instructions', [])
+                self.logger.info(f"BitQuery returned {len(instructions)} instructions for {creator_wallet[:8]}...")
+
+                if len(instructions) == 0:
+                    self.logger.warning(f"No instructions found for creator wallet {creator_wallet[:8]}... - wallet may not have created any pump.fun tokens")
+                    return []
+
+                # Extract token mint addresses from instructions
                 token_mints = set()  # Use set to avoid duplicates
 
-                for instruction in instructions:
+                for idx, instruction in enumerate(instructions):
                     accounts = instruction.get('Instruction', {}).get('Accounts', [])
+
+                    if idx < 3:  # Debug first 3 instructions
+                        self.logger.debug(f"Instruction {idx}: {len(accounts)} accounts")
 
                     # The token mint is typically the first writable account
                     # that's not the program or system account
@@ -2161,6 +2172,7 @@ class BitqueryClient:
                                           '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P'] and
                             len(address) >= 32):  # Valid Solana address length
                             token_mints.add(address)
+                            self.logger.debug(f"Found token mint: {address[:8]}...")
                             break  # Take the first valid writable account per instruction
 
                 token_list = list(token_mints)
