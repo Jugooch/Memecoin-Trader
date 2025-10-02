@@ -2228,8 +2228,7 @@ class BitqueryClient:
 
                     # Set flag to retry OUTSIDE semaphore context
                     should_retry = True
-
-                return []
+                # Don't return here - let the code flow to the retry section below
 
             finally:
                 # Clean up transport
