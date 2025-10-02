@@ -201,90 +201,70 @@ class PriceMonitor:
             return [], []
 
     async def format_discord_message(self, all_tokens: List[Dict]) -> Dict:
-        """Format the update message for Discord"""
-
-        # Create embeds for Discord
-        embeds = []
+        """Format the update message for Discord - showing top 3 tokens by market cap"""
 
         # Timestamp for the update
         timestamp = datetime.utcnow().isoformat()
 
-        # Create individual embeds for each token (so each can have its own thumbnail/logo)
-        if all_tokens:
-            # Single header embed
-            header_embed = {
-                "title": f"📊 AZ Coin Bros Price Updates",
-                "description": f"Tracking all {len(all_tokens)} released tokens",
-                "color": 0x3498DB,
-                "timestamp": timestamp,
-                "footer": {
-                    "text": "AZ Coin Bros"
-                }
-            }
-            embeds.append(header_embed)
+        # Get top 3 tokens by market cap
+        top_tokens = all_tokens[:3]
 
-            # Create embed for each token (limit to 8 to stay under Discord's 10 embed limit)
-            for i, token in enumerate(all_tokens[:8], 1):
-                price_emoji = "📈" if token.get('price_change_pct', 0) >= 0 else "📉"
-                change_pct = token.get('price_change_pct', 0)
+        # Count gainers/losers from all tokens
+        gainers = [t for t in all_tokens if t.get('price_change_pct', 0) > 0]
+        losers = [t for t in all_tokens if t.get('price_change_pct', 0) < 0]
 
-                # Format market cap
-                mc = token.get('market_cap', 0)
-                if mc >= 1_000_000:
-                    mc_str = f"${mc/1_000_000:.1f}M"
-                elif mc >= 1_000:
-                    mc_str = f"${mc/1_000:.1f}K"
-                else:
-                    mc_str = f"${mc:.0f}"
+        # Build description with top 3 tokens
+        description_lines = []
 
-                # Determine color based on price change
-                if change_pct > 10:
-                    color = 0x00FF00  # Green
-                elif change_pct > 0:
-                    color = 0x90EE90  # Light green
-                elif change_pct < -10:
-                    color = 0xFF0000  # Red
-                else:
-                    color = 0xFFA500  # Orange
+        for i, token in enumerate(top_tokens, 1):
+            price_emoji = "📈" if token.get('price_change_pct', 0) >= 0 else "📉"
+            change_pct = token.get('price_change_pct', 0)
 
-                token_embed = {
-                    "title": f"{i}. {token['symbol']}",
-                    "description": (
-                        f"**Price:** ${token['price']:.8f}\n"
-                        f"**Change:** {price_emoji} {change_pct:+.1f}%\n"
-                        f"**Market Cap:** {mc_str}"
+            # Format market cap
+            mc = token.get('market_cap', 0)
+            if mc >= 1_000_000:
+                mc_str = f"${mc/1_000_000:.2f}M"
+            elif mc >= 1_000:
+                mc_str = f"${mc/1_000:.2f}K"
+            else:
+                mc_str = f"${mc:.0f}"
+
+            # Format price - show fewer decimals for readability
+            price = token['price']
+            if price >= 0.01:
+                price_str = f"${price:.4f}"
+            else:
+                price_str = f"${price:.8f}".rstrip('0').rstrip('.')
+
+            description_lines.append(
+                f"**{i}. {token['symbol']}** - {token['name']}\n"
+                f"{price_emoji} {price_str} ({change_pct:+.1f}%) • MC: {mc_str}\n"
+            )
+
+        # Create single comprehensive embed
+        embed = {
+            "title": "💰 AZ Coin Bros - Top 3 Tokens",
+            "description": "\n".join(description_lines),
+            "color": 0x3498DB,
+            "fields": [
+                {
+                    "name": "📊 Portfolio Summary",
+                    "value": (
+                        f"**Total Tracked:** {len(all_tokens)} tokens\n"
+                        f"**Gainers:** {len(gainers)} 📈 | **Losers:** {len(losers)} 📉"
                     ),
-                    "color": color,
-                    "footer": {"text": token['name'][:30]}
+                    "inline": False
                 }
-
-                # Add logo as thumbnail if available
-                if token.get('logo'):
-                    token_embed["thumbnail"] = {"url": token['logo']}
-
-                embeds.append(token_embed)
-
-        # Remove the significant movers section and simplify the summary
-        # Market summary is now optional - only if we have room in embeds
-        if all_tokens and len(embeds) < 9:  # Leave room for summary
-            gainers = [t for t in all_tokens if t.get('price_change_pct', 0) > 0]
-            losers = [t for t in all_tokens if t.get('price_change_pct', 0) < 0]
-
-            summary_embed = {
-                "title": "📈 Summary",
-                "description": (
-                    f"**Gainers:** {len(gainers)} 📈 | **Losers:** {len(losers)} 📉\n"
-                    f"**Next Update:** <t:{int((datetime.utcnow() + timedelta(seconds=self.update_interval)).timestamp())}:R>"
-                ),
-                "color": 0x9B59B6,
-                "timestamp": timestamp
-            }
-            embeds.append(summary_embed)
+            ],
+            "footer": {
+                "text": f"Next update in {self.update_interval//60} minutes • Showing top 3 by market cap"
+            },
+            "timestamp": timestamp
+        }
 
         return {
             "username": "AZ Coin Bros Price Updates",
-            "avatar_url": "https://cdn.discordapp.com/attachments/1234567890/1234567890/chart.png",
-            "embeds": embeds[:10]  # Discord limit
+            "embeds": [embed]
         }
 
     async def send_update(self):
