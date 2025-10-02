@@ -2141,6 +2141,7 @@ class BitqueryClient:
                 client = Client(transport=transport)
 
                 # Add timeout to prevent hanging
+                self.logger.info(f"Executing Instructions query for {creator_wallet[:8]}... (15s timeout)")
                 try:
                     result = await asyncio.wait_for(
                         client.execute_async(
@@ -2152,9 +2153,13 @@ class BitqueryClient:
                         ),
                         timeout=15.0  # 15 second timeout
                     )
+                    self.logger.info(f"Query completed successfully for {creator_wallet[:8]}...")
                 except asyncio.TimeoutError:
-                    self.logger.error(f"BitQuery query timed out after 15s for {creator_wallet[:8]}...")
-                    return []
+                    self.logger.error(f"BitQuery Instructions query timed out after 15s for {creator_wallet[:8]}...")
+                    raise  # Re-raise to be caught by outer except
+                except Exception as query_error:
+                    self.logger.error(f"Query execution error for {creator_wallet[:8]}...: {query_error}")
+                    raise  # Re-raise to be caught by outer except
 
                 # Update stats
                 if token_index is not None:
