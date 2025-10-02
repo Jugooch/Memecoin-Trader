@@ -2083,6 +2083,10 @@ class BitqueryClient:
             return []
 
         self.logger.info(f"About to acquire semaphore for {creator_wallet[:8]}... (token #{token_index})")
+
+        # Track if we should retry
+        should_retry = False
+
         async with self._concurrent_semaphore:
             self.logger.info(f"Semaphore acquired for {creator_wallet[:8]}...")
             # Query pump.fun program instructions signed by this wallet
@@ -2222,14 +2226,8 @@ class BitqueryClient:
                     # Try to rotate to next token
                     self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
 
-                    # Retry with new token (with incremented retry count)
-                    try:
-                        await self.initialize()
-                        self.logger.info(f"Retrying token creation query with new token (attempt {_retry_count + 2}/{len(self.api_tokens)})...")
-                        return await self.get_all_tokens_created_by_wallet(creator_wallet, limit, _retry_count=_retry_count + 1)
-                    except Exception as retry_error:
-                        self.logger.error(f"Retry failed: {retry_error}")
-                        return []
+                    # Set flag to retry OUTSIDE semaphore context
+                    should_retry = True
 
                 return []
 
@@ -2239,4 +2237,16 @@ class BitqueryClient:
                     await transport.close()
                 except:
                     pass
+
+        # Retry OUTSIDE the semaphore context to avoid deadlock
+        if should_retry:
+            try:
+                await self.initialize()
+                self.logger.info(f"Retrying token creation query with new token (attempt {_retry_count + 2}/{len(self.api_tokens)})...")
+                return await self.get_all_tokens_created_by_wallet(creator_wallet, limit, _retry_count=_retry_count + 1)
+            except Exception as retry_error:
+                self.logger.error(f"Retry failed: {retry_error}")
+                return []
+
+        return []
 
