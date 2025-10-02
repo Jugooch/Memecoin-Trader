@@ -24,25 +24,14 @@ class PriceMonitor:
         self.webhook_url = config['price_monitor']['webhook_url']
         self.update_interval = config['price_monitor'].get('update_interval_minutes', 30) * 60
 
-        # Support multiple creator wallets
-        creator_wallets = config['price_monitor'].get('creator_wallets', [])
-        if not creator_wallets:
-            # Fallback to single tracked_wallet for backward compatibility
-            tracked_wallet = config['price_monitor'].get('tracked_wallet', '4bmuhbVQPbVmXuqPHysyqGVq3UBou8NL9ukL4MwshGob')
-            creator_wallets = [tracked_wallet]
-
-        self.creator_wallets = creator_wallets
+        # Manual tokens from config
+        self.manual_token_mints = config['price_monitor'].get('manual_tokens', [])
         self.top_movers_count = config['price_monitor'].get('top_movers_count', 10)
 
         # Moralis client
         self.moralis = MoralisClient(
             api_keys=config.get('moralis_keys', []),
             api_optimization_config=config.get('api_optimization', {})
-        )
-
-        # BitQuery client for token discovery
-        self.bitquery = BitqueryClient(
-            api_tokens=config.get('bitquery_tokens', [])
         )
 
         # Persistent token tracking
@@ -56,7 +45,7 @@ class PriceMonitor:
         self.session = None
 
         self.logger.info(f"Price Monitor initialized - Updates every {self.update_interval/60} minutes")
-        self.logger.info(f"Tracking {len(self.creator_wallets)} creator wallet(s): {self.creator_wallets}")
+        self.logger.info(f"Manual tokens from config: {len(self.manual_token_mints)}")
 
     async def _get_session(self):
         """Get or create aiohttp session"""
@@ -87,61 +76,49 @@ class PriceMonitor:
             self.logger.error(f"Error saving tracked tokens: {e}")
 
     async def discover_new_tokens(self):
-        """Discover ALL tokens created by wallets using BitQuery DEXTrades API"""
+        """Load manual tokens from config and persistent storage"""
         try:
-            # Initialize BitQuery if needed
-            if not self.bitquery.client:
-                await self.bitquery.initialize()
-
             new_tokens_count = 0
 
-            for creator_wallet in self.creator_wallets:
-                # Use BitQuery to get ALL tokens CREATED by this wallet via DEXTrades (where they're the signer)
-                self.logger.info(f"Scanning for tokens created by {creator_wallet[:8]}...")
+            # Process manual tokens from config
+            for mint in self.manual_token_mints:
+                # Skip if already tracked
+                if mint in self.tracked_tokens:
+                    continue
 
-                # Use existing method that finds tokens by transaction signer
-                dev_history = await self.bitquery.get_dev_token_history(creator_wallet, lookback_days=365)
-                created_token_mints = dev_history.get('token_addresses', [])
+                try:
+                    # Get token metadata from Moralis
+                    metadata = await self.moralis.get_token_metadata(mint)
+                    price_details = await self.moralis.get_current_price_with_details(mint, fresh=True)
 
-                # Process each created token
-                for mint in created_token_mints:
-                    # Skip if already tracked
-                    if mint in self.tracked_tokens:
-                        continue
+                    symbol = price_details.get('symbol') or metadata.get('symbol', 'UNKNOWN')
+                    name = price_details.get('name') or metadata.get('name', 'Unknown')
 
-                    try:
-                        # Get token metadata from Moralis
-                        metadata = await self.moralis.get_token_metadata(mint)
-                        price_details = await self.moralis.get_current_price_with_details(mint, fresh=True)
+                    # Add to tracked tokens
+                    self.tracked_tokens[mint] = {
+                        'symbol': symbol,
+                        'name': name,
+                        'decimals': metadata.get('decimals', 9),
+                        'source': 'manual_config',
+                        'discovered_at': datetime.utcnow().isoformat()
+                    }
 
-                        symbol = price_details.get('symbol') or metadata.get('symbol', 'UNKNOWN')
-                        name = price_details.get('name') or metadata.get('name', 'Unknown')
+                    new_tokens_count += 1
+                    self.logger.info(f"Added manual token: {symbol} ({mint[:8]}...)")
 
-                        # Add to tracked tokens
-                        self.tracked_tokens[mint] = {
-                            'symbol': symbol,
-                            'name': name,
-                            'decimals': metadata.get('decimals', 9),
-                            'creator_wallet': creator_wallet,
-                            'discovered_at': datetime.utcnow().isoformat()
-                        }
-
-                        new_tokens_count += 1
-                        self.logger.info(f"Discovered new token: {symbol} ({mint[:8]}...)")
-
-                    except Exception as token_error:
-                        self.logger.error(f"Error processing token {mint[:8]}...: {token_error}")
-                        continue
+                except Exception as token_error:
+                    self.logger.error(f"Error processing manual token {mint[:8]}...: {token_error}")
+                    continue
 
             # Save updated tracked tokens
             if new_tokens_count > 0:
                 self.save_tracked_tokens()
                 self.logger.info(f"Added {new_tokens_count} new tokens. Now tracking {len(self.tracked_tokens)} total tokens")
             else:
-                self.logger.info(f"No new tokens found. Still tracking {len(self.tracked_tokens)} total tokens")
+                self.logger.info(f"All manual tokens already tracked. Total: {len(self.tracked_tokens)} tokens")
 
         except Exception as e:
-            self.logger.error(f"Error discovering new tokens: {e}")
+            self.logger.error(f"Error loading manual tokens: {e}")
 
     async def get_all_tracked_tokens(self) -> List[Dict]:
         """Get price updates for ALL tracked tokens"""

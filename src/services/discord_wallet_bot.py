@@ -40,23 +40,10 @@ class WalletProofBot(commands.Bot):
         bot_config = config.get('discord_bot', {})
         self.wallet_proofs_channel_id = bot_config.get('wallet_proofs_channel_id')
 
-        # Support multiple creator wallets (same as price monitor)
-        creator_wallets = config.get('price_monitor', {}).get('creator_wallets', [])
-        if not creator_wallets:
-            # Fallback to single tracked_wallet for backward compatibility
-            tracked_wallet = config.get('price_monitor', {}).get('tracked_wallet', '4bmuhbVQPbVmXuqPHysyqGVq3UBou8NL9ukL4MwshGob')
-            creator_wallets = [tracked_wallet]
-        self.creator_wallets = creator_wallets
-
         # Initialize Moralis client
         self.moralis = MoralisClient(
             api_keys=config.get('moralis_keys', []),
             api_optimization_config=config.get('api_optimization', {})
-        )
-
-        # Initialize BitQuery client for token discovery
-        self.bitquery = BitqueryClient(
-            api_tokens=config.get('bitquery_tokens', [])
         )
 
         # Persistent token tracking (shared with price monitor)
@@ -79,8 +66,8 @@ class WalletProofBot(commands.Bot):
         """Event triggered when bot is ready"""
         self.logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
 
-        # Discover and load all released tokens on startup
-        await self.discover_all_tokens()
+        # Load tokens from persistent storage
+        self.logger.info(f'Loaded {len(self.our_tokens)} tokens from storage: {list(self.our_tokens.keys())}')
 
     async def on_message(self, message):
         """Handle message events for XP tracking"""
@@ -208,64 +195,50 @@ class WalletProofBot(commands.Bot):
         """Calculate XP required for a level"""
         return level * level * 100
 
-    async def discover_all_tokens(self):
-        """Discover ALL tokens created by wallets using BitQuery DEXTrades API"""
+    async def add_token_to_tracking(self, mint_address: str) -> tuple:
+        """
+        Add a token to the tracking list
+        Returns: (success: bool, message: str, token_info: dict)
+        """
         try:
-            # Initialize BitQuery if needed
-            if not self.bitquery.client:
-                await self.bitquery.initialize()
+            # Check if already tracked
+            for token_data in self.our_tokens.values():
+                if token_data['mint'] == mint_address:
+                    return False, f"Token {mint_address[:8]}... is already being tracked", None
 
-            new_tokens_found = 0
+            # Get token metadata
+            metadata = await self.moralis.get_token_metadata(mint_address)
+            price_details = await self.moralis.get_current_price_with_details(mint_address, fresh=True)
 
-            for creator_wallet in self.creator_wallets:
-                # Use BitQuery to get ALL tokens CREATED by this wallet via DEXTrades (where they're the signer)
-                self.logger.info(f"Scanning for tokens created by {creator_wallet[:8]}...")
+            symbol = price_details.get('symbol') or metadata.get('symbol', 'UNKNOWN')
+            name = price_details.get('name') or metadata.get('name', 'Unknown')
+            logo = price_details.get('logo')
 
-                # Use existing method that finds tokens by transaction signer
-                dev_history = await self.bitquery.get_dev_token_history(creator_wallet, lookback_days=365)
-                created_token_mints = dev_history.get('token_addresses', [])
-
-                # Process each created token
-                for mint in created_token_mints:
-                    try:
-                        # Get token metadata
-                        metadata = await self.moralis.get_token_metadata(mint)
-                        price_details = await self.moralis.get_current_price_with_details(mint, fresh=True)
-
-                        symbol = price_details.get('symbol') or metadata.get('symbol', 'UNKNOWN')
-                        name = price_details.get('name') or metadata.get('name', 'Unknown')
-                        logo = price_details.get('logo')
-
-                        # Skip if already tracked
-                        if symbol.upper() in self.our_tokens:
-                            continue
-
-                        self.our_tokens[symbol.upper()] = {
-                            'mint': mint,
-                            'symbol': symbol,
-                            'name': name,
-                            'logo': logo,
-                            'decimals': metadata.get('decimals', 9),
-                            'creator_wallet': creator_wallet,
-                            'discovered_at': datetime.utcnow().isoformat()
-                        }
-
-                        new_tokens_found += 1
-                        self.logger.info(f"Discovered new token: {symbol} ({mint[:8]}...)")
-
-                    except Exception as token_error:
-                        self.logger.error(f"Error processing token {mint[:8]}...: {token_error}")
-                        continue
+            # Add to tracked tokens
+            self.our_tokens[symbol.upper()] = {
+                'mint': mint_address,
+                'symbol': symbol,
+                'name': name,
+                'logo': logo,
+                'decimals': metadata.get('decimals', 9),
+                'source': 'discord_command',
+                'added_at': datetime.utcnow().isoformat()
+            }
 
             # Save to persistent storage
             self.save_tracked_tokens()
 
-            self.logger.info(f"Loaded {len(self.our_tokens)} total tokens: {list(self.our_tokens.keys())}")
-            if new_tokens_found > 0:
-                self.logger.info(f"Discovered {new_tokens_found} new tokens this session")
+            self.logger.info(f"Added token via Discord: {symbol} ({mint_address[:8]}...)")
+
+            return True, f"Successfully added {symbol} ({name})", {
+                'symbol': symbol,
+                'name': name,
+                'mint': mint_address
+            }
 
         except Exception as e:
-            self.logger.error(f"Error discovering tokens: {e}")
+            self.logger.error(f"Error adding token {mint_address[:8]}...: {e}")
+            return False, f"Error adding token: {str(e)}", None
 
     async def get_wallet_holdings(self, wallet_address: str) -> Dict:
         """Get wallet holdings for SOL and our released tokens"""
@@ -752,9 +725,9 @@ async def setup_bot():
                 ephemeral=True
             )
 
-    @bot.tree.command(name='refresh-tokens', description='[Moderator] Scan creator wallets for new tokens')
-    async def refresh_tokens(interaction: discord.Interaction):
-        """Handle /refresh-tokens command - moderator only"""
+    @bot.tree.command(name='add-token', description='[Moderator] Add a token to the tracking list')
+    async def add_token(interaction: discord.Interaction, mint_address: str):
+        """Handle /add-token command - moderator only"""
         try:
             # Check if user has moderator permissions
             if not interaction.user.guild_permissions.manage_messages:
@@ -771,55 +744,90 @@ async def setup_bot():
             # Defer response as this might take a moment
             await interaction.response.defer(ephemeral=True)
 
-            # Store count before discovery
-            old_count = len(bot.our_tokens)
+            # Add token
+            success, message, token_info = await bot.add_token_to_tracking(mint_address)
 
-            # Run token discovery
-            await bot.discover_all_tokens()
+            if success:
+                embed = discord.Embed(
+                    title="✅ Token Added",
+                    description=message,
+                    color=0x00FF00
+                )
 
-            # Calculate new tokens found
-            new_count = len(bot.our_tokens)
-            tokens_added = new_count - old_count
+                if token_info:
+                    embed.add_field(
+                        name="Token Details",
+                        value=f"**Symbol:** {token_info['symbol']}\n**Name:** {token_info['name']}\n**Mint:** `{token_info['mint']}`",
+                        inline=False
+                    )
 
-            # Create response embed
-            embed = discord.Embed(
-                title="🔄 Token Discovery Complete",
-                color=0x00FF00 if tokens_added > 0 else 0x3498DB
-            )
-
-            embed.add_field(
-                name="📊 Results",
-                value=f"**Total Tracked Tokens:** {new_count}\n**New Tokens Found:** {tokens_added}",
-                inline=False
-            )
-
-            if tokens_added > 0:
-                # List the new tokens
-                new_tokens = list(bot.our_tokens.keys())[-tokens_added:]
                 embed.add_field(
-                    name="✨ New Tokens",
-                    value="\n".join([f"• {symbol}" for symbol in new_tokens[:10]]),  # Limit to 10
+                    name="📊 Total Tracked",
+                    value=f"Now tracking **{len(bot.our_tokens)}** tokens",
                     inline=False
                 )
 
-            embed.add_field(
-                name="📋 All Tracked Tokens",
-                value=", ".join(list(bot.our_tokens.keys())[:20]) + ("..." if new_count > 20 else ""),
-                inline=False
-            )
-
-            embed.set_footer(text=f"Scanned {len(bot.creator_wallets)} creator wallet(s)")
+                bot.logger.info(f"Token added by {interaction.user}: {mint_address}")
+            else:
+                embed = discord.Embed(
+                    title="⚠️ Token Not Added",
+                    description=message,
+                    color=0xFFA500
+                )
 
             await interaction.followup.send(embed=embed, ephemeral=True)
 
-            bot.logger.info(f"Token refresh initiated by {interaction.user} - Found {tokens_added} new tokens")
-
         except Exception as e:
-            bot.logger.error(f"Error processing refresh-tokens command: {e}")
+            bot.logger.error(f"Error processing add-token command: {e}")
             await interaction.followup.send(
                 embed=discord.Embed(
                     title="❌ Error",
-                    description=f"Failed to refresh tokens: {str(e)}",
+                    description=f"Failed to add token: {str(e)}",
+                    color=0xFF0000
+                ),
+                ephemeral=True
+            )
+
+    @bot.tree.command(name='list-tokens', description='View all tracked tokens')
+    async def list_tokens(interaction: discord.Interaction):
+        """Handle /list-tokens command"""
+        try:
+            if not bot.our_tokens:
+                await interaction.response.send_message(
+                    embed=discord.Embed(
+                        title="📋 Tracked Tokens",
+                        description="No tokens are currently being tracked.",
+                        color=0x3498DB
+                    ),
+                    ephemeral=True
+                )
+                return
+
+            embed = discord.Embed(
+                title="📋 Tracked Tokens",
+                description=f"Tracking **{len(bot.our_tokens)}** tokens",
+                color=0x3498DB
+            )
+
+            # List all tokens (limit to 25 for Discord embed field limit)
+            token_list = []
+            for i, (symbol, data) in enumerate(list(bot.our_tokens.items())[:25], 1):
+                token_list.append(f"{i}. **{symbol}** - {data['name']}")
+
+            embed.add_field(
+                name="Tokens",
+                value="\n".join(token_list) + ("\n*...and more*" if len(bot.our_tokens) > 25 else ""),
+                inline=False
+            )
+
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            bot.logger.error(f"Error processing list-tokens command: {e}")
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Error",
+                    description="Failed to retrieve token list.",
                     color=0xFF0000
                 ),
                 ephemeral=True

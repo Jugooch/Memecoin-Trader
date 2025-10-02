@@ -1500,14 +1500,14 @@ class BitqueryClient:
               Solana {
                 DEXTrades(
                   limit: { count: $limit }
-                  orderBy: { descending: Block_Time }
+                  orderBy: { ascending: Block_Time }
                   where: {
                     Trade: { Dex: { ProtocolName: { is: "pump" } } }
-                    Transaction: { 
+                    Transaction: {
                       Result: { Success: true }
                       Signer: { is: $dev_wallet }
                     }
-                    Block: { 
+                    Block: {
                       Time: { since: $start, till: $end }
                     }
                   }
@@ -1546,20 +1546,22 @@ class BitqueryClient:
         
         try:
             result = await fresh_client.execute_async(
-                query, 
+                query,
                 variable_values={
                     "dev_wallet": dev_wallet,
                     "start": start_iso,
                     "end": end_iso,
-                    "limit": 100
+                    "limit": 2000  # Increased from 100 to capture more tokens
                 }
             )
             
             trades = result.get("Solana", {}).get("DEXTrades", [])
-            
+
+            self.logger.info(f"BitQuery returned {len(trades)} trades for {dev_wallet[:8]}... (looking for unique tokens)")
+
             # Group by token to get unique tokens created by this dev
             tokens_created = {}
-            
+
             for trade in trades:
                 trade_data = trade.get("Trade", {})
                 buy_currency = trade_data.get("Buy", {}).get("Currency", {})
@@ -1606,8 +1608,12 @@ class BitqueryClient:
                         )
             
             tokens_list = list(tokens_created.values())
-            self.logger.debug(f"Found {len(tokens_list)} tokens created by {dev_wallet[:8]}...")
-            
+            self.logger.info(f"Found {len(tokens_list)} unique tokens from {len(trades)} trades for {dev_wallet[:8]}...")
+
+            # Warning if we hit the limit - might be missing tokens
+            if len(trades) >= 2000:
+                self.logger.warning(f"Hit trade limit (2000) for {dev_wallet[:8]}... - may be missing tokens! Consider implementing pagination.")
+
             return tokens_list
             
         except Exception as e:
