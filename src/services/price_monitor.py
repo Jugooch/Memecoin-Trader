@@ -137,15 +137,17 @@ class PriceMonitor:
                         continue
 
                     # Calculate market cap
-                    supply = await self.moralis.get_token_metadata(mint)
-                    supply_val = supply.get('supply', 0)
-                    decimals = token_info.get('decimals', 9)
+                    metadata = await self.moralis.get_token_metadata(mint)
+                    supply_val = metadata.get('supply', 0)
+                    decimals = metadata.get('decimals', token_info.get('decimals', 9))
 
-                    if supply_val > 0:
+                    if supply_val > 0 and decimals is not None:
                         actual_supply = supply_val / (10 ** decimals)
                         market_cap = actual_supply * price
                     else:
                         market_cap = 0
+                        if supply_val == 0:
+                            self.logger.warning(f"No supply data for {token_info['symbol']} ({mint})")
 
                     # Calculate price change
                     price_change_pct = 0
@@ -214,20 +216,22 @@ class PriceMonitor:
         losers = [t for t in all_tokens if t.get('price_change_pct', 0) < 0]
 
         # Build description with top 3 tokens
-        description_lines = []
+        description_lines = ["\u200b"]  # Add invisible character for spacing after title
 
         for i, token in enumerate(top_tokens, 1):
             price_emoji = "📈" if token.get('price_change_pct', 0) >= 0 else "📉"
             change_pct = token.get('price_change_pct', 0)
 
-            # Format market cap
+            # Format market cap - fix the calculation
             mc = token.get('market_cap', 0)
             if mc >= 1_000_000:
                 mc_str = f"${mc/1_000_000:.2f}M"
             elif mc >= 1_000:
                 mc_str = f"${mc/1_000:.2f}K"
+            elif mc > 0:
+                mc_str = f"${mc:.2f}"
             else:
-                mc_str = f"${mc:.0f}"
+                mc_str = "$0"
 
             # Format price - show fewer decimals for readability
             price = token['price']
@@ -236,10 +240,15 @@ class PriceMonitor:
             else:
                 price_str = f"${price:.8f}".rstrip('0').rstrip('.')
 
+            # Format: Name - $SYMBOL on first line, address on second, price/change on third
             description_lines.append(
-                f"**{i}. {token['symbol']}** - {token['name']}\n"
-                f"{price_emoji} {price_str} ({change_pct:+.1f}%) • MC: {mc_str}\n"
+                f"**{i}. {token['name']} - ${token['symbol']}**\n"
+                f"`{token['mint']}`\n"
+                f"{price_emoji} {price_str} ({change_pct:+.1f}%) • MC: {mc_str}"
             )
+
+        # Add spacing before bottom section
+        description_lines.append("\n\u200b")
 
         # Create single comprehensive embed
         embed = {
@@ -248,7 +257,7 @@ class PriceMonitor:
             "color": 0x3498DB,
             "fields": [
                 {
-                    "name": "📊 Portfolio Summary",
+                    "name": "\u200b",  # Invisible field name
                     "value": (
                         f"**Total Tracked:** {len(all_tokens)} tokens\n"
                         f"**Gainers:** {len(gainers)} 📈 | **Losers:** {len(losers)} 📉"
