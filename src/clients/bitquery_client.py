@@ -2082,7 +2082,9 @@ class BitqueryClient:
             self.logger.error("No available Bitquery API tokens for token creation query")
             return []
 
+        self.logger.info(f"About to acquire semaphore for {creator_wallet[:8]}... (token #{token_index})")
         async with self._concurrent_semaphore:
+            self.logger.info(f"Semaphore acquired for {creator_wallet[:8]}...")
             # Query pump.fun program instructions signed by this wallet
             # Program address: 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P
             query = gql("""
