@@ -2057,7 +2057,7 @@ class BitqueryClient:
 
         return history
 
-    async def get_all_tokens_created_by_wallet(self, creator_wallet: str, limit: int = 100) -> List[str]:
+    async def get_all_tokens_created_by_wallet(self, creator_wallet: str, limit: int = 100, _retry_count: int = 0) -> List[str]:
         """
         Get ALL tokens created by a wallet using the Instructions API.
         This finds tokens the wallet created, not just tokens they hold/held.
@@ -2065,10 +2065,16 @@ class BitqueryClient:
         Args:
             creator_wallet: The wallet address that created tokens
             limit: Maximum number of tokens to return (default 100)
+            _retry_count: Internal retry counter (do not use)
 
         Returns:
             List of token mint addresses created by this wallet
         """
+        # Prevent infinite retries
+        if _retry_count >= len(self.api_tokens):
+            self.logger.error(f"All {len(self.api_tokens)} tokens exhausted for wallet {creator_wallet[:8]}...")
+            return []
+
         # Get fresh token
         token_index, api_token = self._get_next_available_token()
 
@@ -2116,10 +2122,14 @@ class BitqueryClient:
                 }
             """)
 
-            # Create fresh transport
+            # IMPORTANT: Use /graphql endpoint for Instructions API, NOT /eap
+            # The Instructions API is on the V2 endpoint
+            instructions_endpoint = "https://streaming.bitquery.io/graphql"
+
+            # Create fresh transport with correct endpoint
             from gql.transport.aiohttp import AIOHTTPTransport
             transport = AIOHTTPTransport(
-                url=self.endpoint,
+                url=instructions_endpoint,
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {api_token}"
@@ -2130,13 +2140,21 @@ class BitqueryClient:
                 from gql import Client
                 client = Client(transport=transport)
 
-                result = await client.execute_async(
-                    query,
-                    variable_values={
-                        "creator": creator_wallet,
-                        "limit": limit
-                    }
-                )
+                # Add timeout to prevent hanging
+                try:
+                    result = await asyncio.wait_for(
+                        client.execute_async(
+                            query,
+                            variable_values={
+                                "creator": creator_wallet,
+                                "limit": limit
+                            }
+                        ),
+                        timeout=15.0  # 15 second timeout
+                    )
+                except asyncio.TimeoutError:
+                    self.logger.error(f"BitQuery query timed out after 15s for {creator_wallet[:8]}...")
+                    return []
 
                 # Update stats
                 if token_index is not None:
@@ -2197,11 +2215,11 @@ class BitqueryClient:
                     # Try to rotate to next token
                     self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
 
-                    # Retry once with new token
+                    # Retry with new token (with incremented retry count)
                     try:
                         await self.initialize()
-                        self.logger.info("Retrying token creation query with new token...")
-                        return await self.get_all_tokens_created_by_wallet(creator_wallet, limit)
+                        self.logger.info(f"Retrying token creation query with new token (attempt {_retry_count + 2}/{len(self.api_tokens)})...")
+                        return await self.get_all_tokens_created_by_wallet(creator_wallet, limit, _retry_count=_retry_count + 1)
                     except Exception as retry_error:
                         self.logger.error(f"Retry failed: {retry_error}")
                         return []
