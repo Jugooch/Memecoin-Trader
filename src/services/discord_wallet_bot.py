@@ -69,18 +69,11 @@ class WalletProofBot(commands.Bot):
         self.logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
         self.logger.info(f'Loaded {len(self.our_tokens)} tokens: {list(self.our_tokens.keys())}')
 
-        # Debug: Check intents
-        self.logger.info(f'Bot intents: {self.intents}')
-        self.logger.info(f'Message content intent: {self.intents.message_content}')
-        self.logger.info(f'Messages intent: {self.intents.messages}')
-
     async def on_message(self, message):
         """Handle message events for XP tracking"""
         # Ignore bot messages
         if message.author.bot:
             return
-
-        self.logger.debug(f"Message received from {message.author} in guild {message.guild.id if message.guild else 'DM'}")
 
         # Process commands first
         await self.process_commands(message)
@@ -166,12 +159,11 @@ class WalletProofBot(commands.Bot):
         """Award XP to a user for sending a message"""
         user_key = self.get_user_key(user_id, guild_id)
 
-        # Check cooldown (60 seconds between XP awards)
+        # Check cooldown (20 seconds between XP awards)
         now = datetime.utcnow()
         if user_key in self.xp_cooldowns:
             time_since_last = now - self.xp_cooldowns[user_key]
-            if time_since_last < timedelta(seconds=60):
-                self.logger.debug(f"User {user_id} on cooldown ({60 - time_since_last.seconds}s remaining)")
+            if time_since_last < timedelta(seconds=20):
                 return
 
         self.xp_cooldowns[user_key] = now
@@ -184,7 +176,6 @@ class WalletProofBot(commands.Bot):
                 'user_id': user_id,
                 'guild_id': guild_id
             }
-            self.logger.info(f"Initialized XP data for user {user_id}")
 
         # Award random XP between 15-25
         import random
@@ -196,11 +187,8 @@ class WalletProofBot(commands.Bot):
         new_level = self.calculate_level(self.xp_data[user_key]['xp'])
         self.xp_data[user_key]['level'] = new_level
 
-        self.logger.info(f"Awarded {xp_gain} XP to user {user_id} (Total: {self.xp_data[user_key]['xp']} XP, Level: {new_level})")
-
         # Save data
         self.save_xp_data()
-        self.logger.debug(f"Saved XP data to {self.xp_file}")
 
     def calculate_level(self, xp: int) -> int:
         """Calculate level from XP (level = sqrt(xp / 100))"""
