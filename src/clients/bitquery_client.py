@@ -2128,9 +2128,9 @@ class BitqueryClient:
                 }
             """)
 
-            # IMPORTANT: Use /graphql endpoint for Instructions API, NOT /eap
-            # The Instructions API is on the V2 endpoint
-            instructions_endpoint = "https://streaming.bitquery.io/graphql"
+            # Try EAP endpoint - the Instructions API might be there
+            # BitQuery has multiple endpoints with different schemas
+            instructions_endpoint = "https://streaming.bitquery.io/eap"
 
             # Create fresh transport with correct endpoint
             from gql.transport.aiohttp import AIOHTTPTransport
