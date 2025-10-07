@@ -1,0 +1,83 @@
+# Frontrun Bot - Core Dependencies
+# Install with: pip install -r requirements.txt
+#
+# Phase 1 Dependencies (Core RPC Infrastructure)
+# Last updated: 2025-10-06
+
+# ============================================================================
+# WebSocket Communication
+# ============================================================================
+websockets==12.0
+    # Purpose: WebSocket client for Solana RPC connections
+    # Used in: core/rpc_manager.py
+    # Why: Real-time subscriptions (account changes, slot updates)
+    # Alternative: None (Solana requires WebSocket for subscriptions)
+
+# ============================================================================
+# Async HTTP Client
+# ============================================================================
+aiohttp==3.9.5
+    # Purpose: Async HTTP client for RPC POST requests
+    # Used in: Future Phase 2 (HTTP RPC calls)
+    # Why: Some Solana RPC methods only work over HTTP POST
+    # Alternative: httpx (we chose aiohttp for ecosystem compatibility)
+
+# ============================================================================
+# Configuration Management
+# ============================================================================
+PyYAML==6.0.1
+    # Purpose: YAML configuration file parsing
+    # Used in: core/config.py
+    # Why: Human-readable config files with comments support
+    # Alternative: JSON (but no comments), TOML (less common)
+
+# ============================================================================
+# Logging
+# ============================================================================
+structlog==24.1.0
+    # Purpose: Structured logging with JSON output
+    # Used in: core/logger.py, all modules
+    # Why: Searchable, parseable logs for production
+    # Alternative: Standard logging (but unstructured)
+
+# ============================================================================
+# System Monitoring
+# ============================================================================
+psutil==5.9.8
+    # Purpose: CPU, memory, network monitoring
+    # Used in: Future Phase 1 enhancement (health monitor)
+    # Why: Detect resource exhaustion before failures
+    # Alternative: None (best library for system metrics)
+
+# ============================================================================
+# Metrics Collection
+# ============================================================================
+prometheus-client==0.20.0
+    # Purpose: Metrics export for Prometheus/Grafana
+    # Used in: core/metrics.py
+    # Why: Industry standard for time-series metrics
+    # Alternative: StatsD, OpenTelemetry (we may add later)
+
+# ============================================================================
+# Future Phase 2 Dependencies (Transaction Building)
+# Uncomment when starting Phase 2
+# ============================================================================
+# solders==0.21.0
+#     # Purpose: Solana SDK for Python (fast, Rust-based)
+#     # Used in: Phase 2 tx_builder.py, tx_signer.py
+#     # Why: Fastest Solana library for Python
+#
+# base58==2.1.1
+#     # Purpose: Base58 encoding/decoding
+#     # Used in: Phase 2 tx_signer.py (keypair handling)
+#     # Why: Solana uses Base58 for public keys
+#
+# PyNaCl==1.5.0
+#     # Purpose: Ed25519 cryptographic signatures
+#     # Used in: Phase 2 tx_signer.py
+#     # Why: Solana uses Ed25519 for transaction signing
+
+# ============================================================================
+# Testing Dependencies (install separately with requirements-dev.txt)
+# ============================================================================
+# See requirements-dev.txt for pytest, coverage, etc.

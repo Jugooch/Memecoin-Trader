@@ -1,0 +1,80 @@
+# Frontrun Bot - Development Dependencies
+# Install with: pip install -r requirements-dev.txt
+#
+# These are additional dependencies for development, testing, and code quality
+# Last updated: 2025-10-06
+
+# First, install core dependencies
+-r requirements.txt
+
+# ============================================================================
+# Testing Framework
+# ============================================================================
+pytest==8.3.3
+    # Purpose: Testing framework
+    # Used in: All test files
+    # Why: Industry standard, excellent async support
+
+pytest-asyncio==0.24.0
+    # Purpose: Async test support for pytest
+    # Used in: Integration tests (async RPC calls)
+    # Why: Required for testing async functions
+
+pytest-cov==4.1.0
+    # Purpose: Code coverage reporting
+    # Used in: Coverage reports (pytest --cov)
+    # Why: Ensure adequate test coverage (target: >80%)
+
+pytest-timeout==2.3.1
+    # Purpose: Test timeout handling
+    # Used in: Integration tests (prevent hanging)
+    # Why: Fail tests that take too long (network issues)
+
+pytest-mock==3.14.0
+    # Purpose: Mocking framework for pytest
+    # Used in: Unit tests (mock external dependencies)
+    # Why: Simplifies mocking compared to unittest.mock
+
+# ============================================================================
+# Code Quality & Formatting
+# ============================================================================
+black==24.8.0
+    # Purpose: Code formatter (opinionated)
+    # Used in: Pre-commit, CI/CD
+    # Why: Consistent code style across team
+
+flake8==7.1.1
+    # Purpose: Linting (style guide enforcement)
+    # Used in: Pre-commit, CI/CD
+    # Why: Catch common errors and style issues
+
+mypy==1.11.2
+    # Purpose: Static type checking
+    # Used in: Pre-commit, CI/CD
+    # Why: Catch type errors before runtime
+
+isort==5.13.2
+    # Purpose: Import sorting
+    # Used in: Pre-commit, CI/CD
+    # Why: Consistent import organization
+
+# ============================================================================
+# Development Tools
+# ============================================================================
+ipython==8.27.0
+    # Purpose: Enhanced Python REPL
+    # Used in: Manual testing, debugging
+    # Why: Better than standard Python shell
+
+ipdb==0.13.13
+    # Purpose: IPython debugger
+    # Used in: Debugging
+    # Why: Enhanced debugging experience
+
+# ============================================================================
+# Optional: Pre-commit hooks
+# ============================================================================
+# pre-commit==3.8.0
+#     # Purpose: Git pre-commit hooks
+#     # Used in: Local development
+#     # Why: Automatically run linters/formatters before commit
