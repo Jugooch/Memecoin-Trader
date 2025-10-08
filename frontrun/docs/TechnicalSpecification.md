@@ -1515,9 +1515,9 @@ class TransactionTemplate:
 
 ---
 
-### 19. Aggressive Priority Fee Bidder
+### 19. Aggressive Priority Fee Bidder (with Profit-Aware Caps)
 
-**Purpose**: Dynamically sets very high priority fees to guarantee first position.
+**Purpose**: Dynamically sets very high priority fees to guarantee first position, while preventing fee burn from exceeding profit potential.
 
 **API Specification**
 ```python
@@ -1527,21 +1527,29 @@ class AggressivePriorityFeeBidder:
         fee_calculator: PriorityFeeCalculator,
         config: BidderConfig
     ):
-        """Initialize aggressive bidder"""
+        """Initialize aggressive bidder with profit-aware caps"""
 
     async def calculate_aggressive_fee(
         self,
         competing_tx: Optional[PendingTransaction] = None,
-        compute_units: int = 200_000
+        compute_units: int = 200_000,
+        recent_trades: Optional[List[Trade]] = None
     ) -> int:
-        """Calculate fee to outbid competition"""
+        """Calculate fee to outbid competition, capped by conservative profit estimate"""
 
     def get_max_fee_for_profit(
         self,
-        expected_profit_sol: float,
-        max_fee_pct: float = 0.5
+        recent_trades: List[Trade],
+        compute_units: int
     ) -> int:
-        """Calculate max fee as percentage of expected profit"""
+        """Calculate conservative fee cap based on 25th percentile of recent wins"""
+
+    def estimate_conservative_ev(
+        self,
+        recent_trades: List[Trade],
+        min_samples: int = 10
+    ) -> float:
+        """Estimate conservative expected value using p25 of winning trades"""
 ```
 
 **Data Structures**
@@ -1550,27 +1558,91 @@ class AggressivePriorityFeeBidder:
 class BidderConfig:
     base_multiplier: float = 10.0  # 10x average fee
     competition_multiplier: float = 1.5  # 1.5x competing tx fee
-    max_fee_lamports: int = 10_000_000  # 0.01 SOL max
+    max_fee_lamports: int = 10_000_000  # 0.01 SOL absolute max
     min_fee_lamports: int = 100_000  # 0.0001 SOL min
+    cold_start_max_lamports: int = 50_000  # Conservative max until we have data
+    profit_cap_pct: float = 0.3  # Never bid >30% of conservative profit estimate
+    min_samples_for_ev: int = 10  # Need 10+ trades before using EV-based caps
+
+@dataclass
+class Trade:
+    won_race: bool
+    pnl_sol: float
+    fee_paid_lamports: int
+    timestamp: datetime
 ```
 
 **Implementation Notes**
-- If competing tx detected: bid = competing_fee * 1.5
-- Otherwise: bid = avg_fee * 10
-- Clamp between min and max fee limits
-- Consider profit: never bid >50% of expected profit
+
+**Conservative EV Calculation:**
+```python
+def estimate_conservative_ev(self, recent_trades: List[Trade]) -> float:
+    """Use 25th percentile of wins, not mean, for conservative estimate"""
+    if len(recent_trades) < self.config.min_samples_for_ev:
+        return 0.0  # Cold start: use absolute cap
+
+    winning_trades = [t for t in recent_trades if t.won_race]
+    if not winning_trades:
+        return 0.0
+
+    profits = [t.pnl_sol for t in winning_trades]
+    p25_profit = np.percentile(profits, 25)  # Conservative: 25th percentile
+
+    return max(0.0, p25_profit)
+```
+
+**Fee Calculation with Profit Cap:**
+```python
+def calculate_aggressive_fee(self, competing_tx, compute_units, recent_trades):
+    # Calculate base aggressive fee
+    if competing_tx:
+        base_fee = competing_tx.fee * self.config.competition_multiplier
+    else:
+        base_fee = avg_network_fee * self.config.base_multiplier
+
+    # Cap by profit potential
+    if recent_trades and len(recent_trades) >= self.config.min_samples_for_ev:
+        conservative_ev = self.estimate_conservative_ev(recent_trades)
+        profit_cap = int(conservative_ev * LAMPORTS_PER_SOL * self.config.profit_cap_pct)
+    else:
+        # Cold start: use very conservative absolute cap
+        profit_cap = self.config.cold_start_max_lamports
+
+    # Apply all caps
+    final_fee = max(
+        self.config.min_fee_lamports,
+        min(base_fee, profit_cap, self.config.max_fee_lamports)
+    )
+
+    return final_fee
+```
+
+**Per-Compute-Unit Price Limits:**
+- Cap both total fee AND micro-lamports per CU to prevent accidental CU inflation
+- Example: If CU=200k, max_fee=100k lamports, then max_price = 500 micro-lamports/CU
+- Prevents "win by high CU price but low CU limit" accidents
+
+**Pre-Submit EV Validation:**
+- Before submitting, recalculate EV with latest price data
+- If EV ≤ 0 after price movement, ABORT (don't submit)
 
 **Performance Requirements**
 - Fee calculation: <1ms
-- Memory: Negligible
+- EV estimation: <2ms (percentile calculation)
+- Memory: ~1KB per 100 trades in history
 
 **Error Handling**
-- **No fee data**: Use max_fee_lamports
+- **No fee data**: Use cold_start_max_lamports (50k)
 - **Negative profit**: Return 0 (abort trade)
+- **Insufficient trade history (<10 samples)**: Use cold_start cap
+- **EV ≤ 0 at submit time**: Abort submission, log reason
 
 **Testing**
-- Unit: Test multiplier logic with various inputs
-- Acceptance: Win >90% of frontrun races against competition
+- Unit: Test EV calculation with various trade histories
+- Unit: Test cold-start behavior (<10 trades)
+- Unit: Test profit cap enforcement across varying EVs
+- Integration: Verify fees never exceed 30% of p25 profit across 100 test trades
+- Acceptance: Win >85% of frontrun races while maintaining positive economics
 
 ---
 
@@ -1922,76 +1994,184 @@ class Event:
 
 ---
 
-### 25. Latency Budget Enforcer
+### 25. Latency Budget Enforcer (Hard Abort Semantics)
 
-**Purpose**: Aborts attempt if any pipeline stage exceeds latency budget.
+**Purpose**: Enforces hard latency budgets with ABORT semantics. Late trades are KILLED, not submitted, to prevent paying fees for guaranteed losses.
 
 **API Specification**
 ```python
 class LatencyBudgetEnforcer:
     def __init__(self, config: LatencyConfig):
-        """Initialize latency enforcer"""
+        """Initialize latency enforcer with hard abort semantics"""
 
     def start_operation(self, operation_id: str) -> OperationTimer:
-        """Start timing an operation"""
+        """Start timing an operation with microsecond precision"""
 
-    def check_budget(
+    def check_and_abort(
         self,
         timer: OperationTimer,
         stage: str
-    ) -> BudgetCheckResult:
-        """Check if stage exceeded budget"""
-
-    def abort_if_exceeded(
-        self,
-        timer: OperationTimer
     ) -> bool:
-        """Check if total budget exceeded, return should_abort"""
+        """Check if stage exceeded budget. Returns True if should ABORT."""
+
+    def record_stage(
+        self,
+        timer: OperationTimer,
+        stage: str
+    ):
+        """Record stage completion time for attribution tracking"""
+
+    def trip_circuit_breaker(self):
+        """Trip circuit breaker on repeated budget violations"""
+
+    def is_circuit_open(self) -> bool:
+        """Check if circuit breaker is currently open (trading paused)"""
 ```
 
 **Data Structures**
 ```python
 @dataclass
 class LatencyConfig:
-    detect_stage_budget_ms: float = 10
-    decide_stage_budget_ms: float = 5
-    build_stage_budget_ms: float = 10
-    sign_stage_budget_ms: float = 5
-    submit_stage_budget_ms: float = 50
-    total_budget_ms: float = 100
+    # Hard budget limits (ABORT if exceeded)
+    detect_stage_budget_ms: float = 30    # Event detection
+    build_sign_budget_ms: float = 15      # Build + sign combined
+    submit_stage_budget_ms: float = 50    # RPC submission
+    total_budget_ms: float = 100          # End-to-end hard limit
+
+    # Circuit breaker settings
+    circuit_breaker_enabled: bool = True
+    violations_before_trip: int = 5       # Trip after 5 consecutive violations
+    circuit_reset_after_s: int = 60       # Reset circuit after 60s
 
 @dataclass
 class OperationTimer:
     operation_id: str
-    start_time: float  # perf_counter
-    stage_times: Dict[str, float]
+    start_time: float  # perf_counter() in seconds
+    stage_times: Dict[str, float]  # stage_name → elapsed_ms
+    total_elapsed_ms: float
 
 @dataclass
-class BudgetCheckResult:
+class BudgetAttribution:
+    """Detailed attribution for post-mortem analysis"""
+    operation_id: str
     stage: str
     elapsed_ms: float
     budget_ms: float
     exceeded: bool
-    should_abort: bool
+    slot: Optional[int]
+    leader: Optional[str]
+    rpc_endpoint: Optional[str]
+    timestamp: datetime
 ```
 
 **Implementation Notes**
-- Use `time.perf_counter()` for microsecond precision
-- Track cumulative time across stages
-- Abort if any stage exceeds budget OR total >100ms
-- Log all aborts with timing breakdown
+
+**Hard Abort Semantics:**
+```python
+def check_and_abort(self, timer: OperationTimer, stage: str) -> bool:
+    """Returns True if should ABORT (not warn), False if OK to continue"""
+    elapsed = (time.perf_counter() - timer.start_time) * 1000  # Convert to ms
+    budget = self.config.get_budget_for_stage(stage)
+
+    if elapsed > budget:
+        # Log detailed attribution
+        self.log_budget_violation(
+            operation_id=timer.operation_id,
+            stage=stage,
+            elapsed_ms=elapsed,
+            budget_ms=budget
+        )
+
+        # Increment metrics
+        self.metrics.increment("latency_budget_violations", labels={"stage": stage})
+
+        # Check circuit breaker
+        self.consecutive_violations += 1
+        if self.consecutive_violations >= self.config.violations_before_trip:
+            self.trip_circuit_breaker()
+
+        return True  # ABORT
+
+    # Budget OK
+    self.consecutive_violations = 0  # Reset on success
+    return False  # Continue
+```
+
+**Usage Pattern:**
+```python
+# In trading strategy
+timer = enforcer.start_operation(f"trade_{mint}")
+
+# After detection stage
+if enforcer.check_and_abort(timer, "detect"):
+    logger.info("Aborted trade - detection too slow")
+    metrics.increment("aborts.detect_timeout")
+    return  # STOP - don't submit
+
+# After build+sign stage
+if enforcer.check_and_abort(timer, "build_sign"):
+    logger.info("Aborted trade - build/sign too slow")
+    metrics.increment("aborts.build_timeout")
+    return  # STOP - don't submit
+
+# Before submit
+total_elapsed = (time.perf_counter() - timer.start_time) * 1000
+if total_elapsed > enforcer.config.total_budget_ms:
+    logger.info(f"Aborted trade - total time {total_elapsed:.1f}ms > {enforcer.config.total_budget_ms}ms")
+    metrics.increment("aborts.total_timeout")
+    return  # STOP - don't submit late trade
+
+# If we get here, submit is OK
+await tx_submitter.submit(signed_tx)
+```
+
+**Circuit Breaker Logic:**
+```python
+def trip_circuit_breaker(self):
+    """Pause trading temporarily on repeated budget violations"""
+    self.circuit_open_until = time.time() + self.config.circuit_reset_after_s
+    logger.error(f"Circuit breaker TRIPPED after {self.consecutive_violations} violations")
+    metrics.increment("circuit_breaker_trips")
+
+def is_circuit_open(self) -> bool:
+    """Check if circuit is currently open (trading paused)"""
+    if self.circuit_open_until is None:
+        return False
+
+    if time.time() > self.circuit_open_until:
+        # Circuit has timed out, reset
+        logger.info("Circuit breaker RESET")
+        self.circuit_open_until = None
+        self.consecutive_violations = 0
+        return False
+
+    return True  # Still open
+```
+
+**Budget Attribution Tracking:**
+- Record every budget check with: stage, elapsed_ms, slot, leader, RPC endpoint
+- Store in structured logs for post-mortem analysis
+- Aggregate by stage to identify chronic bottlenecks
+- Correlate with slot/leader to identify validator-specific issues
 
 **Performance Requirements**
-- Timer overhead: <10 microseconds
-- Check overhead: <1 microsecond
+- Timer overhead: <10 microseconds (using `time.perf_counter()`)
+- Check overhead: <1 microsecond (simple comparison)
+- Abort decision: <1ms (includes logging)
+- Memory: <1KB per active operation
 
 **Error Handling**
-- **Budget exceeded**: Log timing details, abort operation
-- **Timer not found**: Create new timer, log warning
+- **Budget exceeded**: Log detailed attribution, increment metrics, ABORT (return True)
+- **Timer not found**: Create new timer, log warning, continue
+- **Circuit open**: Reject all new trades until reset
 
 **Testing**
-- Unit: Test with simulated delays at each stage
-- Acceptance: 100% abort rate when budget exceeded
+- Unit: Test with simulated delays at each stage (5ms, 50ms, 150ms)
+- Unit: Test circuit breaker trips after N consecutive violations
+- Unit: Test circuit breaker resets after timeout
+- Integration: Verify aborted trades never reach tx_submitter
+- Acceptance: 100% abort rate when budget exceeded (no warnings, all hard stops)
+- Acceptance: 0% zombie submissions (late trades never submitted)
 
 ---
 

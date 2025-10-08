@@ -306,63 +306,143 @@ aiosqlite>=0.19.0
 
 ### Phase 4: Mempool Monitoring & Dev Detection (Week 5-6)
 
-**Goal**: Implement frontrunning-specific features for detecting opportunities
+**Goal**: Implement frontrunning-specific features for detecting opportunities with critical defensive guardrails to prevent fee burn and silent degradation
 
 **Features to Implement:**
+
 15. **Mempool Transaction Monitor** (TechSpec #15)
     - Geyser plugin subscription
     - Pending transaction stream
     - Program filtering
+    - Sub-10ms event processing latency
 
 16. **Dev Wallet Pattern Detector** (TechSpec #16)
-    - Known dev wallet tracking
-    - Pattern analysis
-    - Confidence scoring
+    - Known dev wallet tracking (static list)
+    - Behavioral pattern analysis (wallet age, tx timing, companion accounts)
+    - Confidence scoring with post-confirmation feedback loop
+    - >85% detection accuracy on labeled data
+    - **Reasoning**: Static lists decay quickly; behavioral signals adapt as devs change tactics
 
 17. **Dev Buy Confirmation Detector** (TechSpec #20)
-    - Bonding curve account monitoring
-    - Reserve ratio change detection
-    - Confirmation timing
+    - Bonding curve account monitoring via WebSocket subscription
+    - Reserve ratio change detection (>10% change = dev buy)
+    - Confirmation timing with microsecond precision
+    - <200ms detection latency from on-chain confirmation
 
 18. **Race Failure Detector** (TechSpec #22)
-    - Price deviation analysis
-    - Slot timing comparison
-    - Win/loss classification
+    - Price deviation analysis (>5% slippage = lost race)
+    - Slot timing comparison (our_slot vs dev_buy_slot)
+    - Win/loss classification for analytics and EV calculation
+    - 100% accuracy on test scenarios
+
+19. **Profit-Aware Fee Cap** (Enhanced Priority Fee Calculator)
+    - Conservative profit estimation using 25th percentile of recent winning trades
+    - Hard cap: never bid >30% of conservative profit estimate
+    - Cold-start protection: max 50,000 lamports (~$0.005) until 10+ trades collected
+    - Per-compute-unit price limits to prevent accidental CU inflation
+    - Abort submission if latest price changes make EV ≤ 0 during pre-submit
+    - **Reasoning**: Fee burn is the #1 profitability killer in frontrunning. Using p25 (not mean) protects against over-optimistic EV estimates. Conservative caps prevent paying to lose races, especially during cold start when we have no performance data.
+
+20. **Hard Latency Budget Enforcer**
+    - Per-stage hard budgets with ABORT semantics (not warnings)
+    - Budget allocation: Detect 30ms | Build+Sign 15ms | Submit 50ms | Total 100ms
+    - Late trades are KILLED, not submitted (stop-fast failure mode)
+    - Budget attribution tracking (source → stage → elapsed_ms → slot → leader)
+    - Circuit breaker: trip kill-late policy for N seconds on repeated violations
+    - **Reasoning**: Warnings are invisible; late submissions burn fees for guaranteed losses. Hard aborts from day one prevent latency regressions from accumulating. In a race, "stop fast" > "continue poorly".
+
+21. **RPC Health Scoring & Auto-Routing**
+    - Health score (0-100) per endpoint: deductions for p99 latency, slot lag, error rate
+    - Automatic routing to best-scoring endpoint for all submissions
+    - Fast eject on acute faults (slot lag >5 for >5s, or 2 consecutive submission errors)
+    - Brownout mode: keep degraded endpoints for read-only telemetry
+    - Route hot traffic to lowest score; continuous re-evaluation every 10s
+    - **Reasoning**: Manual RPC failover is too slow. Degraded feeds silently burn fees if we keep using them. Automated scoring + routing ensures we always submit via the best available path.
+
+22. **Shadow Decision Validator**
+    - 1-minute sliding buffer of (event, decision, timestamp)
+    - Background replay: re-run decision logic off-path and compare results
+    - Alert on nondeterminism (same event → different decision)
+    - Detects: config drift, clock skew, race conditions, non-idempotent logic
+    - <1% CPU overhead, ~10MB memory
+    - **Reasoning**: Small investment (100 lines) catches critical bugs before they cause production losses. Nondeterministic decisions indicate systemic problems that will cause unpredictable behavior under load.
 
 **Deliverables:**
 ```
 frontrun/
 ├── services/
 │   ├── mempool_monitor.py       # Geyser/mempool streaming
-│   ├── dev_detector.py          # Dev wallet detection
-│   └── confirmation_detector.py # Dev buy confirmation
+│   ├── dev_detector.py          # Dev wallet detection with behavior scoring
+│   ├── confirmation_detector.py # Dev buy confirmation detector
+│   └── shadow_validator.py      # Shadow decision replay validator
 ├── core/
-│   └── race_detector.py         # Race outcome analysis
+│   ├── race_detector.py         # Race outcome analysis
+│   ├── latency_enforcer.py      # Hard budget enforcement with abort
+│   ├── rpc_health_scorer.py     # Health-based routing
+│   └── profit_aware_fees.py     # Conservative EV-based fee capping
 ├── data/
-│   └── known_dev_wallets.json   # Dev wallet database
+│   ├── known_dev_wallets.json   # Dev wallet static list
+│   └── trade_history.json       # Recent trades for EV estimation
 ├── tests/
 │   ├── unit/
 │   │   ├── test_mempool_monitor.py
 │   │   ├── test_dev_detector.py
 │   │   ├── test_confirmation_detector.py
-│   │   └── test_race_detector.py
+│   │   ├── test_race_detector.py
+│   │   ├── test_latency_enforcer.py
+│   │   ├── test_rpc_health_scorer.py
+│   │   ├── test_profit_aware_fees.py
+│   │   └── test_shadow_validator.py
 │   └── integration/
-│       └── test_mempool_stream.py
+│       ├── test_mempool_stream.py
+│       ├── test_guardrails_integration.py  # Test abort flows
+│       └── test_fee_cap_integration.py     # Test profit-aware fees in trade flow
 └── docs/
-    └── DETECTION_SYSTEM.md
+    ├── DETECTION_SYSTEM.md      # Mempool, dev detection, confirmation
+    └── GUARDRAILS.md            # Defensive systems: budgets, fees, health
 ```
 
+**SQLite Hardening (3-Line Safety Improvement):**
+Update `core/position_tracker.py` initialization to add:
+```python
+await self.db.execute("PRAGMA journal_mode=WAL")
+await self.db.execute("PRAGMA synchronous=NORMAL")
+await self.db.execute("PRAGMA busy_timeout=5000")
+```
+**Reasoning**: WAL mode (Write-Ahead Logging) prevents 90% of SQLite corruption under concurrent load by allowing readers during writes. `synchronous=NORMAL` balances durability and performance. `busy_timeout=5000` handles lock contention gracefully (waits 5s before failing instead of immediate error).
+
+**Stop-Fast Failure Semantics:**
+All hot-path failures must abort immediately, not warn-and-continue:
+- Stale price data → abort trade
+- RPC timeout → abort submission
+- Budget exceeded → abort (kill trade)
+- EV ≤ 0 → abort (don't submit)
+- Degraded RPC (slot lag >5) → eject endpoint, route to healthy RPC
+
+**Reasoning**: In latency-sensitive races, continuing with degraded conditions guarantees fee burn for no upside. "Stop fast" prevents silent losses.
+
 **Testing Requirements:**
-- [ ] Unit tests: Mock Geyser streams, verify filtering
+- [ ] Unit tests: Mock Geyser streams, verify filtering and all abort paths
 - [ ] Integration tests: Connect to real Geyser plugin on devnet
-- [ ] Performance tests: 1000 tx/sec stream processing
+- [ ] Performance tests: 1000 tx/sec stream processing with budget enforcement
 - [ ] Acceptance: <10ms processing latency per transaction
+- [ ] Guardrail tests: Verify late trades are killed (not submitted), fees capped
+- [ ] Fee cap tests: Verify fees never exceed 30% of p25 profit estimate
+- [ ] Abort tests: Verify all failure modes trigger clean aborts (no zombie submissions)
+- [ ] Shadow validation: Verify nondeterminism detection across 10,000 replays
 
 **Acceptance Criteria:**
 - ✅ Successfully receive mempool transactions via Geyser
-- ✅ Detect dev buy patterns with >90% accuracy on labeled data
+- ✅ Detect dev buy patterns with >85% accuracy (behavioral + static list)
 - ✅ Confirmation detection within 200ms of on-chain event
 - ✅ Race failure detection 100% accurate on test scenarios
+- ✅ Latency budget enforcer aborts 100% of late trades (>100ms total)
+- ✅ Profit-aware fees cap at 30% of p25 profit estimate, 50k lamports cold-start
+- ✅ RPC health scorer routes to best endpoint >90% of time
+- ✅ Shadow validator detects nondeterministic decisions (alerts on mismatch)
+- ✅ No "warn and continue" in hot path - all failures abort cleanly
+- ✅ SQLite operations stable under 100 concurrent position updates
+- ✅ Fee burn / realized PnL ≤ 0.25 on rolling 48-hour window (profitability gate)
 
 **Dependencies:**
 ```
@@ -381,68 +461,78 @@ grpcio-tools>=1.60.0
 
 ### Phase 5: Timing & Optimization Features (Week 7)
 
-**Goal**: Implement advanced timing and optimization for competitive edge
+**Goal**: Implement advanced timing and optimization for competitive edge with leader-aware routing
 
 **Features to Implement:**
-19. **Slot Prediction Engine** (TechSpec #17)
-    - Leader schedule caching
-    - Landing slot prediction
-    - Propagation delay estimation
 
-20. **Aggressive Priority Fee Bidder** (TechSpec #19)
-    - Competition-aware bidding
-    - Profit-capped fees
-    - Dynamic multipliers
+23. **Slot Prediction Engine with Leader-Aware Routing** (TechSpec #17)
+    - Leader schedule caching (refresh per epoch, ~2 days)
+    - Landing slot prediction based on propagation delay + processing time
+    - Propagation delay estimation per RPC endpoint
+    - **Leader-aware submission routing**: Route transactions to RPC with lowest RTT to current leader
+    - **Leader flip handling**: If leader changes before submission, re-price fees or skip if new leader has poor path
+    - Track `first_seen → landed_slot` and `leader_at_send vs leader_at_land` per provider
+    - **Reasoning**: Current leader determines transaction inclusion. Submitting to an RPC far from the active leader wastes fees. Dynamic routing to leader-adjacent RPCs improves land rates.
 
-21. **Ultra-Short TTL Exit Logic** (TechSpec #23)
-    - Time-based exit triggers
-    - Slippage escalation
-    - Emergency exits
+24. **Ultra-Short TTL Exit Logic** (TechSpec #23)
+    - Time-based exit triggers (5-20 second maximum hold time)
+    - Slippage escalation over time (5% → 10% → 20% as TTL approaches)
+    - Emergency exits at market (no slippage limit) if TTL expires
+    - Asyncio task per position for TTL monitoring
+    - Exit triggers: dev buy confirmed OR 20s elapsed (whichever first)
+    - **Reasoning**: Frontrun profits evaporate quickly. Strict TTL prevents bag-holding illiquid tokens. Escalating slippage accepts worse pricing to guarantee exit before total loss.
 
-22. **Latency Budget Enforcer** (TechSpec #25)
-    - Per-stage timing
-    - Budget violation detection
-    - Automatic abort logic
-
-23. **Deterministic Event Sequencer** (TechSpec #24)
-    - Monotonic event ordering
-    - Out-of-order detection
-    - Sequence gap handling
+25. **Deterministic Event Sequencer** (TechSpec #24)
+    - Monotonic event ordering with sequence numbers
+    - Out-of-order detection and reordering (buffer 10 events)
+    - Sequence gap handling (wait 100ms, then skip)
+    - Discard events with sequence gap >10
+    - Use monotonic clock for event timestamps (not wallclock)
+    - **Reasoning**: Out-of-order events from multiple RPC feeds cause race conditions. Monotonic sequencing ensures deterministic decision-making even with network jitter.
 
 **Deliverables:**
 ```
 frontrun/
 ├── core/
-│   ├── slot_predictor.py        # Slot prediction
-│   ├── aggressive_fees.py       # Aggressive bidding
-│   ├── ttl_exit.py              # Time-based exits
-│   ├── latency_enforcer.py      # Latency budgets
-│   └── event_sequencer.py       # Event ordering
+│   ├── slot_predictor.py        # Slot prediction with leader-aware routing
+│   ├── ttl_exit.py              # Time-based exits with slippage escalation
+│   └── event_sequencer.py       # Event ordering with monotonic clock
 ├── tests/
 │   ├── unit/
 │   │   ├── test_slot_predictor.py
-│   │   ├── test_aggressive_fees.py
+│   │   ├── test_leader_routing.py        # Test leader-aware routing logic
 │   │   ├── test_ttl_exit.py
-│   │   ├── test_latency_enforcer.py
 │   │   └── test_event_sequencer.py
 │   └── integration/
-│       └── test_timing_system.py
+│       ├── test_timing_system.py
+│       ├── test_leader_flip_handling.py  # Test leader change scenarios
+│       └── test_ttl_enforcement.py       # Test forced exits
 └── docs/
-    └── TIMING_OPTIMIZATION.md
+    └── TIMING_OPTIMIZATION.md     # Slot prediction, TTL exits, sequencing
 ```
 
+**Phase 5 Hardening Notes:**
+- **No hot-path optimization yet**: Defer process pinning, GC tuning, uvloop until Phase 6 after profiling
+- **Cheap wins to include**: Pre-allocate transaction templates, async logging (don't block on I/O)
+- **Measurement first**: Profile actual bottlenecks before optimizing
+
 **Testing Requirements:**
-- [ ] Unit tests: Test timing logic with mock data
-- [ ] Integration tests: Measure actual latencies on devnet
-- [ ] Performance tests: Verify <100ms total pipeline latency
-- [ ] Acceptance: 100% abort when budget exceeded
+- [ ] Unit tests: Test timing logic with mock data, leader flip scenarios
+- [ ] Integration tests: Measure actual latencies on devnet with real leader schedule
+- [ ] Performance tests: Verify <100ms total pipeline latency maintained
+- [ ] Leader routing tests: Verify routing to lowest-RTT RPC for current leader >90% of time
+- [ ] TTL tests: Verify all positions exit within 25 seconds across 100 test trades
+- [ ] Sequencing tests: Verify deterministic ordering with simulated out-of-order events
 
 **Acceptance Criteria:**
 - ✅ Slot predictions within ±2 slots for >80% of transactions
-- ✅ Aggressive fees win >90% of races against competition
+- ✅ Leader-aware routing selects optimal RPC >90% of time
+- ✅ Leader flip handling re-prices or skips correctly (no stale fee submissions)
 - ✅ All positions exit within 25 seconds (TTL enforced)
-- ✅ Latency budgets enforced with 100% accuracy
-- ✅ Events processed in order 100% of time (within tolerance)
+- ✅ Slippage escalation works: 5% → 10% → 20% as TTL approaches expiry
+- ✅ Events processed in deterministic order 100% of time (within 10-event buffer)
+- ✅ Out-of-order events reordered correctly, gaps >10 handled gracefully
+- ✅ Track and log `leader_at_send` vs `leader_at_land` for post-analysis
 
 **Time Estimate**: 1 week
 
@@ -450,23 +540,66 @@ frontrun/
 
 ### Phase 6: Advanced Optimization & Production Hardening (Week 8-10)
 
-**Goal**: Production-ready deployment with full observability and reliability
+**Goal**: Production-ready deployment with full observability, reliability, and performance optimization based on real profiling data
 
-**Features to Implement:**
-24. **Pre-Signed Transaction Templates** (TechSpec #18)
-    - Template creation
-    - Mint substitution
-    - Expiry handling
+**Advanced Features:**
 
-25. **Same-Slot Bundle Constructor** (TechSpec #21)
-    - Jito bundle support
-    - Buy+sell bundling
-    - Tip optimization
+26. **Pre-Signed Transaction Templates** (TechSpec #18)
+    - Template creation with dummy mint address (all zeros)
+    - Mint substitution at runtime (memcpy-style byte replacement)
+    - Expiry handling (invalidate after 30s to match blockhash TTL)
+    - 10-20ms savings vs fresh transaction build
+    - **Reasoning**: In sub-100ms races, saving 15ms on transaction construction is meaningful. Pre-signing removes signing latency from hot path.
 
-26. **Co-location Network Optimizer** (TechSpec #26)
-    - Validator latency mapping
-    - Optimal RPC routing
-    - QUIC tuning
+27. **Same-Slot Bundle Constructor** (TechSpec #21)
+    - Jito bundle support (buy+sell in single atomic bundle)
+    - Buy+sell bundling for same-slot execution
+    - Tip optimization (start low, escalate only if bundles rejected)
+    - Jito searcher tip account rotation per epoch
+    - **Reasoning**: Bundles guarantee atomic execution (both land or neither), eliminating stuck-position risk. Same guard rails apply: profit-capped tips, EV validation.
+
+28. **Co-location Network Optimizer** (TechSpec #26)
+    - Validator latency mapping (ping via QUIC probes)
+    - Optimal RPC routing per validator (already partially in Phase 4)
+    - QUIC parameter tuning (max_idle_timeout, max_datagram_size, BBR congestion control)
+    - **Reasoning**: Fine-tuning network parameters can save 5-20ms. Only optimize after measuring baseline; diminishing returns vs Phase 4 health routing.
+
+**Production Hardening:**
+
+29. **Full Shadow Production Replay** (Enhanced from Phase 4 minimal buffer)
+    - Record all live Geyser streams to persistent log (1-hour rolling window)
+    - Offline replay harness: reprocess recorded events and compare decisions
+    - Continuous replay in parallel with live (catch regressions before deploy)
+    - Determinism validation: 100% decision match required to pass CI/CD
+    - **Reasoning**: Extends Phase 4's 1-minute buffer to full historical replay. Catches regressions, non-determinism, and allows A/B testing strategy changes offline.
+
+30. **Permanent Canary Bot**
+    - Every slot, submit a harmless "health check" transaction (tiny transfer to self)
+    - Log full lifecycle: submit_time → landed_slot → confirmation_time
+    - Track drift over time; alert if p99 latency degrades >20%
+    - Independent of trading logic (always running, even if strategy paused)
+    - **Reasoning**: Continuous validation that infrastructure path works. Detects degradation before it impacts real trades.
+
+31. **SQLite to Event Log Migration** (Evaluate, not mandatory)
+    - Current: SQLite with WAL mode (sufficient for Phase 4-5)
+    - Evaluate for Phase 6: Append-only event log (NATS, Redpanda, or even local file)
+    - Benefits: Crash-only semantics, easier replication, no lock contention
+    - Migration path: Keep SQLite for queries, add event log for writes
+    - **Decision criteria**: Only migrate if SQLite shows instability under load testing
+    - **Reasoning**: SQLite with WAL handles our throughput (100 trades/day). Event log adds complexity without clear ROI unless we see problems.
+
+**Hot-Path Performance Optimization (After Profiling):**
+
+32. **Measured Performance Optimization**
+    - Profile Phase 4-5 implementation under load to find actual bottlenecks
+    - Optimization candidates (only if profiling shows need):
+      - Process pinning (pin strategy to dedicated core, signer to another)
+      - Python GC tuning (manual GC triggers between bursts, disable during critical sections)
+      - uvloop (if asyncio overhead >5ms in profiling)
+      - Pre-allocation (transaction buffers, instruction arrays)
+      - Reduce object allocation in hot path (reuse objects, avoid intermediate copies)
+    - Target: <50ms p95 end-to-end latency (detect → submit)
+    - **Reasoning**: Optimize based on data, not guesses. Premature optimization wastes time; targeted optimization based on profiling yields high ROI.
 
 **Production Infrastructure:**
 - [ ] Dual-region deployment (US-East + EU-Central or US-West)
@@ -483,48 +616,86 @@ frontrun/
 ├── core/
 │   ├── tx_templates.py          # Pre-signed templates
 │   ├── bundle_constructor.py    # Jito bundles
-│   └── network_optimizer.py     # Co-location optimization
+│   ├── network_optimizer.py     # Co-location optimization
+│   └── canary_bot.py            # Permanent health check bot
+├── services/
+│   ├── shadow_replay.py         # Full production replay harness
+│   └── event_log.py             # Optional: Event log for position writes
 ├── scripts/
 │   ├── deploy.sh                # Blue-green deployment
 │   ├── rollback.sh              # Emergency rollback
 │   ├── rotate_keys.sh           # Key rotation
-│   └── health_check.sh          # Continuous health checks
+│   ├── health_check.sh          # Continuous health checks
+│   └── profile_hotpath.sh       # Profiling script for optimization targets
 ├── infra/
 │   ├── docker/
 │   │   ├── Dockerfile
 │   │   └── docker-compose.yml
 │   ├── monitoring/
 │   │   ├── prometheus.yml
-│   │   └── grafana_dashboards/
-│   └── alerts/
-│       └── alertmanager.yml
+│   │   ├── grafana_dashboards/
+│   │   │   ├── latency_dashboard.json
+│   │   │   ├── pnl_dashboard.json
+│   │   │   └── rpc_health_dashboard.json
+│   │   └── alerts/
+│   │       └── alertmanager.yml
+│   └── replay_logs/             # Geyser stream recordings for replay
 ├── tests/
 │   ├── load/
-│   │   ├── test_load.py         # Load testing (1000 concurrent)
-│   │   └── test_chaos.py        # Chaos testing (failures)
-│   └── e2e/
-│       └── test_production.py   # Full production simulation
+│   │   ├── test_load.py         # Load testing (100 tx/sec sustained)
+│   │   ├── test_chaos.py        # Chaos testing (RPC failures, delays)
+│   │   └── test_profiling.py    # Performance profiling tests
+│   ├── e2e/
+│   │   ├── test_production.py   # Full production simulation
+│   │   └── test_replay.py       # Shadow replay validation
+│   └── soak/
+│       └── test_24hr_soak.py    # 24-hour continuous operation
 └── docs/
     ├── DEPLOYMENT.md            # Deployment procedures
     ├── RUNBOOK.md               # Incident response
-    └── MONITORING.md            # Observability guide
+    ├── MONITORING.md            # Observability guide
+    ├── PROFILING.md             # Performance profiling guide
+    └── OPTIMIZATION.md          # Post-profiling optimization notes
 ```
 
+**Profiling Methodology:**
+1. Run Phase 4-5 implementation under realistic load (50-100 simulated events/sec)
+2. Use `cProfile` + `snakeviz` for Python profiling
+3. Use `py-spy` for sampling profiler (low overhead, production-safe)
+4. Measure: CPU time per stage, GC pauses, lock contention, network I/O wait
+5. Identify bottlenecks: any stage >10ms or >10% total CPU
+6. Optimize only proven bottlenecks; re-profile to verify improvement
+
 **Testing Requirements:**
-- [ ] Load tests: 1000 concurrent positions, 100 tx/sec
-- [ ] Chaos tests: Random RPC failures, network delays, OOO events
-- [ ] End-to-end tests: Complete frontrun simulation on devnet
-- [ ] Soak tests: 24-hour continuous operation
-- [ ] Acceptance: >99% uptime, <100ms p99 latency
+- [ ] Load tests: 100 tx/sec sustained, 500 concurrent positions
+- [ ] Chaos tests: Random RPC failures, network delays, out-of-order events
+- [ ] End-to-end tests: Complete frontrun simulation on devnet (100 trades)
+- [ ] Soak tests: 24-hour continuous operation on mainnet simulation mode
+- [ ] Acceptance: >99% uptime, <50ms p95 end-to-end latency (after optimization)
+- [ ] Profiling tests: Identify and document all stages >10ms
+- [ ] Replay tests: 100% decision determinism on 10,000 event replays
+- [ ] Canary tests: Continuous health check bot runs 24hrs without failures
+
+**Hard Acceptance Gates (CI/CD Blockers):**
+- ✅ Latency: p95 ≤ 50ms end-to-end (detect → submit), p99 ≤ 90ms
+- ✅ RPC skew: Median arrival skew between providers ≤ 1.5 slots, p95 ≤ 3 slots
+- ✅ Economics: Fee burn / realized PnL ≤ 0.25 on 48-hour rolling window (LCB)
+- ✅ Stability: No signer faults per 100,000 signatures; <1% transaction build failures
+- ✅ Determinism: 100% decision match on shadow replay (no nondeterminism)
+- ✅ SQLite: Stable under 100 concurrent position writes (no corruption or locks >5s)
 
 **Acceptance Criteria:**
-- ✅ Template substitution saves 10-20ms vs fresh builds
-- ✅ Jito bundles submit successfully (>50% acceptance rate)
-- ✅ Network optimizer routes to best RPC >90% of time
-- ✅ Full deployment completes in <5 minutes
+- ✅ Template substitution saves 10-20ms vs fresh builds (measured)
+- ✅ Jito bundles submit successfully (>50% acceptance rate on mainnet)
+- ✅ Network optimizer QUIC tuning reduces RTT by measurable amount (baseline vs optimized)
+- ✅ Full deployment completes in <5 minutes (blue-green swap)
 - ✅ Rollback completes in <1 minute
-- ✅ All monitoring and alerting functional
-- ✅ 24-hour soak test passes without crashes
+- ✅ All monitoring and alerting functional (alerts fire correctly on test failures)
+- ✅ 24-hour soak test passes without crashes or degradation
+- ✅ Canary bot detects simulated RPC degradation within 2 minutes
+- ✅ Shadow replay catches injected nondeterminism 100% of time
+- ✅ Profiling identifies actual bottlenecks (if any exist >10ms per stage)
+- ✅ Hot-path optimizations (if applied) show >20% improvement in profiling
 
 **Dependencies:**
 ```
