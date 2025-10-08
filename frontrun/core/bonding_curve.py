@@ -21,31 +21,48 @@ BPS_DENOMINATOR = 10_000
 
 @dataclass
 class BondingCurveState:
-    """Bonding curve state from on-chain account"""
-    virtual_token_reserves: int  # Virtual token reserves
-    virtual_sol_reserves: int  # Virtual SOL reserves
-    real_token_reserves: int  # Real token reserves
-    real_sol_reserves: int  # Real SOL reserves
-    token_total_supply: int  # Total token supply
+    """Bonding curve state from on-chain account
+
+    All values in base units:
+    - Token values: base token units (typically 6 decimals for pump.fun)
+    - SOL values: lamports (9 decimals)
+    """
+    virtual_token_reserves: int  # Virtual token reserves (base units)
+    virtual_sol_reserves: int  # Virtual SOL reserves (lamports)
+    real_token_reserves: int  # Real token reserves (base units)
+    real_sol_reserves: int  # Real SOL reserves (lamports)
+    token_total_supply: int  # Total token supply (base units)
     complete: bool  # Whether curve is complete (migrated to Raydium)
 
 
 @dataclass
 class BuyQuote:
-    """Quote for buying tokens"""
-    tokens_out: int  # Tokens received (after fees)
+    """Quote for buying tokens
+
+    All values in base units:
+    - tokens_out: base token units
+    - sol_in: lamports
+    - price_per_token_sol: lamports per base token unit
+    """
+    tokens_out: int  # Tokens received (base units, after fees)
     sol_in: int  # SOL to spend (lamports)
-    price_per_token_sol: float  # Effective price per token
+    price_per_token_sol: float  # Effective price (lamports per base token unit)
     price_impact_pct: float  # Price impact percentage
     fee_lamports: int  # Fee amount in lamports
 
 
 @dataclass
 class SellQuote:
-    """Quote for selling tokens"""
-    sol_out: int  # SOL received (after fees, lamports)
-    tokens_in: int  # Tokens to sell
-    price_per_token_sol: float  # Effective price per token
+    """Quote for selling tokens
+
+    All values in base units:
+    - sol_out: lamports
+    - tokens_in: base token units
+    - price_per_token_sol: lamports per base token unit
+    """
+    sol_out: int  # SOL received (lamports, after fees)
+    tokens_in: int  # Tokens to sell (base units)
+    price_per_token_sol: float  # Effective price (lamports per base token unit)
     price_impact_pct: float  # Price impact percentage
     fee_lamports: int  # Fee amount in lamports
 
@@ -118,11 +135,11 @@ class BondingCurveCalculator:
             curve_state.virtual_sol_reserves + amount_after_fee
         )
 
-        # Calculate effective price per token
+        # Calculate effective price per token (lamports per base token unit)
         if tokens_out > 0:
-            price_per_token_sol = amount_sol_lamports / tokens_out / 1e9  # Convert lamports to SOL
+            price_per_token = amount_sol_lamports / tokens_out
         else:
-            price_per_token_sol = 0.0
+            price_per_token = 0.0
 
         # Calculate price impact
         price_impact_pct = self._calculate_price_impact(
@@ -134,7 +151,7 @@ class BondingCurveCalculator:
             "buy_quote_calculated",
             sol_in=amount_sol_lamports,
             tokens_out=tokens_out,
-            price_per_token=price_per_token_sol,
+            price_per_token=price_per_token,
             price_impact_pct=price_impact_pct,
             fee_lamports=fee_lamports
         )
@@ -144,7 +161,7 @@ class BondingCurveCalculator:
         return BuyQuote(
             tokens_out=tokens_out,
             sol_in=amount_sol_lamports,
-            price_per_token_sol=price_per_token_sol,
+            price_per_token_sol=price_per_token,
             price_impact_pct=price_impact_pct,
             fee_lamports=fee_lamports
         )
@@ -197,11 +214,11 @@ class BondingCurveCalculator:
         )
         fee_lamports = sol_without_fee - sol_out
 
-        # Calculate effective price per token (sol_out is in lamports, result is SOL per token)
+        # Calculate effective price per token (lamports per base token unit)
         if amount_tokens > 0:
-            price_per_token_sol = sol_out / amount_tokens
+            price_per_token = sol_out / amount_tokens
         else:
-            price_per_token_sol = 0.0
+            price_per_token = 0.0
 
         # Calculate price impact (use amount_after_fee since that's what actually gets swapped)
         price_impact_pct = self._calculate_price_impact(
@@ -213,7 +230,7 @@ class BondingCurveCalculator:
             "sell_quote_calculated",
             tokens_in=amount_tokens,
             sol_out=sol_out,
-            price_per_token=price_per_token_sol,
+            price_per_token=price_per_token,
             price_impact_pct=price_impact_pct,
             fee_lamports=fee_lamports
         )
@@ -223,34 +240,34 @@ class BondingCurveCalculator:
         return SellQuote(
             sol_out=sol_out,
             tokens_in=amount_tokens,
-            price_per_token_sol=price_per_token_sol,
+            price_per_token_sol=price_per_token,
             price_impact_pct=price_impact_pct,
             fee_lamports=fee_lamports
         )
 
     def get_current_price(self, curve_state: BondingCurveState) -> float:
         """
-        Get current spot price (SOL per token)
+        Get current spot price (lamports per base token unit)
 
         Args:
             curve_state: Current bonding curve state
 
         Returns:
-            Current price in SOL per token
+            Current price in lamports per base token unit
 
         Note:
             This is the instantaneous price at current reserves.
             Actual trade price will differ due to slippage.
+            Returns lamports per base token unit (both in base units).
         """
         if curve_state.virtual_token_reserves <= 0:
             return 0.0
 
-        # Price = sol_reserves / token_reserves
-        # Convert from lamports to SOL by dividing by 1e9
-        price_lamports_per_token = curve_state.virtual_sol_reserves / curve_state.virtual_token_reserves
-        price_sol_per_token = price_lamports_per_token / 1e9
+        # Price = sol_reserves / token_reserves (both in base units)
+        # Returns lamports per base token unit
+        price = curve_state.virtual_sol_reserves / curve_state.virtual_token_reserves
 
-        return price_sol_per_token
+        return price
 
     def calculate_price_impact(
         self,
@@ -312,29 +329,25 @@ class BondingCurveCalculator:
             target_sol_out: Desired SOL output in lamports
 
         Returns:
-            Estimated tokens needed (approximate)
+            Estimated tokens needed (in base token units, approximate)
         """
         if target_sol_out <= 0:
             return 0
 
         # Start with linear approximation
-        current_price_sol_per_token = self.get_current_price(curve_state)
-        if current_price_sol_per_token <= 0:
+        current_price_lamports_per_token = self.get_current_price(curve_state)
+        if current_price_lamports_per_token <= 0:
             return 0
 
-        # Convert target from lamports to SOL
-        target_sol = target_sol_out / 1e9
-
-        # Initial estimate: tokens = target_sol / price_per_token
-        estimate = int(target_sol / current_price_sol_per_token)
+        # Initial estimate: tokens = target_lamports / price_lamports_per_token
+        estimate = int(target_sol_out / current_price_lamports_per_token)
 
         # Refine with one iteration
         quote = self.calculate_sell_price(curve_state, estimate)
         if quote.sol_out < target_sol_out:
             # Need more tokens
             shortfall_lamports = target_sol_out - quote.sol_out
-            shortfall_sol = shortfall_lamports / 1e9
-            adjustment = int(shortfall_sol / current_price_sol_per_token)
+            adjustment = int(shortfall_lamports / current_price_lamports_per_token)
             estimate += adjustment
 
         return estimate

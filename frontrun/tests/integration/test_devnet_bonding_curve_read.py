@@ -309,16 +309,19 @@ async def test_sell_quote_matches_reserve_change(bonding_curve_calculator):
     quote = bonding_curve_calculator.calculate_sell_price(initial_state, sell_amount)
 
     # Calculate expected SOL out using constant product formula
-    # sol_out = (virtual_sol * tokens) / (virtual_token + tokens)
-    sol_before_fee = (
-        initial_state.virtual_sol_reserves * sell_amount
-    ) // (
-        initial_state.virtual_token_reserves + sell_amount
-    )
+    # NOTE: Fee is applied to INPUT tokens BEFORE the swap (matches on-chain behavior)
+    # fee_tokens = tokens * fee_bps / 10000
+    # amount_after_fee = tokens - fee_tokens
+    # sol_out = (virtual_sol * amount_after_fee) / (virtual_token + amount_after_fee)
 
-    # Apply 1% fee
-    fee = (sol_before_fee * 100) // 10000
-    expected_sol_out = sol_before_fee - fee
+    fee_tokens = (sell_amount * 100) // 10000  # 1% fee
+    amount_after_fee = sell_amount - fee_tokens
+
+    expected_sol_out = (
+        initial_state.virtual_sol_reserves * amount_after_fee
+    ) // (
+        initial_state.virtual_token_reserves + amount_after_fee
+    )
 
     assert quote.sol_out == expected_sol_out, \
         f"SOL out should be {expected_sol_out}, got {quote.sol_out}"
@@ -326,7 +329,8 @@ async def test_sell_quote_matches_reserve_change(bonding_curve_calculator):
     logger.info(
         "sell_quote_reserve_validation",
         sol_out=quote.sol_out / 1e9,
-        expected_sol_out=expected_sol_out / 1e9
+        expected_sol_out=expected_sol_out / 1e9,
+        fee_tokens=fee_tokens
     )
 
 
