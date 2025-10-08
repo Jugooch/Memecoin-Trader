@@ -29,37 +29,38 @@ def main():
         print("  python run_tests.py fast         # Run unit tests (fast)")
         print("  python run_tests.py coverage     # Run with coverage report")
         print("  python run_tests.py phase1       # Run Phase 1 tests only")
+        print("  python run_tests.py phase2       # Run Phase 2 tests only")
         return 1
 
     mode = sys.argv[1].lower()
 
     if mode == "all":
         return run_command(
-            [sys.executable, "-m", "pytest", "tests/", "-v"],
+            [sys.executable, "-m", "pytest", ".", "-v"],
             "Running All Tests"
         )
 
     elif mode == "unit":
         return run_command(
-            [sys.executable, "-m", "pytest", "tests/unit/", "-v"],
+            [sys.executable, "-m", "pytest", "unit/", "-v"],
             "Running Unit Tests Only"
         )
 
     elif mode == "integration":
         return run_command(
-            [sys.executable, "-m", "pytest", "tests/integration/", "-v"],
+            [sys.executable, "-m", "pytest", "integration/", "-v"],
             "Running Integration Tests"
         )
 
     elif mode == "fast":
         return run_command(
-            [sys.executable, "-m", "pytest", "tests/unit/", "-v", "-m", "not slow"],
+            [sys.executable, "-m", "pytest", "unit/", "-v", "-m", "not slow"],
             "Running Fast Unit Tests"
         )
 
     elif mode == "coverage":
         returncode = run_command(
-            [sys.executable, "-m", "pytest", "tests/", "--cov=core", "--cov-report=html", "--cov-report=term"],
+            [sys.executable, "-m", "pytest", ".", "--cov=core", "--cov-report=html", "--cov-report=term"],
             "Running Tests with Coverage"
         )
 
@@ -77,8 +78,8 @@ def main():
         print("\n📦 Running Unit Tests...")
         returncode = subprocess.run([
             sys.executable, "-m", "pytest",
-            "tests/unit/test_config.py",
-            "tests/unit/test_metrics.py",
+            "unit/test_config.py",
+            "unit/test_metrics.py",
             "-v"
         ]).returncode
 
@@ -89,7 +90,37 @@ def main():
         print("\n🌐 Running Integration Tests...")
         returncode = subprocess.run([
             sys.executable, "-m", "pytest",
-            "tests/integration/test_phase1_integration.py",
+            "integration/test_phase1_integration.py",
+            "-v",
+            "-m", "integration and not slow"
+        ]).returncode
+
+        return returncode
+
+    elif mode == "phase2":
+        print("\n" + "="*60)
+        print("  Phase 2 Complete Test Suite")
+        print("="*60 + "\n")
+
+        # Unit tests
+        print("\n📦 Running Phase 2 Unit Tests...")
+        returncode = subprocess.run([
+            sys.executable, "-m", "pytest",
+            "unit/test_tx_builder.py",
+            "unit/test_tx_signer.py",
+            "unit/test_tx_submitter.py",
+            "unit/test_priority_fees.py",
+            "-v"
+        ]).returncode
+
+        if returncode != 0:
+            return returncode
+
+        # Integration tests
+        print("\n🌐 Running Phase 2 Integration Tests...")
+        returncode = subprocess.run([
+            sys.executable, "-m", "pytest",
+            "integration/test_phase2_integration.py",
             "-v",
             "-m", "integration and not slow"
         ]).returncode

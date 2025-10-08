@@ -1,0 +1,3 @@
+Public: H69CdbVZWMrMA2cwQYCSRTY67NP2mmYZzDdGLkbVcFix
+Private: devnet-test-wallet
+Fill up at: "https://faucet.solana.com"

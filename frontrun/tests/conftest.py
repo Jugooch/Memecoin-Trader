@@ -142,6 +142,58 @@ def temp_log_file(tmp_path):
     return str(log_file)
 
 
+# ============================================================================
+# Phase 2 Fixtures (Transaction Infrastructure)
+# ============================================================================
+
+@pytest.fixture
+def test_keypair():
+    """
+    Create test keypair for signing
+
+    Returns Keypair instance
+    """
+    from solders.keypair import Keypair
+    return Keypair()
+
+
+@pytest.fixture
+def test_transaction(test_keypair):
+    """
+    Create test unsigned transaction
+
+    Returns Transaction instance
+    """
+    from solders.transaction import Transaction
+    from solders.message import Message
+    from solders.instruction import Instruction, AccountMeta
+    from solders.pubkey import Pubkey
+    from solders.hash import Hash
+
+    instruction = Instruction(
+        program_id=Pubkey.default(),
+        accounts=[AccountMeta(pubkey=test_keypair.pubkey(), is_signer=True, is_writable=True)],
+        data=bytes([0, 1, 2, 3])
+    )
+    message = Message.new_with_blockhash(
+        [instruction],
+        test_keypair.pubkey(),
+        Hash.default()
+    )
+    return Transaction.new_unsigned(message)
+
+
+@pytest.fixture
+def test_blockhash():
+    """
+    Create test blockhash
+
+    Returns Hash instance
+    """
+    from solders.hash import Hash
+    return Hash.default()
+
+
 # Integration test markers
 def pytest_configure(config):
     """Register custom pytest markers"""

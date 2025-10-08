@@ -6,6 +6,7 @@ Handles WebSocket connections with automatic failover and health monitoring
 import asyncio
 import json
 import time
+import aiohttp
 from typing import Dict, List, Optional, Any, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
@@ -80,6 +81,9 @@ class RPCManager:
         self._subscription_id_counter = 0
         self._active_subscriptions: Dict[int, str] = {}  # sub_id -> endpoint_label
 
+        # HTTP client session for HTTP RPC calls
+        self._http_session: Optional[aiohttp.ClientSession] = None
+
         # Initialize connections
         for endpoint in config.endpoints:
             self.connections[endpoint.label] = RPCConnection(endpoint=endpoint)
@@ -98,6 +102,9 @@ class RPCManager:
 
         self._running = True
         logger.info("rpc_manager_starting")
+
+        # Create HTTP session for HTTP RPC calls (no default timeout, set per request)
+        self._http_session = aiohttp.ClientSession()
 
         # Connect to all endpoints
         connect_tasks = [
@@ -126,6 +133,11 @@ class RPCManager:
                 await self._health_check_task
             except asyncio.CancelledError:
                 pass
+
+        # Close HTTP session
+        if self._http_session:
+            await self._http_session.close()
+            self._http_session = None
 
         # Close all connections
         close_tasks = [
@@ -225,6 +237,88 @@ class RPCManager:
 
         # All endpoints failed
         raise Exception(f"All RPC endpoints failed. Last error: {last_error}")
+
+    async def call_http_rpc(
+        self,
+        method: str,
+        params: List[Any],
+        timeout: float = 10.0
+    ) -> Dict[str, Any]:
+        """
+        Make an HTTP RPC call with automatic failover
+
+        Args:
+            method: JSON-RPC method name
+            params: Method parameters
+            timeout: Request timeout in seconds
+
+        Returns:
+            RPC response dict
+
+        Raises:
+            Exception: If all endpoints fail
+        """
+        if not self._http_session:
+            raise Exception("HTTP session not initialized. Call start() first.")
+
+        last_error = None
+
+        # Try each endpoint in priority order
+        for conn in sorted(self.connections.values(), key=lambda c: c.endpoint.priority):
+            try:
+                with LatencyTimer(metrics, "http_rpc_call", {"endpoint": conn.endpoint.label, "method": method}):
+                    # Build JSON-RPC request
+                    request_id = int(time.time() * 1000000)
+                    payload = {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "method": method,
+                        "params": params
+                    }
+
+                    # Send HTTP POST request with timeout using asyncio.wait_for
+                    async def _make_request():
+                        async with self._http_session.post(
+                            conn.endpoint.url,
+                            json=payload
+                        ) as response:
+                            return await response.json()
+
+                    result = await asyncio.wait_for(_make_request(), timeout=timeout)
+
+                    # Check for RPC errors
+                    if "error" in result:
+                        error_msg = result["error"].get("message", str(result["error"]))
+                        raise Exception(f"RPC error: {error_msg}")
+
+                    # Success - reset failure counter
+                    conn.consecutive_failures = 0
+                    metrics.increment_counter("http_rpc_success", labels={"endpoint": conn.endpoint.label})
+
+                    return result
+
+            except Exception as e:
+                logger.warning(
+                    "http_rpc_call_failed",
+                    endpoint=conn.endpoint.label,
+                    method=method,
+                    error=str(e)
+                )
+                conn.consecutive_failures += 1
+                metrics.increment_counter("http_rpc_errors", labels={"endpoint": conn.endpoint.label})
+
+                last_error = e
+
+                # Check if we should mark endpoint unhealthy
+                if conn.consecutive_failures >= self.config.failover_threshold_errors:
+                    logger.error(
+                        "http_rpc_endpoint_failing_over",
+                        endpoint=conn.endpoint.label,
+                        failures=conn.consecutive_failures
+                    )
+
+        # All endpoints failed
+        raise Exception(f"All HTTP RPC endpoints failed. Last error: {last_error}")
 
     async def subscribe(
         self,
@@ -446,9 +540,8 @@ class RPCManager:
         """
         Periodic health check loop
 
-        Uses built-in WebSocket ping/pong instead of RPC calls.
-        The websockets library automatically sends ping frames and
-        closes the connection if pong isn't received.
+        Performs actual RPC health checks via getHealth or getSlot methods
+        to detect RPC issues beyond just WebSocket connectivity.
         """
         while self._running:
             try:
@@ -457,10 +550,50 @@ class RPCManager:
                 # Check each connection status
                 for label, conn in self.connections.items():
                     try:
-                        is_healthy = (
+                        # First check: WebSocket connection status
+                        websocket_connected = (
                             conn.status == ConnectionStatus.CONNECTED and
                             conn.websocket is not None and
-                            not conn.websocket.closed and
+                            not conn.websocket.closed
+                        )
+
+                        # Second check: Actual RPC functionality
+                        rpc_functional = False
+                        if websocket_connected:
+                            try:
+                                # Try to get slot to verify RPC is functional
+                                start_time = time.perf_counter()
+                                result = await asyncio.wait_for(
+                                    self._send_rpc_request(conn, "getSlot", [], timeout=5.0),
+                                    timeout=5.0
+                                )
+                                latency_ms = (time.perf_counter() - start_time) * 1000
+
+                                # Verify we got a valid slot number
+                                slot = result if isinstance(result, int) else result.get("result", 0)
+                                rpc_functional = slot > 0
+
+                                # Record latency
+                                metrics.record_latency("health_check", latency_ms, labels={"endpoint": label})
+
+                                # Check if latency is too high
+                                if latency_ms > self.config.failover_threshold_latency_ms:
+                                    logger.warning(
+                                        "health_check_high_latency",
+                                        endpoint=label,
+                                        latency_ms=latency_ms,
+                                        threshold_ms=self.config.failover_threshold_latency_ms
+                                    )
+                                    rpc_functional = False
+
+                            except Exception as e:
+                                logger.debug("health_check_rpc_call_failed", endpoint=label, error=str(e))
+                                rpc_functional = False
+
+                        # Overall health determination
+                        is_healthy = (
+                            websocket_connected and
+                            rpc_functional and
                             conn.consecutive_failures < self.config.failover_threshold_errors
                         )
 
@@ -469,10 +602,18 @@ class RPCManager:
                             logger.debug("health_check_passed", endpoint=label)
                         else:
                             metrics.set_gauge("rpc_healthy", 0.0, labels={"endpoint": label})
-                            logger.warning("health_check_failed", endpoint=label, status=conn.status.value)
+                            logger.warning(
+                                "health_check_failed",
+                                endpoint=label,
+                                status=conn.status.value,
+                                websocket_connected=websocket_connected,
+                                rpc_functional=rpc_functional
+                            )
 
                             # Trigger reconnect if unhealthy
-                            if conn.status == ConnectionStatus.CONNECTED and conn.websocket.closed:
+                            if conn.status == ConnectionStatus.CONNECTED and (
+                                conn.websocket.closed or not rpc_functional
+                            ):
                                 asyncio.create_task(self._reconnect_endpoint(label))
 
                     except Exception as e:

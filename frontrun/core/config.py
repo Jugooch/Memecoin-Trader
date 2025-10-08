@@ -53,11 +53,43 @@ class MetricsConfig:
 
 
 @dataclass
+class TransactionConfig:
+    """Transaction infrastructure configuration"""
+    # Transaction Builder
+    max_tx_size_bytes: int = 1232
+    default_compute_units: int = 200000
+    blockhash_cache_ttl_seconds: int = 30
+    enable_blockhash_cache: bool = True
+
+    # Transaction Signer
+    enable_key_rotation: bool = True
+    max_signatures_per_key: int = 10000
+    key_rotation_interval_minutes: int = 60
+    track_signature_count: bool = True
+
+    # Transaction Submitter
+    skip_preflight: bool = True
+    max_retries: int = 3
+    retry_delay_ms: int = 200
+    confirmation_timeout_s: int = 30
+    confirmation_poll_interval_s: float = 0.5
+    enable_confirmation_tracking: bool = True
+
+    # Priority Fees
+    fee_update_interval_s: int = 10
+    fee_lookback_slots: int = 150
+    min_priority_fee: int = 1000
+    max_priority_fee: int = 1000000
+    fee_cache_ttl_seconds: int = 10
+
+
+@dataclass
 class BotConfig:
     """Complete bot configuration"""
     rpc_config: RPCConfig
     log_config: LogConfig
     metrics_config: MetricsConfig
+    transaction_config: Optional[TransactionConfig] = None
 
 
 class ConfigurationManager:
@@ -235,10 +267,41 @@ class ConfigurationManager:
             export_interval_s=metrics_data.get('export_interval_s', 60)
         )
 
+        # Parse transaction config (optional, for Phase 2)
+        transaction_config = None
+        if 'transactions' in config:
+            tx_data = config['transactions']
+            transaction_config = TransactionConfig(
+                # Transaction Builder
+                max_tx_size_bytes=tx_data.get('max_tx_size_bytes', 1232),
+                default_compute_units=tx_data.get('default_compute_units', 200000),
+                blockhash_cache_ttl_seconds=tx_data.get('blockhash_cache_ttl_seconds', 30),
+                enable_blockhash_cache=tx_data.get('enable_blockhash_cache', True),
+                # Transaction Signer
+                enable_key_rotation=tx_data.get('enable_key_rotation', True),
+                max_signatures_per_key=tx_data.get('max_signatures_per_key', 10000),
+                key_rotation_interval_minutes=tx_data.get('key_rotation_interval_minutes', 60),
+                track_signature_count=tx_data.get('track_signature_count', True),
+                # Transaction Submitter
+                skip_preflight=tx_data.get('skip_preflight', True),
+                max_retries=tx_data.get('max_retries', 3),
+                retry_delay_ms=tx_data.get('retry_delay_ms', 200),
+                confirmation_timeout_s=tx_data.get('confirmation_timeout_s', 30),
+                confirmation_poll_interval_s=tx_data.get('confirmation_poll_interval_s', 0.5),
+                enable_confirmation_tracking=tx_data.get('enable_confirmation_tracking', True),
+                # Priority Fees
+                fee_update_interval_s=tx_data.get('fee_update_interval_s', 10),
+                fee_lookback_slots=tx_data.get('fee_lookback_slots', 150),
+                min_priority_fee=tx_data.get('min_priority_fee', 1000),
+                max_priority_fee=tx_data.get('max_priority_fee', 1000000),
+                fee_cache_ttl_seconds=tx_data.get('fee_cache_ttl_seconds', 10)
+            )
+
         return BotConfig(
             rpc_config=rpc_config,
             log_config=log_config,
-            metrics_config=metrics_config
+            metrics_config=metrics_config,
+            transaction_config=transaction_config
         )
 
 

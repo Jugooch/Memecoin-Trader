@@ -59,25 +59,28 @@ prometheus-client==0.20.0
     # Alternative: StatsD, OpenTelemetry (we may add later)
 
 # ============================================================================
-# Future Phase 2 Dependencies (Transaction Building)
-# Uncomment when starting Phase 2
+# Phase 2 Dependencies (Transaction Infrastructure)
 # ============================================================================
-# solders==0.21.0
-#     # Purpose: Solana SDK for Python (fast, Rust-based)
-#     # Used in: Phase 2 tx_builder.py, tx_signer.py
-#     # Why: Fastest Solana library for Python
-#
-# base58==2.1.1
-#     # Purpose: Base58 encoding/decoding
-#     # Used in: Phase 2 tx_signer.py (keypair handling)
-#     # Why: Solana uses Base58 for public keys
-#
-# PyNaCl==1.5.0
-#     # Purpose: Ed25519 cryptographic signatures
-#     # Used in: Phase 2 tx_signer.py
-#     # Why: Solana uses Ed25519 for transaction signing
+solders==0.21.0
+    # Purpose: Solana SDK for Python (fast, Rust-based)
+    # Used in: core/tx_builder.py, core/tx_signer.py, core/tx_submitter.py
+    # Why: Fastest Solana library for Python, built with Rust
+    # Alternative: solana-py (slower, pure Python)
+
+base58==2.1.1
+    # Purpose: Base58 encoding/decoding
+    # Used in: core/tx_signer.py (keypair handling)
+    # Why: Solana uses Base58 for public keys and signatures
+    # Alternative: None (standard for Solana)
+
+PyNaCl==1.5.0
+    # Purpose: Ed25519 cryptographic signatures
+    # Used in: core/tx_signer.py (transaction signing)
+    # Why: Solana uses Ed25519 for all transaction signatures
+    # Alternative: cryptography (but PyNaCl is standard)
 
 # ============================================================================
 # Testing Dependencies (install separately with requirements-dev.txt)
 # ============================================================================
 # See requirements-dev.txt for pytest, coverage, etc.
+aiosqlite>=0.19.0  # Async SQLite for position tracking
