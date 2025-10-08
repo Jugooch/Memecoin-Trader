@@ -52,6 +52,9 @@ solana balance tests/integration/devnet-test-wallet.json --url devnet
    # Should show: ~2 SOL
    ```
 
+4. **Set Wallet ENV**
+  $env:DEVNET_TEST_WALLET_PRIVATE_KEY = (Get-Content ./devnet-test-wallet.json -Raw).Trim()
+
 **⚠️ IMPORTANT**: Faucet has rate limits. If you hit the limit, wait 24 hours or use a different IP.
 
 ---
