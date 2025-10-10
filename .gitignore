@@ -115,3 +115,4 @@ tmp/
 .replit
 replit.nix
 frontrun/data/test-wallet.txt
+frontrun/data/phase2-wallet.json
