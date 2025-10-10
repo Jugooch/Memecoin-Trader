@@ -336,8 +336,8 @@ def test_get_current_price(calculator, standard_curve_state):
     """Test current spot price calculation"""
     price = calculator.get_current_price(standard_curve_state)
 
-    # Price = sol_reserves / token_reserves
-    expected_price = standard_curve_state.virtual_sol_reserves / standard_curve_state.virtual_token_reserves / 1e9
+    # Price = sol_reserves / token_reserves (lamports per base token unit)
+    expected_price = standard_curve_state.virtual_sol_reserves / standard_curve_state.virtual_token_reserves
 
     assert abs(price - expected_price) < 1e-15  # Float precision tolerance
 

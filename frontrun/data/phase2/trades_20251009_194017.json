@@ -1,0 +1,18 @@
+[
+  {
+    "timestamp": "2025-10-09T19:40:16.458545",
+    "mint": "B29RCThpmH1wezRJUnTBqrV7J3Apz5DLM6PUBgXbpump",
+    "signature_buy": "3ukdtksxw6F4CpSwh6GVPXN5QGBKsZMrGChhwttY8v7zQwAUyDW4EHCsFAGwpbd9uBVDgU3j1mm3LfhETbpd6ZW7",
+    "signature_sell": "",
+    "buy_amount_sol": 0.1,
+    "sell_amount_sol": 0.0,
+    "profit_sol": -0.1,
+    "fee_paid": 0,
+    "success": false,
+    "reason": "Failed: Sell failed: HTTP 400",
+    "dev_tx_slot": 372354705,
+    "our_tx_slot": 372354708,
+    "frontrun_success": false,
+    "slot_delta": 3
+  }
+]

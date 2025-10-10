@@ -14,7 +14,6 @@ from solders.sysvar import RENT
 
 from clients.pumpfun_client import (
     PumpFunClient,
-    BondingCurveAccount,
     PumpFunConfig,
     PUMP_FUN_PROGRAM_ID,
     TOKEN_PROGRAM_ID,
@@ -25,6 +24,7 @@ from clients.pumpfun_client import (
     BONDING_CURVE_SEED,
 )
 from core.rpc_manager import RPCManager
+from core.bonding_curve import BondingCurveState
 
 
 # =============================================================================
@@ -303,8 +303,8 @@ async def test_sell_instruction_account_ordering(pumpfun_client, example_mint, e
 # =============================================================================
 
 @pytest.mark.asyncio
-async def test_get_bonding_curve_account_success(pumpfun_client, example_mint):
-    """Test fetching bonding curve account data"""
+async def test_get_bonding_curve_state_success(pumpfun_client, example_mint):
+    """Test fetching bonding curve state data"""
     # Mock bonding curve data
     virtual_token_reserves = 1_000_000_000_000
     virtual_sol_reserves = 30_000_000_000  # 30 SOL
@@ -335,12 +335,12 @@ async def test_get_bonding_curve_account_success(pumpfun_client, example_mint):
         }
     }
 
-    # Fetch bonding curve account
-    curve = await pumpfun_client.get_bonding_curve_account(example_mint)
+    # Fetch bonding curve state
+    curve = await pumpfun_client.get_bonding_curve_state(example_mint)
 
     # Verify result
-    assert curve is not None, "Should return bonding curve account"
-    assert isinstance(curve, BondingCurveAccount)
+    assert curve is not None, "Should return bonding curve state"
+    assert isinstance(curve, BondingCurveState)
 
     assert curve.virtual_token_reserves == virtual_token_reserves
     assert curve.virtual_sol_reserves == virtual_sol_reserves
@@ -351,8 +351,8 @@ async def test_get_bonding_curve_account_success(pumpfun_client, example_mint):
 
 
 @pytest.mark.asyncio
-async def test_get_bonding_curve_account_not_found(pumpfun_client, example_mint):
-    """Test fetching bonding curve account when it doesn't exist"""
+async def test_get_bonding_curve_state_not_found(pumpfun_client, example_mint):
+    """Test fetching bonding curve state when it doesn't exist"""
     # Mock RPC response (account not found)
     pumpfun_client.rpc_manager.call_http_rpc.return_value = {
         "result": {
@@ -360,16 +360,16 @@ async def test_get_bonding_curve_account_not_found(pumpfun_client, example_mint)
         }
     }
 
-    # Fetch bonding curve account
-    curve = await pumpfun_client.get_bonding_curve_account(example_mint)
+    # Fetch bonding curve state
+    curve = await pumpfun_client.get_bonding_curve_state(example_mint)
 
     # Should return None
     assert curve is None, "Should return None for non-existent account"
 
 
 @pytest.mark.asyncio
-async def test_get_bonding_curve_account_invalid_data(pumpfun_client, example_mint):
-    """Test fetching bonding curve account with invalid data"""
+async def test_get_bonding_curve_state_invalid_data(pumpfun_client, example_mint):
+    """Test fetching bonding curve state with invalid data"""
     # Mock RPC response with data that's too short
     short_data = base64.b64encode(b'\x00' * 10).decode('utf-8')
 
@@ -381,21 +381,21 @@ async def test_get_bonding_curve_account_invalid_data(pumpfun_client, example_mi
         }
     }
 
-    # Fetch bonding curve account
-    curve = await pumpfun_client.get_bonding_curve_account(example_mint)
+    # Fetch bonding curve state
+    curve = await pumpfun_client.get_bonding_curve_state(example_mint)
 
     # Should return None on error
     assert curve is None, "Should return None for invalid data"
 
 
 @pytest.mark.asyncio
-async def test_get_bonding_curve_account_rpc_error(pumpfun_client, example_mint):
+async def test_get_bonding_curve_state_rpc_error(pumpfun_client, example_mint):
     """Test handling RPC errors when fetching bonding curve"""
     # Mock RPC error
     pumpfun_client.rpc_manager.call_http_rpc.side_effect = Exception("RPC connection failed")
 
-    # Fetch bonding curve account
-    curve = await pumpfun_client.get_bonding_curve_account(example_mint)
+    # Fetch bonding curve state
+    curve = await pumpfun_client.get_bonding_curve_state(example_mint)
 
     # Should return None on error
     assert curve is None, "Should return None on RPC error"

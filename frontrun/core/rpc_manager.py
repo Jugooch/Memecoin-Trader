@@ -113,8 +113,8 @@ class RPCManager:
         ]
         await asyncio.gather(*connect_tasks, return_exceptions=True)
 
-        # Start health check loop
-        self._health_check_task = asyncio.create_task(self._health_check_loop())
+        # Start health check loop (DISABLED - only needed for WebSocket subscriptions)
+        # self._health_check_task = asyncio.create_task(self._health_check_loop())
 
         logger.info("rpc_manager_started")
 
@@ -551,10 +551,15 @@ class RPCManager:
                 for label, conn in self.connections.items():
                     try:
                         # First check: WebSocket connection status
+                        websocket_open = True
+                        if conn.websocket is not None:
+                            # Check if websocket has a 'closed' attribute (not all implementations do)
+                            websocket_open = not getattr(conn.websocket, 'closed', False)
+
                         websocket_connected = (
                             conn.status == ConnectionStatus.CONNECTED and
                             conn.websocket is not None and
-                            not conn.websocket.closed
+                            websocket_open
                         )
 
                         # Second check: Actual RPC functionality
@@ -612,7 +617,7 @@ class RPCManager:
 
                             # Trigger reconnect if unhealthy
                             if conn.status == ConnectionStatus.CONNECTED and (
-                                conn.websocket.closed or not rpc_functional
+                                (conn.websocket and getattr(conn.websocket, 'closed', False)) or not rpc_functional
                             ):
                                 asyncio.create_task(self._reconnect_endpoint(label))
 

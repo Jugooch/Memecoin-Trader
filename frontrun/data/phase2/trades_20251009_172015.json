@@ -1,0 +1,122 @@
+[
+  {
+    "timestamp": "2025-10-09T17:20:00.496229",
+    "mint": "SIMULATED_MINT",
+    "signature_buy": "buy_hbrk2YgLDp5Cn8mR",
+    "signature_sell": "sell_hbrk2YgLDp5Cn8mR",
+    "buy_amount_sol": 0.025750250000000002,
+    "sell_amount_sol": 0.027037762500000003,
+    "profit_sol": 0.0012875125000000002,
+    "fee_paid": 50000,
+    "success": true,
+    "reason": "Simulated trade for Phase 2 validation"
+  },
+  {
+    "timestamp": "2025-10-09T17:20:01.742684",
+    "mint": "SIMULATED_MINT",
+    "signature_buy": "buy_4Juu1urmeKp7ap6H",
+    "signature_sell": "sell_4Juu1urmeKp7ap6H",
+    "buy_amount_sol": 0.0303754025,
+    "sell_amount_sol": 0.031894172625,
+    "profit_sol": 0.001518770125,
+    "fee_paid": 50000,
+    "success": true,
+    "reason": "Simulated trade for Phase 2 validation"
+  },
+  {
+    "timestamp": "2025-10-09T17:20:05.440971",
+    "mint": "SIMULATED_MINT",
+    "signature_buy": "buy_yiiJcfctQ7SXSms3",
+    "signature_sell": "sell_yiiJcfctQ7SXSms3",
+    "buy_amount_sol": 0.025626875,
+    "sell_amount_sol": 0.02690821875,
+    "profit_sol": 0.0012813437500000001,
+    "fee_paid": 50000,
+    "success": true,
+    "reason": "Simulated trade for Phase 2 validation"
+  },
+  {
+    "timestamp": "2025-10-09T17:20:07.545525",
+    "mint": "SIMULATED_MINT",
+    "signature_buy": "buy_m6ACRn15YiUmfX9m",
+    "signature_sell": "sell_m6ACRn15YiUmfX9m",
+    "buy_amount_sol": 0.026167839050000002,
+    "sell_amount_sol": 0.027476231002500004,
+    "profit_sol": 0.0013083919525000002,
+    "fee_paid": 50000,
+    "success": true,
+    "reason": "Simulated trade for Phase 2 validation"
+  },
+  {
+    "timestamp": "2025-10-09T17:20:13.706452",
+    "mint": "SIMULATED_MINT",
+    "signature_buy": "buy_5ttgPeTvQ9zW3Ez4",
+    "signature_sell": "sell_5ttgPeTvQ9zW3Ez4",
+    "buy_amount_sol": 0.05,
+    "sell_amount_sol": 0.052500000000000005,
+    "profit_sol": 0.0025000000000000005,
+    "fee_paid": 50000,
+    "success": true,
+    "reason": "Simulated trade for Phase 2 validation"
+  },
+  {
+    "timestamp": "2025-10-09T17:20:14.915435",
+    "mint": "SIMULATED_MINT",
+    "signature_buy": "buy_3Jk9UqoGkLHcKReF",
+    "signature_sell": "sell_3Jk9UqoGkLHcKReF",
+    "buy_amount_sol": 0.05,
+    "sell_amount_sol": 0.052500000000000005,
+    "profit_sol": 0.0025000000000000005,
+    "fee_paid": 50000,
+    "success": true,
+    "reason": "Simulated trade for Phase 2 validation"
+  },
+  {
+    "timestamp": "2025-10-09T17:20:14.919954",
+    "mint": "SIMULATED_MINT",
+    "signature_buy": "buy_31Q7vLC9X9a1jVUD",
+    "signature_sell": "sell_31Q7vLC9X9a1jVUD",
+    "buy_amount_sol": 0.05,
+    "sell_amount_sol": 0.052500000000000005,
+    "profit_sol": 0.0025000000000000005,
+    "fee_paid": 50000,
+    "success": true,
+    "reason": "Simulated trade for Phase 2 validation"
+  },
+  {
+    "timestamp": "2025-10-09T17:20:14.924449",
+    "mint": "SIMULATED_MINT",
+    "signature_buy": "buy_5TQHUzdr2XZYZdFy",
+    "signature_sell": "sell_5TQHUzdr2XZYZdFy",
+    "buy_amount_sol": 0.05,
+    "sell_amount_sol": 0.052500000000000005,
+    "profit_sol": 0.0025000000000000005,
+    "fee_paid": 50000,
+    "success": true,
+    "reason": "Simulated trade for Phase 2 validation"
+  },
+  {
+    "timestamp": "2025-10-09T17:20:14.933846",
+    "mint": "SIMULATED_MINT",
+    "signature_buy": "buy_toAZvsf262Bv29NV",
+    "signature_sell": "sell_toAZvsf262Bv29NV",
+    "buy_amount_sol": 0.05,
+    "sell_amount_sol": 0.052500000000000005,
+    "profit_sol": 0.0025000000000000005,
+    "fee_paid": 50000,
+    "success": true,
+    "reason": "Simulated trade for Phase 2 validation"
+  },
+  {
+    "timestamp": "2025-10-09T17:20:14.938845",
+    "mint": "SIMULATED_MINT",
+    "signature_buy": "buy_46RCffhmrwzGyVGx",
+    "signature_sell": "sell_46RCffhmrwzGyVGx",
+    "buy_amount_sol": 0.05,
+    "sell_amount_sol": 0.052500000000000005,
+    "profit_sol": 0.0025000000000000005,
+    "fee_paid": 50000,
+    "success": true,
+    "reason": "Simulated trade for Phase 2 validation"
+  }
+]

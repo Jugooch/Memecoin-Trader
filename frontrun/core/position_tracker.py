@@ -148,6 +148,11 @@ class PositionStorage:
 
     async def _create_tables(self):
         """Create database tables if they don't exist"""
+        # Phase 4: Enable WAL mode for better concurrency and crash recovery
+        await self._connection.execute("PRAGMA journal_mode=WAL")
+        await self._connection.execute("PRAGMA synchronous=NORMAL")
+        await self._connection.execute("PRAGMA busy_timeout=5000")
+
         await self._connection.execute("""
             CREATE TABLE IF NOT EXISTS positions (
                 position_id TEXT PRIMARY KEY,

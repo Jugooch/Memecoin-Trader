@@ -5,6 +5,11 @@ Calculates prices, slippage, and impact from bonding curve state using exact on-
 
 from typing import Optional
 from dataclasses import dataclass
+import struct
+import base64
+
+from solders.pubkey import Pubkey
+from spl.token.instructions import get_associated_token_address
 
 from core.logger import get_logger
 from core.metrics import get_metrics
@@ -17,6 +22,7 @@ metrics = get_metrics()
 # Pump.fun constants
 FEE_BPS = 100  # 1% fee (100 basis points)
 BPS_DENOMINATOR = 10_000
+PUMP_FUN_PROGRAM = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
 
 
 @dataclass
@@ -441,3 +447,147 @@ if __name__ == "__main__":
     # Show current price
     current_price = calculator.get_current_price(curve_state)
     print(f"\nCurrent spot price: {current_price:.10f} SOL per token")
+
+
+# === DIRECT BONDING CURVE FETCHING ===
+
+def derive_bonding_curve_pda(mint: Pubkey) -> tuple[Pubkey, Pubkey]:
+    """
+    Derive bonding curve PDA and associated token account
+
+    Args:
+        mint: Token mint address
+
+    Returns:
+        (bonding_curve_pda, associated_token_account)
+    """
+    # Derive bonding curve PDA
+    bonding_curve, _ = Pubkey.find_program_address(
+        [b"bonding-curve", bytes(mint)],
+        PUMP_FUN_PROGRAM
+    )
+
+    # Derive associated token account
+    associated_bonding_curve = get_associated_token_address(bonding_curve, mint)
+
+    return bonding_curve, associated_bonding_curve
+
+
+async def fetch_bonding_curve_state(rpc_manager, mint_str: str) -> Optional[tuple[BondingCurveState, Pubkey, Pubkey, Pubkey]]:
+    """
+    Fetch bonding curve state directly from RPC (NO API)
+
+    Args:
+        rpc_manager: RPC manager
+        mint_str: Token mint address
+
+    Returns:
+        Tuple of (BondingCurveState, bonding_curve_pda, associated_bonding_curve, creator)
+        or None if failed
+    """
+    try:
+        mint = Pubkey.from_string(mint_str)
+        bonding_curve, associated_bonding_curve = derive_bonding_curve_pda(mint)
+
+        # Fetch account data directly
+        response = await rpc_manager.call_http_rpc(
+            "getAccountInfo",
+            [str(bonding_curve), {"encoding": "base64"}]
+        )
+
+        account_info = response.get("result", {}).get("value")
+        if not account_info:
+            logger.warning("bonding_curve_not_found", mint=mint_str[:16])
+            return None
+
+        # Decode data
+        data_b64 = account_info.get("data", [""])[0]
+        if not data_b64:
+            return None
+
+        raw_data = base64.b64decode(data_b64)
+
+        # Parse bonding curve structure (from example code)
+        # 8 bytes: discriminator
+        # 8 bytes: virtual_token_reserves
+        # 8 bytes: virtual_sol_reserves
+        # 8 bytes: real_token_reserves
+        # 8 bytes: real_sol_reserves
+        # 8 bytes: token_total_supply
+        # 1 byte: complete
+        # 32 bytes: creator
+
+        if len(raw_data) < 73:
+            logger.warning("invalid_bonding_curve_data", length=len(raw_data))
+            return None
+
+        virtual_token_reserves = struct.unpack('<Q', raw_data[8:16])[0]
+        virtual_sol_reserves = struct.unpack('<Q', raw_data[16:24])[0]
+        real_token_reserves = struct.unpack('<Q', raw_data[24:32])[0]
+        real_sol_reserves = struct.unpack('<Q', raw_data[32:40])[0]
+        token_total_supply = struct.unpack('<Q', raw_data[40:48])[0]
+        complete = raw_data[48] == 1
+        creator_bytes = raw_data[49:81]
+        creator = Pubkey.from_bytes(creator_bytes)
+
+        curve_state = BondingCurveState(
+            virtual_token_reserves=virtual_token_reserves,
+            virtual_sol_reserves=virtual_sol_reserves,
+            real_token_reserves=real_token_reserves,
+            real_sol_reserves=real_sol_reserves,
+            token_total_supply=token_total_supply,
+            complete=complete
+        )
+
+        return curve_state, bonding_curve, associated_bonding_curve, creator
+
+    except Exception as e:
+        logger.error("bonding_curve_fetch_failed", mint=mint_str[:16], error=str(e))
+        return None
+
+
+def is_new_token_launch(curve_state: BondingCurveState) -> bool:
+    """
+    Check if token is a new launch (good for sniping)
+
+    A token is "new" if:
+    - Virtual SOL reserves < 5 SOL (less than $1250 traded)
+    - NOT graduated (complete = False)
+
+    Args:
+        curve_state: Bonding curve state
+
+    Returns:
+        True if new launch, False otherwise
+    """
+    if curve_state.complete:
+        return False
+
+    # Check virtual SOL reserves
+    sol_reserves = curve_state.virtual_sol_reserves / 1e9
+
+    # New tokens have < 5 SOL in reserves
+    # (Initial reserves are ~30 SOL, but after dev buys it grows)
+    return sol_reserves < 5.0
+
+
+def get_market_cap_sol(curve_state: BondingCurveState) -> float:
+    """
+    Calculate current market cap in SOL
+
+    Args:
+        curve_state: Bonding curve state
+
+    Returns:
+        Market cap in SOL
+    """
+    if curve_state.virtual_token_reserves == 0:
+        return 0.0
+
+    # Price per token = SOL reserves / token reserves
+    price_per_token_lamports = curve_state.virtual_sol_reserves / curve_state.virtual_token_reserves
+
+    # Market cap = total supply * price per token
+    market_cap_lamports = curve_state.token_total_supply * price_per_token_lamports
+
+    return market_cap_lamports / 1e9

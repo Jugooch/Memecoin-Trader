@@ -273,6 +273,12 @@ async def multiple_funded_wallets(funded_wallet, devnet_rpc_manager):
     )
     initial_balance = balance_response.get("result", {}).get("value", 0)
 
+    logger.info(
+        "source_wallet_balance",
+        wallet=str(wallet1.pubkey()),
+        balance_sol=initial_balance / 1e9
+    )
+
     # Fund each new wallet with just 0.3 SOL (enough for testing, way cheaper!)
     # Total: 0.3 + 0.3 = 0.6 SOL transferred (saves 6 SOL compared to before!)
     # Each wallet gets 300M lamports = plenty for fees + min balance requirements
@@ -316,29 +322,109 @@ async def multiple_funded_wallets(funded_wallet, devnet_rpc_manager):
 
         signature = send_response.get("result") if isinstance(send_response, dict) else send_response
 
+        logger.info(
+            "transfer_transaction_submitted",
+            from_wallet=str(wallet1.pubkey()),
+            to_wallet=str(new_wallet.pubkey()),
+            amount_sol=transfer_amount / 1e9,
+            signature=signature
+        )
+
+        if not signature:
+            pytest.skip(
+                f"Failed to submit transfer transaction to wallet {new_wallet.pubkey()}. "
+                f"RPC response: {send_response}"
+            )
+
         # Wait for confirmation
-        for _ in range(30):  # Wait up to 30 seconds
+        tx_error = None
+        tx_confirmed = False
+        for attempt in range(30):  # Wait up to 30 seconds
             await asyncio.sleep(1)
             status_response = await devnet_rpc_manager.call_http_rpc(
                 "getSignatureStatuses",
                 [[signature]]
             )
 
+            # Log what we're seeing
             if isinstance(status_response, dict):
                 result = status_response.get("result", {})
                 value = result.get("value", [])
-                if value and len(value) > 0 and value[0] is not None:
-                    status = value[0].get("confirmationStatus")
-                    if status in ["confirmed", "finalized"]:
-                        break
 
-        # Verify wallet was funded (retry a few times if needed)
+                logger.info(
+                    "checking_transaction_status",
+                    attempt=attempt + 1,
+                    signature=signature[:16] + "...",
+                    status_response=value
+                )
+
+                if value and len(value) > 0 and value[0] is not None:
+                    status_obj = value[0]
+                    confirmation_status = status_obj.get("confirmationStatus")
+                    tx_error = status_obj.get("err")
+
+                    logger.info(
+                        "transaction_status_received",
+                        confirmation_status=confirmation_status,
+                        has_error=tx_error is not None,
+                        error=tx_error
+                    )
+
+                    if confirmation_status in ["confirmed", "finalized"]:
+                        tx_confirmed = True
+                        if tx_error:
+                            logger.error(
+                                "transaction_failed_on_chain",
+                                signature=signature,
+                                error=tx_error,
+                                to_wallet=str(new_wallet.pubkey())
+                            )
+                        else:
+                            logger.info(
+                                "transaction_confirmed_successfully",
+                                signature=signature,
+                                confirmation_status=confirmation_status
+                            )
+                        break
+                else:
+                    logger.warning(
+                        "transaction_status_not_found",
+                        attempt=attempt + 1,
+                        signature=signature
+                    )
+            else:
+                logger.error(
+                    "invalid_status_response",
+                    response=status_response
+                )
+
+        # Log final confirmation status
+        if not tx_confirmed:
+            logger.warning(
+                "transaction_never_confirmed",
+                signature=signature,
+                waited_seconds=30
+            )
+
+        # If transaction failed, skip test immediately with error details
+        if tx_error:
+            pytest.skip(
+                f"Transaction to fund wallet {new_wallet.pubkey()} failed on-chain. "
+                f"Error: {tx_error}. Signature: {signature}. "
+                f"Source wallet {wallet1.pubkey()} had {initial_balance / 1e9:.4f} SOL."
+            )
+
+        # Verify wallet was funded (retry with longer delays for devnet propagation)
         balance = 0
-        for retry in range(5):
-            await asyncio.sleep(0.5)  # Brief wait before checking
+        for retry in range(10):  # Increased from 5 to 10
+            # Longer initial wait, then increase wait time between retries
+            wait_time = 1.0 if retry == 0 else 2.0
+            await asyncio.sleep(wait_time)
+
+            # Query with 'confirmed' commitment to get latest state
             balance_response = await devnet_rpc_manager.call_http_rpc(
                 "getBalance",
-                [str(new_wallet.pubkey())]
+                [str(new_wallet.pubkey()), {"commitment": "confirmed"}]
             )
             balance = balance_response.get("result", {}).get("value", 0)
 
@@ -418,11 +504,11 @@ def pnl_calculator():
 # =============================================================================
 
 async def _get_balance(rpc_manager: RPCManager, pubkey: Pubkey) -> int:
-    """Get SOL balance for pubkey"""
+    """Get SOL balance for pubkey with confirmed commitment"""
     try:
         response = await rpc_manager.call_http_rpc(
             "getBalance",
-            [str(pubkey)]
+            [str(pubkey), {"commitment": "confirmed"}]
         )
 
         if isinstance(response, dict):

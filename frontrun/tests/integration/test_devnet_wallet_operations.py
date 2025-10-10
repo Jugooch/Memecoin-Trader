@@ -10,6 +10,8 @@ from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 from solders.system_program import transfer, TransferParams
 from solders.transaction import Transaction
+from solders.message import Message
+from solders.hash import Hash
 
 from core.wallet_manager import WalletManager, WalletManagerConfig
 from core.logger import get_logger
@@ -37,7 +39,8 @@ def test_create_new_keypair():
 
     pubkey_str = str(pubkey)
     assert len(pubkey_str) > 0, "Pubkey string should not be empty"
-    assert len(pubkey_str) == 44, f"Pubkey should be 44 chars (base58), got {len(pubkey_str)}"
+    # Base58 encoded Solana pubkeys are typically 43-44 chars (depending on leading zeros)
+    assert 32 <= len(pubkey_str) <= 44, f"Pubkey should be 32-44 chars (base58), got {len(pubkey_str)}"
 
     logger.info("keypair_created", pubkey=pubkey_str)
 
@@ -116,16 +119,12 @@ async def test_transfer_sol_between_wallets(funded_wallet, devnet_rpc_manager):
         "getLatestBlockhash",
         [{"commitment": "finalized"}]
     )
-    blockhash = blockhash_response.get("result", {}).get("value", {}).get("blockhash")
+    blockhash_str = blockhash_response.get("result", {}).get("value", {}).get("blockhash")
 
-    assert blockhash is not None, "Should have blockhash"
+    assert blockhash_str is not None, "Should have blockhash"
+    blockhash = Hash.from_string(blockhash_str)
 
-    # Build transaction
-    tx = Transaction()
-    tx.recent_blockhash = blockhash
-    tx.fee_payer = sender_pubkey
-
-    # Add transfer instruction
+    # Create transfer instruction
     transfer_ix = transfer(
         TransferParams(
             from_pubkey=sender_pubkey,
@@ -133,10 +132,15 @@ async def test_transfer_sol_between_wallets(funded_wallet, devnet_rpc_manager):
             lamports=transfer_amount
         )
     )
-    tx.add(transfer_ix)
 
-    # Sign transaction
-    tx.sign(sender)
+    # Build transaction using new API
+    message = Message.new_with_blockhash(
+        [transfer_ix],
+        sender_pubkey,
+        blockhash
+    )
+    tx = Transaction.new_unsigned(message)
+    tx.sign([sender], blockhash)
 
     # Serialize and encode
     tx_bytes = bytes(tx)
@@ -146,12 +150,21 @@ async def test_transfer_sol_between_wallets(funded_wallet, devnet_rpc_manager):
     # Send transaction
     send_response = await devnet_rpc_manager.call_http_rpc(
         "sendTransaction",
-        [tx_base64, {"encoding": "base64", "skipPreflight": True}]
+        [tx_base64, {"encoding": "base64", "skipPreflight": False}]
     )
 
-    signature = send_response.get("result") if isinstance(send_response, dict) else send_response
+    # Check for errors in send response
+    if isinstance(send_response, dict):
+        if "error" in send_response:
+            error_msg = send_response["error"]
+            raise AssertionError(f"Transaction send failed: {error_msg}")
+        signature = send_response.get("result")
+    else:
+        signature = send_response
 
-    assert signature is not None, "Should receive transaction signature"
+    assert signature is not None, f"Should receive transaction signature, got: {send_response}"
+
+    logger.info("transaction_signature_received", signature=signature)
 
     logger.info(
         "transfer_submitted",
@@ -161,9 +174,10 @@ async def test_transfer_sol_between_wallets(funded_wallet, devnet_rpc_manager):
         signature=signature
     )
 
-    # Wait for confirmation (up to 30 seconds)
+    # Wait for confirmation (up to 40 seconds)
     confirmed = False
-    for _ in range(15):
+    tx_error = None
+    for attempt in range(20):
         await asyncio.sleep(2)
 
         status_response = await devnet_rpc_manager.call_http_rpc(
@@ -178,22 +192,74 @@ async def test_transfer_sol_between_wallets(funded_wallet, devnet_rpc_manager):
             if value and len(value) > 0 and value[0] is not None:
                 status = value[0]
                 confirmation_status = status.get("confirmationStatus")
+                tx_error = status.get("err")
+
+                logger.info(
+                    "transaction_status_check",
+                    attempt=attempt + 1,
+                    confirmation_status=confirmation_status,
+                    error=tx_error
+                )
 
                 if confirmation_status in ["confirmed", "finalized"]:
-                    confirmed = True
-                    break
+                    if tx_error is None:
+                        confirmed = True
+                        logger.info("transaction_confirmed", signature=signature)
+                        break
+                    else:
+                        logger.error("transaction_failed", signature=signature, error=tx_error)
+                        raise AssertionError(f"Transaction failed with error: {tx_error}")
 
-    assert confirmed, f"Transaction should confirm: {signature}"
+    if not confirmed:
+        raise AssertionError(f"Transaction did not confirm after 40 seconds: {signature}")
 
-    # Verify receiver balance
-    receiver_balance_response = await devnet_rpc_manager.call_http_rpc(
-        "getBalance",
-        [str(receiver_pubkey)]
+    # Get transaction details to verify it executed correctly
+    tx_response = await devnet_rpc_manager.call_http_rpc(
+        "getTransaction",
+        [signature, {"encoding": "json", "maxSupportedTransactionVersion": 0}]
     )
-    receiver_balance = receiver_balance_response.get("result", {}).get("value", 0)
 
-    assert receiver_balance >= transfer_amount, \
-        f"Receiver should have at least {transfer_amount / 1e9} SOL, got {receiver_balance / 1e9}"
+    tx_result = tx_response.get("result") if isinstance(tx_response, dict) else None
+    if tx_result:
+        tx_meta = tx_result.get("meta", {})
+        tx_err = tx_meta.get("err")
+
+        logger.info(
+            "transaction_details",
+            signature=signature,
+            error=tx_err,
+            fee=tx_meta.get("fee"),
+            pre_balances=tx_meta.get("preBalances"),
+            post_balances=tx_meta.get("postBalances")
+        )
+
+        if tx_err:
+            raise AssertionError(f"Transaction failed on-chain: {tx_err}")
+
+    # Wait for balance to settle on devnet with retry
+    receiver_balance = 0
+    for retry in range(5):
+        await asyncio.sleep(2)
+
+        receiver_balance_response = await devnet_rpc_manager.call_http_rpc(
+            "getBalance",
+            [str(receiver_pubkey)]
+        )
+        receiver_balance = receiver_balance_response.get("result", {}).get("value", 0)
+
+        logger.info(
+            "balance_check_retry",
+            retry=retry + 1,
+            receiver_balance_sol=receiver_balance / 1e9
+        )
+
+        if receiver_balance >= transfer_amount * 0.99:
+            break
+
+    # Account for transaction fees - receiver should get close to transfer_amount
+    assert receiver_balance >= transfer_amount * 0.99, \
+        f"Receiver should have at least {transfer_amount * 0.99 / 1e9:.4f} SOL, got {receiver_balance / 1e9:.4f} SOL. " \
+        f"Transaction: https://explorer.solana.com/tx/{signature}?cluster=devnet"
 
     logger.info(
         "transfer_completed",

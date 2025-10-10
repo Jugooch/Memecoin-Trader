@@ -1,0 +1,34 @@
+[
+  {
+    "timestamp": "2025-10-09T19:36:37.772149",
+    "mint": "EX83WsW6GfgR7uboHtfUoWRgPtzAEjnWAgh2bJsipump",
+    "signature_buy": "",
+    "signature_sell": "",
+    "buy_amount_sol": 0.1,
+    "sell_amount_sol": 0.0,
+    "profit_sol": -0.1,
+    "fee_paid": 0,
+    "success": false,
+    "reason": "Failed: 'solders.message.MessageV0' object has no attribute 'serialize'",
+    "dev_tx_slot": 372354160,
+    "our_tx_slot": 0,
+    "frontrun_success": false,
+    "slot_delta": 999
+  },
+  {
+    "timestamp": "2025-10-09T19:36:39.221056",
+    "mint": "5cW2QGiPHqW5yTKv9fQaNdjT6wed2R7pcyQ25D9ppump",
+    "signature_buy": "",
+    "signature_sell": "",
+    "buy_amount_sol": 0.1,
+    "sell_amount_sol": 0.0,
+    "profit_sol": -0.1,
+    "fee_paid": 0,
+    "success": false,
+    "reason": "Failed: 'solders.message.MessageV0' object has no attribute 'serialize'",
+    "dev_tx_slot": 372354164,
+    "our_tx_slot": 0,
+    "frontrun_success": false,
+    "slot_delta": 999
+  }
+]

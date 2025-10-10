@@ -1,0 +1,18 @@
+[
+  {
+    "timestamp": "2025-10-09T20:05:21.478185",
+    "mint": "55tTywqavnHTsCW9ChfjAHcro7oizvBqrxZwJrpipump",
+    "signature_buy": "3DyLkRhQQJ3hye4T3atjDCJfNmN178MB5TGjG4Ck837XiCmU3As5sFrA3qqxTfRtf5MZqUyHs6c8sgdbsou89zi5",
+    "signature_sell": "4mHLEgNvyCERJSJMmuKPz3DhycwtDSd8S4B17b6pZ4sV9s4oLgka3o3mYus8KVHDcN6GGRK85Ar8RHGLhPX7f68m",
+    "buy_amount_sol": 0.1,
+    "sell_amount_sol": 0.087855863,
+    "profit_sol": -0.012144137,
+    "fee_paid": 10000,
+    "success": true,
+    "reason": "Complete trade: -12.14% loss",
+    "dev_tx_slot": 372358496,
+    "our_tx_slot": 372358498,
+    "frontrun_success": false,
+    "slot_delta": 2
+  }
+]

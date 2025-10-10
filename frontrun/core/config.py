@@ -19,6 +19,11 @@ class RPCEndpoint:
     label: str
     max_connections: int = 10
     timeout_ms: int = 5000
+    # Helius-specific fields
+    laserstream_url: Optional[str] = None
+    laserstream_api_key: Optional[str] = None
+    secure_rpc_url: Optional[str] = None
+    enhanced_solana_apis: Optional[Dict[str, str]] = None
 
 
 @dataclass
@@ -228,13 +233,25 @@ class ConfigurationManager:
 
         endpoints = []
         for ep in endpoints_data:
+            # Parse enhanced_solana_apis list into dict
+            enhanced_apis = None
+            if 'enhanced_solana_apis' in ep:
+                enhanced_apis = {}
+                for api in ep['enhanced_solana_apis']:
+                    for key, value in api.items():
+                        enhanced_apis[key] = value
+
             endpoints.append(RPCEndpoint(
                 url=ep['url'],
                 websocket_url=ep['websocket_url'],
                 priority=ep['priority'],
                 label=ep['label'],
                 max_connections=ep.get('max_connections', 10),
-                timeout_ms=ep.get('timeout_ms', 5000)
+                timeout_ms=ep.get('timeout_ms', 5000),
+                laserstream_url=ep.get('laserstream_url'),
+                laserstream_api_key=ep.get('laserstream_api_key'),
+                secure_rpc_url=ep.get('secure_rpc_url'),
+                enhanced_solana_apis=enhanced_apis
             ))
 
         # Sort by priority (0 = highest)

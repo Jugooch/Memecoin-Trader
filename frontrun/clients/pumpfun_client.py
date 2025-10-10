@@ -15,6 +15,7 @@ from solders.sysvar import RENT
 from core.rpc_manager import RPCManager
 from core.logger import get_logger
 from core.metrics import get_metrics
+from core.bonding_curve import BondingCurveState
 
 
 logger = get_logger(__name__)
@@ -25,9 +26,13 @@ metrics = get_metrics()
 PUMP_FUN_PROGRAM_ID = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
 TOKEN_PROGRAM_ID = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
 ASSOCIATED_TOKEN_PROGRAM_ID = Pubkey.from_string("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
-EVENT_AUTHORITY = Pubkey.from_string("Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1")  # Pump.fun event authority
+EVENT_AUTHORITY = Pubkey.from_string("Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1")
 
-# Instruction discriminators (first 8 bytes of SHA256("global:buy/sell"))
+# Global accounts (from real Pump.fun transactions)
+GLOBAL_ACCOUNT = Pubkey.from_string("4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf")
+FEE_RECIPIENT = Pubkey.from_string("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM")
+
+# Instruction discriminators
 BUY_DISCRIMINATOR = bytes.fromhex("66063d1201daebea")
 SELL_DISCRIMINATOR = bytes.fromhex("33e685a4017f83ad")
 
@@ -37,17 +42,6 @@ METADATA_SEED = b"metadata"
 
 # Fee configuration
 FEE_BPS = 100  # 1% platform fee
-
-
-@dataclass
-class BondingCurveAccount:
-    """Pump.fun bonding curve state"""
-    virtual_token_reserves: int
-    virtual_sol_reserves: int
-    real_token_reserves: int
-    real_sol_reserves: int
-    token_total_supply: int
-    complete: bool
 
 
 @dataclass
@@ -318,7 +312,7 @@ class PumpFunClient:
 
         return pda
 
-    async def get_bonding_curve_account(self, mint: Pubkey) -> Optional[BondingCurveAccount]:
+    async def get_bonding_curve_state(self, mint: Pubkey) -> Optional[BondingCurveState]:
         """
         Fetch bonding curve state from on-chain
 
@@ -326,10 +320,10 @@ class PumpFunClient:
             mint: Token mint pubkey
 
         Returns:
-            Bonding curve state or None if not found
+            BondingCurveState or None if not found
 
         Example:
-            curve = await client.get_bonding_curve_account(mint_pubkey)
+            curve = await client.get_bonding_curve_state(mint_pubkey)
             if curve:
                 print(f"Virtual SOL reserves: {curve.virtual_sol_reserves}")
         """
@@ -380,7 +374,7 @@ class PumpFunClient:
             offset += 8
             complete = bool(data[offset])
 
-            bonding_curve = BondingCurveAccount(
+            bonding_curve = BondingCurveState(
                 virtual_token_reserves=virtual_token_reserves,
                 virtual_sol_reserves=virtual_sol_reserves,
                 real_token_reserves=real_token_reserves,
@@ -446,13 +440,13 @@ if __name__ == "__main__":
             bonding_curve = client.derive_bonding_curve_pda(example_mint)
             logger.info("bonding_curve_derived", pda=str(bonding_curve))
 
-            # Fetch bonding curve account (will fail for fake mint, just example)
-            curve_account = await client.get_bonding_curve_account(example_mint)
-            if curve_account:
+            # Fetch bonding curve state (will fail for fake mint, just example)
+            curve_state = await client.get_bonding_curve_state(example_mint)
+            if curve_state:
                 logger.info(
                     "curve_fetched",
-                    virtual_sol=curve_account.virtual_sol_reserves / 1e9,
-                    virtual_tokens=curve_account.virtual_token_reserves
+                    virtual_sol=curve_state.virtual_sol_reserves / 1e9,
+                    virtual_tokens=curve_state.virtual_token_reserves
                 )
 
         finally:
