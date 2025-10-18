@@ -38,6 +38,7 @@ from core.logger import setup_logging, get_logger
 from core.rpc_manager import RPCManager
 from core.wallet_manager import WalletManager, WalletManagerConfig
 from core.dev_watchlist_loader import DevWatchlistLoader
+from core.bonding_curve import get_initial_bonding_curve_state, BondingCurveCalculator, calculate_curve_state_after_buy
 from clients.pump_fun_direct import PumpFunDirectClient
 from core.tx_submitter import TransactionSubmitter, SubmitterConfig
 
@@ -544,10 +545,26 @@ class DevCreationSniper:
         try:
             # Get wallet
             async with self.wallet_manager.get_wallet(min_sol=self.buy_amount_sol + 0.01) as wallet:
-                # BUY IMMEDIATELY
+                # BUY IMMEDIATELY using initial bonding curve state (no RPC fetch!)
                 buy_start = time.time()
 
                 logger.info("🚀 BUYING (frontrunning dev!)", mint=creation.mint[:16] + "...")
+
+                # Use initial bonding curve state (before any buys)
+                initial_curve_state = get_initial_bonding_curve_state()
+
+                # Calculate buy quote to get tokens_out (we'll use this for selling later)
+                calculator = BondingCurveCalculator()
+                sol_lamports = int(self.buy_amount_sol * 1e9)
+                buy_quote = calculator.calculate_buy_price(initial_curve_state, sol_lamports)
+                tokens_out_raw = buy_quote.tokens_out  # Raw token units (with 6 decimals)
+
+                logger.debug(
+                    "buy_quote_calculated",
+                    tokens_out_raw=tokens_out_raw,
+                    tokens_out_ui=tokens_out_raw / 1e6,
+                    sol_in=self.buy_amount_sol
+                )
 
                 buy_signed = await self.direct_client.create_buy_transaction(
                     keypair=self.keypair,
@@ -555,7 +572,12 @@ class DevCreationSniper:
                     sol_amount=self.buy_amount_sol,
                     slippage_bps=1000,  # 10% slippage for new tokens
                     priority_fee_lamports=10_000_000,  # 0.01 SOL priority (ULTRA HIGH for speed)
-                    compute_units=150_000
+                    compute_units=150_000,
+                    # Pass pre-known addresses and state (no RPC fetch needed!)
+                    curve_state=initial_curve_state,
+                    bonding_curve_address=creation.bonding_curve,
+                    associated_bonding_curve_address=creation.associated_bonding_curve,
+                    creator_address=creation.creator
                 )
 
                 if not buy_signed:
@@ -593,35 +615,24 @@ class DevCreationSniper:
                 # SELL
                 logger.info("💰 SELLING", mint=creation.mint[:16] + "...")
 
-                # Wait for token account to be indexed
-                await asyncio.sleep(0.5)
+                # Use the tokens_out from our buy quote (no RPC query needed!)
+                # This avoids RPC indexing delays
+                token_ui_amount = tokens_out_raw / 1e6
 
-                # Get token balance
-                token_balance = await self._get_token_balance(wallet.pubkey, creation.mint)
+                # Calculate the bonding curve state AFTER our buy
+                # This allows us to build the sell transaction without fetching from RPC
+                post_buy_curve_state = calculate_curve_state_after_buy(
+                    initial_curve_state,
+                    sol_lamports,
+                    tokens_out_raw
+                )
 
-                if token_balance == 0:
-                    logger.error("no_tokens_to_sell")
-                    # Record partial trade
-                    trade = SniperTrade(
-                        timestamp=datetime.now(),
-                        mint=creation.mint,
-                        creator=creation.creator,
-                        signature_buy=buy_signature,
-                        signature_sell="",
-                        buy_amount_sol=self.buy_amount_sol,
-                        sell_amount_sol=0.0,
-                        profit_sol=-self.buy_amount_sol,
-                        success=False,
-                        reason="Buy succeeded but couldn't find tokens to sell",
-                        creation_slot=creation.slot,
-                        buy_slot=buy_slot,
-                        sell_slot=0,
-                        time_to_buy_ms=time_to_buy_ms
-                    )
-                    self.trades.append(trade)
-                    return
-
-                token_ui_amount = token_balance / 1e6
+                logger.debug(
+                    "post_buy_curve_state_calculated",
+                    virtual_sol_reserves=post_buy_curve_state.virtual_sol_reserves / 1e9,
+                    virtual_token_reserves=post_buy_curve_state.virtual_token_reserves / 1e6,
+                    tokens_to_sell=token_ui_amount
+                )
 
                 sell_signed = await self.direct_client.create_sell_transaction(
                     keypair=self.keypair,
@@ -629,7 +640,12 @@ class DevCreationSniper:
                     token_amount=token_ui_amount,
                     slippage_bps=1000,  # 10% slippage
                     priority_fee_lamports=10_000_000,
-                    compute_units=150_000
+                    compute_units=150_000,
+                    # Pass pre-known post-buy curve state and addresses (no RPC fetch!)
+                    curve_state=post_buy_curve_state,
+                    bonding_curve_address=creation.bonding_curve,
+                    associated_bonding_curve_address=creation.associated_bonding_curve,
+                    creator_address=creation.creator
                 )
 
                 if not sell_signed:

@@ -546,27 +546,43 @@ class BitqueryClient:
             return []
     
     async def get_trades_windowed_paginated(self, start_iso: str, end_iso: str, page_limit: int = 3000, max_pages: int = 20) -> List[Dict]:
-        """Paginate Bitquery to actually cover the full time window
-        
+        """Paginate Bitquery to actually cover the full time window with token rotation
+
         Args:
             start_iso: Start time in ISO format (e.g., "2024-01-01T00:00:00Z")
             end_iso: End time in ISO format
             page_limit: Number of trades per page
             max_pages: Maximum number of pages to fetch
-            
+
         Returns:
             List of all trades in the window
         """
-        if not self.client:
-            await self.initialize()
-            
         all_trades = []
         till = end_iso
-        
+
         self.logger.info(f"Starting paginated fetch from {start_iso} to {end_iso} (max {max_pages} pages)")
-        
+
         page = 0
         while page < max_pages:
+            # Get fresh token for EACH page to enable rotation
+            token_index, api_token = self._get_next_available_token()
+
+            if not api_token:
+                self.logger.error("No available Bitquery API tokens for paginated fetch")
+                break
+
+            # Create fresh transport for this page
+            from gql.transport.aiohttp import AIOHTTPTransport
+            fresh_transport = AIOHTTPTransport(
+                url=self.endpoint,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_token}"
+                }
+            )
+
+            fresh_client = Client(transport=fresh_transport)
+
             try:
                 # Build time filter for this page
                 time_filter = f'Block: {{ Time: {{ since: "{start_iso}", till: "{till}" }} }}'
@@ -624,15 +640,16 @@ class BitqueryClient:
                 """)
                 
                 self.logger.debug(f"Fetching page {page + 1}/{max_pages} with till={till}")
-                result = await self.client.execute_async(query)
+                result = await fresh_client.execute_async(query)
                 batch = result['Solana']['DEXTrades']
-                
+
                 if not batch:
                     self.logger.info(f"No more trades found at page {page + 1}, stopping pagination")
+                    await fresh_transport.close()
                     break
-                    
+
                 all_trades.extend(batch)
-                
+
                 # Find minimum Block.Time in this batch to step the window back
                 min_ts = None
                 for trade in batch:
@@ -641,56 +658,59 @@ class BitqueryClient:
                         ts = self._parse_iso_timestamp(time_str)
                         if min_ts is None or ts < min_ts:
                             min_ts = ts
-                
+
                 if min_ts is None:
                     self.logger.warning(f"No valid timestamps in batch {page + 1}, stopping pagination")
+                    await fresh_transport.close()
                     break
-                
+
                 # Move 'till' to just before min_ts to avoid overlap
                 from datetime import datetime, timedelta
                 new_till_dt = datetime.utcfromtimestamp(min_ts) - timedelta(seconds=1)
                 till = new_till_dt.isoformat() + "Z"
-                
+
                 # Stop if we've gone past the start time
                 if self._parse_iso_timestamp(till) <= self._parse_iso_timestamp(start_iso):
                     self.logger.info(f"Reached start time at page {page + 1}, stopping pagination")
+                    await fresh_transport.close()
                     break
-                    
+
                 self.logger.info(f"Page {page + 1}: Got {len(batch)} trades, total={len(all_trades)}, next_till={till}")
-                
+
                 # Update stats for successful call
-                if self.current_client_token_index is not None:
-                    self.token_stats[self.current_client_token_index]['calls_today'] += 1
-                
+                if token_index is not None:
+                    self.token_stats[token_index]['calls_today'] += 1
+
                 # Successfully processed this page, move to next
                 page += 1
-                    
+
             except Exception as e:
                 error_str = str(e)
                 self.logger.error(f"Error on page {page + 1}: {error_str}")
-                
+
                 # Handle token rotation for 402 and 403 errors
                 if '402' in error_str or 'Payment Required' in error_str or '403' in error_str or 'Forbidden' in error_str:
-                    if self.current_client_token_index is not None:
+                    if token_index is not None:
                         if '402' in error_str or 'Payment Required' in error_str:
-                            self.token_stats[self.current_client_token_index]['payment_required'] = True
-                            self.logger.warning(f"Token #{self.current_client_token_index} marked as payment required")
+                            self.token_stats[token_index]['payment_required'] = True
+                            self.logger.warning(f"Token #{token_index} marked as payment required")
                         elif '403' in error_str or 'Forbidden' in error_str:
-                            self.token_stats[self.current_client_token_index]['forbidden'] = True
-                            self.logger.warning(f"Token #{self.current_client_token_index} marked as forbidden/invalid")
-                    
+                            self.token_stats[token_index]['forbidden'] = True
+                            self.logger.warning(f"Token #{token_index} marked as forbidden/invalid")
+
+                    # Rotate to next token
                     self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
-                    
-                    try:
-                        await self.initialize()
-                        self.logger.info("Retrying same page with new token...")
-                        # Don't increment page, will retry same page
-                    except Exception as reinit_error:
-                        self.logger.error(f"Failed to reinitialize: {reinit_error}")
-                        break
+                    self.logger.info(f"Rotated to token #{self.current_token_index}, will retry page {page + 1}")
+                    # Don't increment page, will retry same page with new token
                 else:
                     # Non-recoverable error, stop pagination
                     break
+            finally:
+                # Always close transport after each page
+                try:
+                    await fresh_transport.close()
+                except Exception as cleanup_error:
+                    self.logger.debug(f"Error closing transport: {cleanup_error}")
         
         # Calculate actual coverage
         if all_trades:
@@ -1096,14 +1116,33 @@ class BitqueryClient:
                 self.logger.debug(f"Error closing transport: {cleanup_error}")
     
     async def get_token_trades_in_window(self, token_address: str, start_time: float, end_time: float) -> List[Dict]:
-        """Get all trades for a token within a time window"""
+        """Get all trades for a token within a time window with token rotation"""
         # Convert timestamps to ISO format (following existing pattern)
         from datetime import datetime, timezone
         start_dt = datetime.fromtimestamp(start_time, tz=timezone.utc)
         end_dt = datetime.fromtimestamp(end_time, tz=timezone.utc)
         start_iso = start_dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         end_iso = end_dt.strftime('%Y-%m-%dT%H:%M:%SZ')
-        
+
+        # Get fresh token to enable rotation
+        token_index, api_token = self._get_next_available_token()
+
+        if not api_token:
+            self.logger.error("No available Bitquery API tokens for token trades in window")
+            return []
+
+        # Create fresh transport for this request
+        from gql.transport.aiohttp import AIOHTTPTransport
+        fresh_transport = AIOHTTPTransport(
+            url=self.endpoint,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_token}"
+            }
+        )
+
+        fresh_client = Client(transport=fresh_transport)
+
         # Use the working pattern from existing methods - combine buy and sell in one query
         # Following the exact structure from get_recent_trades_paginated()
         query = gql(f"""
@@ -1162,26 +1201,26 @@ class BitqueryClient:
               }}
             }}
         """)
-        
+
         try:
-            result = await self.client.execute_async(query)
-            
-            if self.current_client_token_index is not None:
-                self.token_stats[self.current_client_token_index]['calls_today'] += 1
-            
+            result = await fresh_client.execute_async(query)
+
+            if token_index is not None:
+                self.token_stats[token_index]['calls_today'] += 1
+
             trades = result['Solana']['DEXTrades']
             parsed_trades = []
-            
+
             # Parse trades using the same logic as existing methods
             for trade in trades:
                 # Determine if this is a buy or sell based on which side has data
                 buy_data = trade['Trade']['Buy']
                 sell_data = trade['Trade']['Sell']
-                
+
                 # Check which side has the token we're looking for
-                is_buy = (buy_data.get('Currency', {}).get('MintAddress') == token_address and 
+                is_buy = (buy_data.get('Currency', {}).get('MintAddress') == token_address and
                          buy_data.get('Amount') and buy_data.get('Price'))
-                
+
                 if is_buy:
                     parsed_trade = {
                         'timestamp': self._parse_iso_timestamp(trade['Block']['Time']),
@@ -1204,12 +1243,48 @@ class BitqueryClient:
                         'tx_hash': trade['Transaction']['Signature']
                     }
                     parsed_trades.append(parsed_trade)
-            
+
             return parsed_trades
-            
+
         except Exception as e:
+            error_str = str(e)
             self.logger.error(f"Error fetching token trades in window: {e}")
+
+            # Handle 402 and 403 errors with token rotation
+            if '402' in error_str or 'Payment Required' in error_str or '403' in error_str or 'Forbidden' in error_str:
+                if token_index is not None:
+                    if '402' in error_str or 'Payment Required' in error_str:
+                        self.token_stats[token_index]['payment_required'] = True
+                        self.logger.warning(f"Token #{token_index} marked as payment required")
+                    elif '403' in error_str or 'Forbidden' in error_str:
+                        self.token_stats[token_index]['forbidden'] = True
+                        self.logger.warning(f"Token #{token_index} marked as forbidden/invalid")
+
+                # Try to rotate to next token
+                self.current_token_index = (self.current_token_index + 1) % len(self.api_tokens)
+
+                # Close current transport before retrying
+                try:
+                    await fresh_transport.close()
+                except:
+                    pass
+
+                # Retry with new token
+                try:
+                    await self.initialize()
+                    self.logger.info("Retrying token trades query with new token...")
+                    return await self.get_token_trades_in_window(token_address, start_time, end_time)
+                except Exception as retry_error:
+                    self.logger.error(f"Retry failed: {retry_error}")
+                    return []
+
             return []
+        finally:
+            # Always close transport
+            try:
+                await fresh_transport.close()
+            except Exception as cleanup_error:
+                self.logger.debug(f"Error closing transport: {cleanup_error}")
     
     async def get_wallet_trades(self, wallet_address: str, limit: int = 50) -> List[Dict]:
         """Get all recent trades for a specific wallet across all tokens"""

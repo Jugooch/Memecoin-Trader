@@ -159,10 +159,11 @@ def safe_update_config(updates: Dict[str, Any], config_path: str = None) -> bool
         # Step 1: Create backup
         backup_path = f"{config_path}.backup"
         shutil.copy2(config_path, backup_path)
-        
-        # Step 2: Load current config
-        current_config = load_config()
-        
+
+        # Step 2: Load current config from the correct file
+        config_filename = Path(config_path).name
+        current_config = load_config(config_filename)
+
         # Step 3: Apply updates (deep merge)
         def deep_merge(base, updates):
             for key, value in updates.items():

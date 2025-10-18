@@ -122,29 +122,29 @@ class PnLStore:
             # Calculate realized P&L properly
             if mint_address in self.data["positions"]:
                 position = self.data["positions"][mint_address]
-                
+
                 # Calculate cost basis for this portion
                 sell_ratio = min(amount / position["amount"], 1.0) if position["amount"] > 0 else 0
                 cost_basis = position["total_invested"] * sell_ratio
-                
+
                 # Realized P&L = Sale proceeds - Cost basis
                 calculated_realized_pnl = usd_value - cost_basis
-                
+
                 # Use calculated P&L if not provided
                 if realized_pnl is None:
                     realized_pnl = calculated_realized_pnl
                     trade_record["realized_pnl"] = round(realized_pnl, 2)
-                
+
                 self.logger.info(f"SELL P&L calculation: Sale=${usd_value:.2f}, Cost=${cost_basis:.2f}, P&L=${realized_pnl:.2f}")
-                
+
                 # Update realized P&L
                 self.add_realized(realized_pnl)
-                
+
                 if realized_pnl > 0:
                     self.data["winning_trades"] += 1
                 else:
                     self.data["losing_trades"] += 1
-                
+
                 # Update position tracking
                 if amount >= position["amount"] * 0.99:  # Full sell
                     del self.data["positions"][mint_address]
@@ -160,6 +160,56 @@ class PnLStore:
                     realized_pnl = usd_value  # Conservative: assume 0 cost basis
                     trade_record["realized_pnl"] = round(realized_pnl, 2)
                 self.add_realized(realized_pnl)
+
+        elif action.upper() == "BUY_VERIFIED":
+            # Update existing position with verified costs (after transaction receipt)
+            # This corrects the bonding curve quote estimate with actual blockchain data
+            if mint_address in self.data["positions"]:
+                position = self.data["positions"][mint_address]
+                old_invested = position["total_invested"]
+                position["total_invested"] = usd_value
+                position["entry_price"] = price
+                self.logger.info(f"BUY_VERIFIED: Updated {symbol} cost from ${old_invested:.2f} to ${usd_value:.2f}")
+            else:
+                # Position already sold - just record the verification in history
+                self.logger.debug(f"BUY_VERIFIED: Position {symbol} already closed")
+
+        elif action.upper() == "SELL_VERIFIED":
+            # Correct the realized P&L with verified amounts (after transaction receipt)
+            # This undoes the bonding curve quote-based P&L and replaces with actual data
+            if realized_pnl is not None:
+                # Find the most recent SELL trade for this mint to get the quote-based P&L
+                recent_sell = None
+                for trade in reversed(self.data["trade_history"]):
+                    if trade["mint"] == mint_address[:16] and trade["action"] == "SELL":
+                        recent_sell = trade
+                        break
+
+                if recent_sell and recent_sell.get("realized_pnl") is not None:
+                    # Calculate the correction needed
+                    quote_pnl = recent_sell["realized_pnl"]
+                    correction = realized_pnl - quote_pnl
+
+                    self.logger.info(f"SELL_VERIFIED: Correcting {symbol} P&L from ${quote_pnl:.2f} to ${realized_pnl:.2f} (correction: ${correction:+.2f})")
+
+                    # Apply the correction to realized P&L
+                    self.add_realized(correction)
+
+                    # Update win/loss tracking if the sign changed
+                    if quote_pnl > 0 and realized_pnl <= 0:
+                        self.data["winning_trades"] -= 1
+                        self.data["losing_trades"] += 1
+                        self.logger.info(f"   Trade reclassified from WIN to LOSS")
+                    elif quote_pnl <= 0 and realized_pnl > 0:
+                        self.data["losing_trades"] -= 1
+                        self.data["winning_trades"] += 1
+                        self.logger.info(f"   Trade reclassified from LOSS to WIN")
+                else:
+                    # No recent SELL found - just add the verified P&L
+                    self.logger.warning(f"SELL_VERIFIED: No matching SELL found for {symbol}, adding verified P&L directly")
+                    self.add_realized(realized_pnl)
+            else:
+                self.logger.warning(f"SELL_VERIFIED: No realized_pnl provided for {symbol}")
         
         # Add to trade history (keep last 100 trades)
         self.data["trade_history"].append(trade_record)

@@ -1,0 +1,1422 @@
+{
+  "metadata": {
+    "start_time": "2025-10-16T20:26:12.520539",
+    "end_time": "2025-10-16T20:32:12.542366",
+    "runtime_hours": 0.10000606305555555,
+    "transactions_seen": 2460,
+    "trades_seen": 2408,
+    "wallets_tracked": 1176,
+    "mints_tracked": 224
+  },
+  "label_distribution": {
+    "unknown": 1055,
+    "sybil": 49,
+    "organic": 1,
+    "metric_bot": 35,
+    "deployer": 35,
+    "early_exit": 1
+  },
+  "detection_stats": {
+    "sybil_clusters": 49,
+    "metric_bots": 39,
+    "bait_clusters": 0
+  },
+  "bot_summary": {
+    "total_bots_profiled": 120,
+    "bots_by_type": {
+      "SYBIL": 49,
+      "METRIC_BOT": 35,
+      "DEPLOYER": 35,
+      "EARLY_EXIT": 1
+    },
+    "top_threats": []
+  },
+  "sample_classifications": {
+    "deployer": [
+      {
+        "wallet": "C4ARzqpvZ4gR3ta8...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "F6oTXVKg4aocvxtp...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 2 token(s)"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "bwamJzztZsepfkte...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 5 token(s)"
+        ],
+        "observations": 11,
+        "trades": 11
+      },
+      {
+        "wallet": "daUSBmYZfET25XLm...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "DWKNpZb7KKpMfVXK...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "DkbXWmYt3jTCZ88A...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "4vEFkoJv1jDY9bRB...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "gkbrfRxCbVCcUYju...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "9AxnHf3i8xfHZqhr...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 2 token(s)"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "9NWrMUSTYDXHgKix...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "8pC7ouh188Juu7m7...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "Cn9dWSQ5aNmdT1iw...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "8RGNtTGS9g13ctsQ...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "FvwgnNYCp2H7hnbq...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "C7szNJ1amMwSKbyZ...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "6cHVzki6rdhAryd6...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "2m8Mc2ngJCmpbEEo...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "EEamjCVUZPxZ66N2...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "AfgTiVkvVRrWCrRd...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "CgTTVh4D8qGE4uyA...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 2 token(s)"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "BCRN9B7F3BYpUSRU...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "48dsnB4Yf1VwRDPU...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "5rrPVnwyVFsaZRci...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 2 token(s)"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "Br2wUebDsA6yFgUh...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "oHZhp37rLVNX6uKB...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "AaHcBajQFtbwzCoR...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "FYGMyRRMYGWVvG7G...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "AAh1xVag4rRTatbf...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "feemRpnaSibaptAV...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "3XJfpHrMHs3nRk42...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      }
+    ],
+    "early_exit": [
+      {
+        "wallet": "FSugsWx6Uj2pDKAC...",
+        "confidence": 0.7515005110310327,
+        "reasons": [
+          "First seller: 17/17 times",
+          "Prediction accuracy: 100.0%"
+        ],
+        "observations": 17,
+        "trades": 17
+      }
+    ]
+  },
+  "bot_behavior_profiles": [
+    {
+      "wallet": "56S29mZ3wqvw8hAT...",
+      "type": "sybil",
+      "confidence": 0.5110829859038651,
+      "signature": "Sybil cluster (33 wallets) | micro-buys avg 0.3274 SOL",
+      "trades": 25,
+      "mints_traded": 12,
+      "median_hold_sec": 51.846015,
+      "mean_buy_sol": 0.3274435673076923,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "kEFiAX3jo5Nmemys...",
+      "type": "metric_bot",
+      "confidence": 0.5376824788035884,
+      "signature": "Metric bot (50% burst-triggered) | flips in 292s",
+      "trades": 6,
+      "mints_traded": 4,
+      "median_hold_sec": 291.594886,
+      "mean_buy_sol": 0.7438836735000001,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "HwnnNPDhJmwbaKWF...",
+      "type": "metric_bot",
+      "confidence": 0.5164085984748912,
+      "signature": "Metric bot (40% burst-triggered) | flips in 5s",
+      "trades": 12,
+      "mints_traded": 2,
+      "median_hold_sec": 4.519971999999999,
+      "mean_buy_sol": 0.330587815,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "65CWLmxZe3CP2PSm...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (14 wallets) | micro-buys avg 0.0494 SOL",
+      "trades": 3,
+      "mints_traded": 2,
+      "median_hold_sec": 24.909076,
+      "mean_buy_sol": 0.049382715,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "AcULspHXYRmoKkUh...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (25 wallets) | micro-buys avg 1.4325 SOL",
+      "trades": 13,
+      "mints_traded": 5,
+      "median_hold_sec": 4.3902425,
+      "mean_buy_sol": 1.4325,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "GAKjtJeQh8gkdtPz...",
+      "type": "metric_bot",
+      "confidence": 0.5071566028453108,
+      "signature": "Metric bot (70% burst-triggered) | flips in 33s",
+      "trades": 38,
+      "mints_traded": 1,
+      "median_hold_sec": 33.478385,
+      "mean_buy_sol": 0.00014534456756756757,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "7KZzMqUHtQnogwLL...",
+      "type": "metric_bot",
+      "confidence": 0.5127513013915731,
+      "signature": "Metric bot (50% burst-triggered) | flips in 45s",
+      "trades": 6,
+      "mints_traded": 2,
+      "median_hold_sec": 45.150245,
+      "mean_buy_sol": 0.580292385,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "Ed1a6iK1HNMTm56G...",
+      "type": "sybil",
+      "confidence": 0.5124973964821007,
+      "signature": "Sybil cluster (33 wallets) | micro-buys avg 0.1003 SOL",
+      "trades": 19,
+      "mints_traded": 10,
+      "median_hold_sec": 2.089316,
+      "mean_buy_sol": 0.10029562366666667,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "CVWzpFWsj6pAFbX9...",
+      "type": "metric_bot",
+      "confidence": 0.5071074774813928,
+      "signature": "Metric bot (17% burst-triggered) | flips in 44s",
+      "trades": 14,
+      "mints_traded": 2,
+      "median_hold_sec": 44.1933735,
+      "mean_buy_sol": 0.26705711616666666,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "Fh7fdf4eipTwDVbS...",
+      "type": "metric_bot",
+      "confidence": 0.5070579596696606,
+      "signature": "Metric bot (17% burst-triggered) | flips in 44s",
+      "trades": 14,
+      "mints_traded": 2,
+      "median_hold_sec": 44.2394905,
+      "mean_buy_sol": 0.2544243655833333,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "HD1FE5rkWbUZy3sC...",
+      "type": "metric_bot",
+      "confidence": 0.542104460874107,
+      "signature": "Metric bot (100% burst-triggered) | flips in 52s",
+      "trades": 7,
+      "mints_traded": 1,
+      "median_hold_sec": 51.968205499999996,
+      "mean_buy_sol": 0.030776462249999997,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "HUg1XNBfdJbFDLEa...",
+      "type": "metric_bot",
+      "confidence": 0.5379505921539133,
+      "signature": "Metric bot (100% burst-triggered) | flips in 52s",
+      "trades": 7,
+      "mints_traded": 1,
+      "median_hold_sec": 51.893150500000004,
+      "mean_buy_sol": 0.0344344075,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "5X6BJhvEnw1dm9Yi...",
+      "type": "metric_bot",
+      "confidence": 0.5446178820375609,
+      "signature": "Metric bot (100% burst-triggered) | flips in 52s",
+      "trades": 7,
+      "mints_traded": 1,
+      "median_hold_sec": 52.031572,
+      "mean_buy_sol": 0.032566908,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "46iaV6bdqCzbrE65...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (40 wallets) | micro-buys avg 0.2152 SOL",
+      "trades": 8,
+      "mints_traded": 3,
+      "median_hold_sec": 41.399872,
+      "mean_buy_sol": 0.215184072,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "Hd5bwcjmXhBoUrqa...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (41 wallets) | micro-buys avg 0.0766 SOL",
+      "trades": 7,
+      "mints_traded": 3,
+      "median_hold_sec": 20.8572535,
+      "mean_buy_sol": 0.076623279,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "AKZwN66xD6BFAMsH...",
+      "type": "sybil",
+      "confidence": 0.500006640872755,
+      "signature": "Sybil cluster (42 wallets) | micro-buys avg 0.6917 SOL",
+      "trades": 5,
+      "mints_traded": 2,
+      "median_hold_sec": 37.814348,
+      "mean_buy_sol": 0.6916774365,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "DyUvemv5jeQ7wTmy...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (43 wallets) | micro-buys avg 1.1245 SOL",
+      "trades": 6,
+      "mints_traded": 2,
+      "median_hold_sec": 30.665658,
+      "mean_buy_sol": 1.124495585,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "76tyMPcj19pWvbpf...",
+      "type": "sybil",
+      "confidence": 0.5000004349411233,
+      "signature": "Sybil cluster (45 wallets) | micro-buys avg 0.5794 SOL",
+      "trades": 5,
+      "mints_traded": 2,
+      "median_hold_sec": 37.797664499999996,
+      "mean_buy_sol": 0.5794336744999999,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "72G91SnCYyVyi5VW...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (46 wallets) | micro-buys avg 0.7652 SOL",
+      "trades": 6,
+      "mints_traded": 2,
+      "median_hold_sec": 36.643899000000005,
+      "mean_buy_sol": 0.765246627,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "C4ARzqpvZ4gR3ta8...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 2,
+      "mints_traded": 1,
+      "median_hold_sec": 7.690253,
+      "mean_buy_sol": 3.0,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "FC17mmWgrAwwAR4S...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (28 wallets) | micro-buys avg 0.1006 SOL",
+      "trades": 4,
+      "mints_traded": 2,
+      "median_hold_sec": 3.4007519999999998,
+      "mean_buy_sol": 0.100610686,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "E7Dj949sR425xA7T...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (47 wallets) | micro-buys avg 0.7592 SOL",
+      "trades": 3,
+      "mints_traded": 2,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.7591560475000001,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "F6oTXVKg4aocvxtp...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (3 tokens created)",
+      "trades": 6,
+      "mints_traded": 3,
+      "median_hold_sec": 8.9887885,
+      "mean_buy_sol": 2.962962961,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "95cuxCMwK8GhRdFP...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (49 wallets) | micro-buys avg 0.7075 SOL",
+      "trades": 3,
+      "mints_traded": 2,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.7075106195,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "2ovyX8TsChvmYnNC...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (49 wallets) | micro-buys avg 0.0385 SOL",
+      "trades": 6,
+      "mints_traded": 4,
+      "median_hold_sec": 148.3671465,
+      "mean_buy_sol": 0.038500001,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "HkuTxQvbEy4GXWFt...",
+      "type": "metric_bot",
+      "confidence": 0.5092181752881193,
+      "signature": "Metric bot (33% burst-triggered) | flips in 9s",
+      "trades": 7,
+      "mints_traded": 2,
+      "median_hold_sec": 9.082627,
+      "mean_buy_sol": 0.171193414,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "DNUZ4AbGhcDmFq2V...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (31 wallets) | micro-buys avg 0.1107 SOL",
+      "trades": 4,
+      "mints_traded": 1,
+      "median_hold_sec": 264.199045,
+      "mean_buy_sol": 0.11065835033333332,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "GEy1Pp9wemKNzr9H...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (12 wallets) | micro-buys avg 7.0253 SOL",
+      "trades": 6,
+      "mints_traded": 1,
+      "median_hold_sec": 4.061878,
+      "mean_buy_sol": 7.025276837,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "bwamJzztZsepfkte...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (5 tokens created)",
+      "trades": 11,
+      "mints_traded": 5,
+      "median_hold_sec": 12.327711,
+      "mean_buy_sol": 5.0,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "D5wE8mME9GmCzG4A...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (25 wallets) | micro-buys avg 0.0000 SOL",
+      "trades": 3,
+      "mints_traded": 3,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.0,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "BAk7jy4pPS9u4tBs...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (54 wallets) | micro-buys avg 0.4889 SOL",
+      "trades": 7,
+      "mints_traded": 1,
+      "median_hold_sec": 128.673324,
+      "mean_buy_sol": 0.48888888825,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "daUSBmYZfET25XLm...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (3 tokens created)",
+      "trades": 6,
+      "mints_traded": 3,
+      "median_hold_sec": 10.609005,
+      "mean_buy_sol": 0.950123456,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "777NtBUTG9tVu8Zp...",
+      "type": "metric_bot",
+      "confidence": 0.5330651832854284,
+      "signature": "Metric bot (40% burst-triggered) | flips in 11s",
+      "trades": 9,
+      "mints_traded": 3,
+      "median_hold_sec": 11.281373,
+      "mean_buy_sol": 2.324799918,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "FSugsWx6Uj2pDKAC...",
+      "type": "early_exit",
+      "confidence": 0.7515005110310327,
+      "signature": "Early exit specialist (17x first seller) | exits in 0s",
+      "trades": 17,
+      "mints_traded": 17,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.0,
+      "estimated_win_rate": 0.65
+    },
+    {
+      "wallet": "HAtrevHSQUeFNzTR...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (56 wallets) | micro-buys avg 0.2900 SOL",
+      "trades": 11,
+      "mints_traded": 2,
+      "median_hold_sec": 4.419581,
+      "mean_buy_sol": 0.28997302675000003,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "HDpehkTXCujA2gXh...",
+      "type": "metric_bot",
+      "confidence": 0.5199226535141614,
+      "signature": "Metric bot (33% burst-triggered) | flips in 31s",
+      "trades": 6,
+      "mints_traded": 1,
+      "median_hold_sec": 30.520679,
+      "mean_buy_sol": 0.977777777,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "4sfhzmswytdxqEjj...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (45 wallets) | micro-buys avg 0.8889 SOL",
+      "trades": 6,
+      "mints_traded": 3,
+      "median_hold_sec": 1.511884,
+      "mean_buy_sol": 0.888888888,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "93tHhPqo4QVscaG6...",
+      "type": "sybil",
+      "confidence": 0.5191729346790175,
+      "signature": "Sybil cluster (54 wallets) | micro-buys avg 0.0098 SOL",
+      "trades": 5,
+      "mints_traded": 3,
+      "median_hold_sec": 91.57688300000001,
+      "mean_buy_sol": 0.0097694185,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "K3gmTmQo6UM26JoK...",
+      "type": "metric_bot",
+      "confidence": 0.5341377353172779,
+      "signature": "Metric bot (100% burst-triggered) | flips in 4s",
+      "trades": 12,
+      "mints_traded": 2,
+      "median_hold_sec": 4.4207535,
+      "mean_buy_sol": 0.7573536029,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "GUHT4735p8orVN7U...",
+      "type": "metric_bot",
+      "confidence": 0.5328180602038922,
+      "signature": "Metric bot (100% burst-triggered) | flips in 7s",
+      "trades": 12,
+      "mints_traded": 2,
+      "median_hold_sec": 7.071991000000001,
+      "mean_buy_sol": 0.8315389519999999,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "H4tEk3bgNeMZWBdw...",
+      "type": "metric_bot",
+      "confidence": 0.5341384835628884,
+      "signature": "Metric bot (100% burst-triggered) | flips in 4s",
+      "trades": 12,
+      "mints_traded": 2,
+      "median_hold_sec": 4.41925,
+      "mean_buy_sol": 0.7577741117,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "8g2wumSJirL5D8mP...",
+      "type": "metric_bot",
+      "confidence": 0.5224042431221932,
+      "signature": "Metric bot (50% burst-triggered) | flips in 6s",
+      "trades": 8,
+      "mints_traded": 2,
+      "median_hold_sec": 5.6696225,
+      "mean_buy_sol": 0.004913146,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "9E98xZrQWSwRSe7A...",
+      "type": "metric_bot",
+      "confidence": 0.5220378811732279,
+      "signature": "Metric bot (50% burst-triggered) | flips in 6s",
+      "trades": 8,
+      "mints_traded": 2,
+      "median_hold_sec": 6.4037965,
+      "mean_buy_sol": 0.001148657,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "3WSmnK9BcE6TBo3A...",
+      "type": "metric_bot",
+      "confidence": 0.5224291397284127,
+      "signature": "Metric bot (50% burst-triggered) | flips in 6s",
+      "trades": 8,
+      "mints_traded": 2,
+      "median_hold_sec": 5.6197289999999995,
+      "mean_buy_sol": 0.002099617,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "DbZHYmm2aT4rfGx2...",
+      "type": "metric_bot",
+      "confidence": 0.5565932245804264,
+      "signature": "Metric bot (100% burst-triggered) | flips in 6s",
+      "trades": 8,
+      "mints_traded": 2,
+      "median_hold_sec": 5.8744935,
+      "mean_buy_sol": 0.003058157,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "DqHmuHLMmMnDohgo...",
+      "type": "metric_bot",
+      "confidence": 0.5333594853157236,
+      "signature": "Metric bot (100% burst-triggered) | flips in 6s",
+      "trades": 8,
+      "mints_traded": 2,
+      "median_hold_sec": 5.9843775,
+      "mean_buy_sol": 0.003868135,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "6Ri56m499iHpH5jF...",
+      "type": "metric_bot",
+      "confidence": 0.5220816622855534,
+      "signature": "Metric bot (50% burst-triggered) | flips in 6s",
+      "trades": 8,
+      "mints_traded": 2,
+      "median_hold_sec": 6.3160635,
+      "mean_buy_sol": 0.0035844565,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "AthACNGMSzi2Kbiv...",
+      "type": "metric_bot",
+      "confidence": 0.5331358037478278,
+      "signature": "Metric bot (100% burst-triggered) | flips in 6s",
+      "trades": 8,
+      "mints_traded": 2,
+      "median_hold_sec": 6.4337275,
+      "mean_buy_sol": 0.0019542659999999996,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "793KtmBsXdRVCx7y...",
+      "type": "metric_bot",
+      "confidence": 0.5224453754681703,
+      "signature": "Metric bot (50% burst-triggered) | flips in 6s",
+      "trades": 8,
+      "mints_traded": 2,
+      "median_hold_sec": 5.587192,
+      "mean_buy_sol": 0.00036626650000000003,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "E6c2hREwqWeL4yWX...",
+      "type": "metric_bot",
+      "confidence": 0.5225528267049241,
+      "signature": "Metric bot (50% burst-triggered) | flips in 5s",
+      "trades": 8,
+      "mints_traded": 2,
+      "median_hold_sec": 5.3718535,
+      "mean_buy_sol": 0.001410362,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "HJvhNn97MGi8eqF7...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (44 wallets) | micro-buys avg 0.1467 SOL",
+      "trades": 3,
+      "mints_traded": 1,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.146666666,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "H4kpYEr9meiytYi8...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (55 wallets) | micro-buys avg 0.9778 SOL",
+      "trades": 3,
+      "mints_traded": 2,
+      "median_hold_sec": 77.515758,
+      "mean_buy_sol": 0.977777777,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "F7zoUR7EcABjry4c...",
+      "type": "metric_bot",
+      "confidence": 0.5811938604803469,
+      "signature": "Metric bot (67% burst-triggered) | flips in 32s",
+      "trades": 5,
+      "mints_traded": 1,
+      "median_hold_sec": 32.207968,
+      "mean_buy_sol": 0.814814814,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "7rroJczrkDLhfNi3...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (49 wallets) | micro-buys avg 0.1157 SOL",
+      "trades": 3,
+      "mints_traded": 2,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.11570370299999999,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "DWKNpZb7KKpMfVXK...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 1,
+      "mints_traded": 1,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 1.46627566,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "D5GY4dVaAqPjjfmh...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (52 wallets) | micro-buys avg 0.0698 SOL",
+      "trades": 3,
+      "mints_traded": 1,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.069826733,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "Gee6Z3Zj4ngNdSLg...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (52 wallets) | micro-buys avg 0.0000 SOL",
+      "trades": 6,
+      "mints_traded": 1,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.0,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "51aotFAzvASgVbbE...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (51 wallets) | micro-buys avg 0.1540 SOL",
+      "trades": 6,
+      "mints_traded": 5,
+      "median_hold_sec": 58.770385,
+      "mean_buy_sol": 0.15399999849999998,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "3T998tiaP8NEVCg7...",
+      "type": "metric_bot",
+      "confidence": 0.5127513013915731,
+      "signature": "Metric bot (33% burst-triggered) | flips in 77s",
+      "trades": 6,
+      "mints_traded": 4,
+      "median_hold_sec": 77.167121,
+      "mean_buy_sol": 0.04535761866666667,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "C7cG8ywJkNVusNhc...",
+      "type": "sybil",
+      "confidence": 0.518340008324022,
+      "signature": "Sybil cluster (49 wallets) | micro-buys avg 0.0102 SOL",
+      "trades": 3,
+      "mints_traded": 1,
+      "median_hold_sec": 306.262635,
+      "mean_buy_sol": 0.010214272,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "CatuVYhFbh2kzkHh...",
+      "type": "sybil",
+      "confidence": 0.5074941915414696,
+      "signature": "Sybil cluster (45 wallets) | micro-buys avg 0.0192 SOL",
+      "trades": 5,
+      "mints_traded": 1,
+      "median_hold_sec": 64.862327,
+      "mean_buy_sol": 0.0191714825,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "Gz2q9CMA3hWz61X9...",
+      "type": "sybil",
+      "confidence": 0.5008333336032523,
+      "signature": "Sybil cluster (52 wallets) | micro-buys avg 0.0193 SOL",
+      "trades": 7,
+      "mints_traded": 4,
+      "median_hold_sec": 17.611753,
+      "mean_buy_sol": 0.01931111075,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "BU8jwa2aUehAjKPp...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (52 wallets) | micro-buys avg 0.0293 SOL",
+      "trades": 3,
+      "mints_traded": 1,
+      "median_hold_sec": 5.859855,
+      "mean_buy_sol": 0.029333333,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "DkbXWmYt3jTCZ88A...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 2,
+      "mints_traded": 1,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.222222221,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "4vEFkoJv1jDY9bRB...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 2,
+      "mints_traded": 1,
+      "median_hold_sec": 0.558192,
+      "mean_buy_sol": 0.08,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "gkbrfRxCbVCcUYju...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 2,
+      "mints_traded": 1,
+      "median_hold_sec": 5.270353,
+      "mean_buy_sol": 1.382716048,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "9NSprJSWA4XjfZhw...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (48 wallets) | micro-buys avg 0.1174 SOL",
+      "trades": 12,
+      "mints_traded": 5,
+      "median_hold_sec": 17.477375,
+      "mean_buy_sol": 0.1174434045,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "84UQ6id6jxaguVF9...",
+      "type": "sybil",
+      "confidence": 0.5187412158753734,
+      "signature": "Sybil cluster (42 wallets) | micro-buys avg 0.0100 SOL",
+      "trades": 6,
+      "mints_traded": 3,
+      "median_hold_sec": 13.893461,
+      "mean_buy_sol": 0.010019962333333333,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "9AxnHf3i8xfHZqhr...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (2 tokens created)",
+      "trades": 4,
+      "mints_traded": 2,
+      "median_hold_sec": 0.7236925000000001,
+      "mean_buy_sol": 2.500000001,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "8rk7fPjFKCJBVjsE...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (73 wallets) | micro-buys avg 0.1410 SOL",
+      "trades": 3,
+      "mints_traded": 2,
+      "median_hold_sec": 37.165412,
+      "mean_buy_sol": 0.140964011,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "9NWrMUSTYDXHgKix...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 1,
+      "mints_traded": 1,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.009866663,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "8pC7ouh188Juu7m7...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 2,
+      "mints_traded": 1,
+      "median_hold_sec": 15.300807,
+      "mean_buy_sol": 0.227722772,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "GSFBzKK7r8ANJ8AH...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (48 wallets) | micro-buys avg 1.5937 SOL",
+      "trades": 5,
+      "mints_traded": 1,
+      "median_hold_sec": 14.161296,
+      "mean_buy_sol": 1.593687029,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "9qhVrWfnqNUE8Dom...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (48 wallets) | micro-buys avg 0.9913 SOL",
+      "trades": 4,
+      "mints_traded": 1,
+      "median_hold_sec": 30.132942,
+      "mean_buy_sol": 0.99130202,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "97jv9pjCf5D7VUZE...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (48 wallets) | micro-buys avg 0.1923 SOL",
+      "trades": 6,
+      "mints_traded": 3,
+      "median_hold_sec": 33.040955,
+      "mean_buy_sol": 0.19233333333333333,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "64qC9765SfW5yAH4...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (78 wallets) | micro-buys avg 0.1721 SOL",
+      "trades": 3,
+      "mints_traded": 1,
+      "median_hold_sec": 87.343962,
+      "mean_buy_sol": 0.1721150145,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "Cn9dWSQ5aNmdT1iw...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 1,
+      "mints_traded": 1,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.236798128,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "GUMrovYgyC2YSwc2...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (51 wallets) | micro-buys avg 0.0200 SOL",
+      "trades": 6,
+      "mints_traded": 3,
+      "median_hold_sec": 3.591622,
+      "mean_buy_sol": 0.020000001,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "8RGNtTGS9g13ctsQ...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 1,
+      "mints_traded": 1,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.197332033,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "CgKKDMTvPagQv6Wy...",
+      "type": "sybil",
+      "confidence": 0.5198968977670334,
+      "signature": "Sybil cluster (17 wallets) | micro-buys avg 0.0094 SOL",
+      "trades": 4,
+      "mints_traded": 2,
+      "median_hold_sec": 64.132885,
+      "mean_buy_sol": 0.0093827145,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "FvwgnNYCp2H7hnbq...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 1,
+      "mints_traded": 1,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.098765431,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "C7szNJ1amMwSKbyZ...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 2,
+      "mints_traded": 1,
+      "median_hold_sec": 19.826898,
+      "mean_buy_sol": 0.02959997,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "6cHVzki6rdhAryd6...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 2,
+      "mints_traded": 1,
+      "median_hold_sec": 10.80599,
+      "mean_buy_sol": 2.903546251,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "5TeibrGC46yJQzx1...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (79 wallets) | micro-buys avg 0.7340 SOL",
+      "trades": 3,
+      "mints_traded": 1,
+      "median_hold_sec": 2.680271,
+      "mean_buy_sol": 0.734039425,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "F3SJxPR6JDpg9ecq...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (58 wallets) | micro-buys avg 0.3303 SOL",
+      "trades": 4,
+      "mints_traded": 2,
+      "median_hold_sec": 2.6723205,
+      "mean_buy_sol": 0.330304628,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "GZmUDsn8W1rtopeT...",
+      "type": "sybil",
+      "confidence": 0.5187386394996018,
+      "signature": "Sybil cluster (58 wallets) | micro-buys avg 0.0100 SOL",
+      "trades": 3,
+      "mints_traded": 3,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.010001376,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "8V1atAUHECJA6FV9...",
+      "type": "metric_bot",
+      "confidence": 0.5130107528277054,
+      "signature": "Metric bot (50% burst-triggered) | flips in 24s",
+      "trades": 5,
+      "mints_traded": 1,
+      "median_hold_sec": 24.4807525,
+      "mean_buy_sol": 0.09865125,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "4DiFkt4ztx2PxwLC...",
+      "type": "sybil",
+      "confidence": 0.5355648361123547,
+      "signature": "Sybil cluster (17 wallets) | micro-buys avg 0.0010 SOL",
+      "trades": 3,
+      "mints_traded": 2,
+      "median_hold_sec": 15.725557,
+      "mean_buy_sol": 0.001000001,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "A345VdmiWvLkiBVc...",
+      "type": "metric_bot",
+      "confidence": 0.5181856869889517,
+      "signature": "Metric bot (60% burst-triggered) | flips in 11s",
+      "trades": 8,
+      "mints_traded": 4,
+      "median_hold_sec": 10.790294,
+      "mean_buy_sol": 0.977777777,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "2m8Mc2ngJCmpbEEo...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 3,
+      "mints_traded": 1,
+      "median_hold_sec": 3.648633,
+      "mean_buy_sol": 2.0,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "BFwCoNNfLTPp9bLq...",
+      "type": "metric_bot",
+      "confidence": 0.550168826066551,
+      "signature": "Metric bot (25% burst-triggered) | flips in 32s",
+      "trades": 7,
+      "mints_traded": 4,
+      "median_hold_sec": 32.473462,
+      "mean_buy_sol": 0.00475,
+      "estimated_win_rate": 0.55
+    },
+    {
+      "wallet": "EEamjCVUZPxZ66N2...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 2,
+      "mints_traded": 1,
+      "median_hold_sec": 188.162623,
+      "mean_buy_sol": 1.97530864,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "2K5zRWdhhgvtQPkS...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (50 wallets) | micro-buys avg 0.0634 SOL",
+      "trades": 5,
+      "mints_traded": 2,
+      "median_hold_sec": 82.061151,
+      "mean_buy_sol": 0.06342994133333334,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "CYPrCnrvs2s8DM8P...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (50 wallets) | micro-buys avg 0.0610 SOL",
+      "trades": 5,
+      "mints_traded": 2,
+      "median_hold_sec": 81.957647,
+      "mean_buy_sol": 0.060990772666666665,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "8M7QeYjwsy2DXXjZ...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (56 wallets) | micro-buys avg 0.0604 SOL",
+      "trades": 5,
+      "mints_traded": 2,
+      "median_hold_sec": 82.058147,
+      "mean_buy_sol": 0.060355912000000005,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "AspnoDT2WUyaGNAQ...",
+      "type": "sybil",
+      "confidence": 0.5,
+      "signature": "Sybil cluster (59 wallets) | micro-buys avg 0.0597 SOL",
+      "trades": 5,
+      "mints_traded": 2,
+      "median_hold_sec": 82.145858,
+      "mean_buy_sol": 0.05966781866666667,
+      "estimated_win_rate": 0.45
+    },
+    {
+      "wallet": "AfgTiVkvVRrWCrRd...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 1,
+      "mints_traded": 1,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.148148147,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "CgTTVh4D8qGE4uyA...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (2 tokens created)",
+      "trades": 3,
+      "mints_traded": 2,
+      "median_hold_sec": 176.965436,
+      "mean_buy_sol": 0.19259259150000002,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "BCRN9B7F3BYpUSRU...",
+      "type": "deployer",
+      "confidence": 1.0,
+      "signature": "Deployer (1 tokens created)",
+      "trades": 1,
+      "mints_traded": 1,
+      "median_hold_sec": 0.0,
+      "mean_buy_sol": 0.046373261,
+      "estimated_win_rate": 0.5
+    },
+    {
+      "wallet": "9ckUbRsEn2Fg8LTn...",
+      "type": "sybil",
+      "confidence": 0.5224848229167999,
+      "signature": "Sybil cluster (58 wallets) | micro-buys avg 0.0081 SOL",
+      "trades": 6,
+      "mints_traded": 4,
+      "median_hold_sec": 149.8808685,
+      "mean_buy_sol": 0.008079065666666666,
+      "estimated_win_rate": 0.45
+    }
+  ]
+}

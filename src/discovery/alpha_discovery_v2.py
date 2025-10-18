@@ -79,7 +79,11 @@ class ProvenAlphaFinder:
         # Get additional discovery configs
         self.max_moralis_tokens = api_opt.get('discovery_max_moralis_tokens', 30)
         self.bitquery_success_threshold = api_opt.get('discovery_bitquery_success_threshold', 30)
-        
+
+        # Log which bitquery tokens are available (for debugging config issues)
+        bitquery_tokens = self.config.get('bitquery_tokens', [])
+        self.logger.info(f"ProvenAlphaFinder initialized with {len(bitquery_tokens)} Bitquery token(s)")
+
         self.logger.info(f"Discovery config loaded: thresholds={self.success_thresholds}, "
                         f"early_window={self.early_window_seconds}s, appearances={self.min_wallet_appearances}, "
                         f"max_moralis={self.max_moralis_tokens}, bitquery_threshold={self.bitquery_success_threshold}")
@@ -225,8 +229,8 @@ class ProvenAlphaFinder:
         self.logger.info("🎯 CONSISTENCY MODE: Focusing on steady organic performers over lucky champions")
         
         now = datetime.utcnow()
-        # Consistency mode: Look for steady performance over 12 hours (more data, less noise)
-        start_time = now - timedelta(hours=12)      # 12 hours for consistency analysis
+        # Consistency mode: Look for steady performance over 4 hours (more data, less noise)
+        start_time = now - timedelta(hours=4)      # 4 hours for consistency analysis
         end_time = now - timedelta(minutes=15)      # 15 minutes ago for data completeness
         
         self.logger.info(f"Analyzing recent tokens window: {start_time.isoformat()}Z -> {end_time.isoformat()}Z")
@@ -809,11 +813,20 @@ class ProvenAlphaFinder:
                     and str(t.get('signer')) != mint
                 ]
                 
+                # Get deployer/creator address to filter out self-buys
+                deployer = str(token_data.get('deployer', ''))
+
                 # Apply position size filtering
                 for trade in early_trades:
                     wallet = str(trade['signer'])
+
+                    # CRITICAL: Exclude developers buying their own tokens
+                    if deployer and wallet == deployer:
+                        self.logger.debug(f"Filtered out dev self-buy: {wallet[:8]}... is deployer of {mint[:8]}...")
+                        continue
+
                     early_buyers.add(wallet)
-                    
+
                     # Check position size significance
                     if self._is_significant_position(trade):
                         filtered_buyers.add(wallet)
@@ -832,53 +845,61 @@ class ProvenAlphaFinder:
             
             # FALLBACK: Use Moralis only if Bitquery lacks data or coverage
             self.logger.debug(f"Falling back to Moralis for {mint[:8]}... early buyers (insufficient Bitquery coverage)")
-            
+
+            # Get deployer/creator address to filter out self-buys
+            deployer = str(token_data.get('deployer', ''))
+
             # Get swaps and filter for launch time window (Moralis max limit is 100)
             all_swaps = await self.moralis.get_token_swaps(mint, limit=100)
-            
+
             # Filter to swaps within early window
             swaps = [
                 swap for swap in all_swaps
                 if launch_time <= self._parse_iso_timestamp(swap.get('timestamp', '')) <= launch_time + early_window
             ]
-            
+
             self.logger.debug(f"Found {len(swaps)} early swaps from Moralis for {mint[:8]}... in first {early_window}s")
-            
+
             if not swaps:
                 self.logger.debug(f"No early swaps found for {mint[:8]}...")
                 return []
-            
-            # Sort swaps by timestamp 
+
+            # Sort swaps by timestamp
             sorted_swaps = sorted(swaps, key=lambda x: self._parse_iso_timestamp(x.get('timestamp', '')))
-            
+
             # Reset sets for Moralis processing
             early_buyers = set()
             filtered_buyers = set()
-            
+
             for swap in sorted_swaps:
                 swap_time = self._parse_iso_timestamp(swap.get('timestamp', ''))
-                
-                # All swaps in our query are within the early window by design  
+
+                # All swaps in our query are within the early window by design
                 if launch_time <= swap_time <= launch_time + early_window:
                     # Check if this is actually a buy into our token
                     if not self._is_buy_into_token(swap, mint):
                         continue
-                        
+
                     # Try different wallet address fields that might be in the swap data
-                    wallet = (swap.get('wallet') or 
-                             swap.get('buyer') or 
-                             swap.get('trader') or 
+                    wallet = (swap.get('wallet') or
+                             swap.get('buyer') or
+                             swap.get('trader') or
                              swap.get('from_address') or
                              swap.get('to_address'))
-                    
+
                     # Also try nested structures
                     if not wallet and 'transaction' in swap:
                         wallet = swap['transaction'].get('from')
-                    
+
                     # Validate wallet address and ensure it's a buy (not the token mint address)
                     if wallet and len(str(wallet)) >= 32 and str(wallet) != mint:
+                        # CRITICAL: Exclude developers buying their own tokens
+                        if deployer and str(wallet) == deployer:
+                            self.logger.debug(f"Filtered out dev self-buy: {str(wallet)[:8]}... is deployer of {mint[:8]}...")
+                            continue
+
                         early_buyers.add(str(wallet))
-                        
+
                         # Check position size significance
                         if self._is_significant_position(swap):
                             filtered_buyers.add(str(wallet))
@@ -1022,32 +1043,18 @@ class ProvenAlphaFinder:
     async def _score_alpha_candidates(self, candidates: Dict) -> List[str]:
         """Score and rank alpha wallet candidates with recency decay and performance multiplier"""
         import math
-        
+
         scored_wallets = []
         current_time = time.time()
-        
+
         self.logger.info(f"Evaluating {len(candidates)} wallet candidates...")
-        
-        # ENHANCED: First apply farming detection to filter out manipulation wallets
-        self.logger.info("Running advanced farming detection on wallet candidates...")
-        farming_filtered_candidates = await self._filter_farming_wallets(candidates)
-        
-        # Then detect and filter out suspicious wash trading patterns
-        suspicious_wallets = self._detect_wash_trading_patterns(farming_filtered_candidates)
-        if suspicious_wallets:
-            # Remove suspicious wallets from candidates
-            filtered_candidates = {k: v for k, v in farming_filtered_candidates.items() if k not in suspicious_wallets}
-            self.logger.info(f"Filtered out {len(suspicious_wallets)} suspicious wallets, {len(filtered_candidates)} remaining")
-            candidates = filtered_candidates
-        else:
-            candidates = farming_filtered_candidates
-        
+
         # Show wallet appearance distribution for debugging
         appearance_counts = {}
         for wallet, token_list in candidates.items():
             count = len(token_list)
             appearance_counts[count] = appearance_counts.get(count, 0) + 1
-            
+
         self.logger.info(f"Wallet appearance distribution: {dict(sorted(appearance_counts.items()))}")
         
         for wallet, token_list in candidates.items():
@@ -1234,17 +1241,97 @@ class ProvenAlphaFinder:
         
         # Sort by score (highest first)
         scored_wallets.sort(key=lambda x: x['score'], reverse=True)
-        
+
         # Log top performers with tier information
         self.logger.info(f"Found {len(scored_wallets)} qualified alpha candidates across all tiers")
-        
+
         # Show distribution by tier
         tier_counts = {}
         for w in scored_wallets:
             tier = w.get('tier', 'unknown')
             tier_counts[tier] = tier_counts.get(tier, 0) + 1
-        
+
         self.logger.info(f"Tier distribution: {tier_counts}")
+
+        # PERFORMANCE OPTIMIZATION: Only run expensive farming detection on top candidates
+        # But if we have a manageable number (<= 100), check them all for quality
+        # This reduces API calls from 3,000-4,000 to 600-900 (70-80% reduction)
+
+        # Dynamic limit: check all if <= 100, otherwise top 50
+        if len(scored_wallets) <= 100:
+            top_candidate_limit = len(scored_wallets)  # Check all qualified candidates
+            self.logger.info(f"✅ Checking ALL {len(scored_wallets)} qualified candidates for farming (manageable size)")
+        else:
+            top_candidate_limit = 50  # Check top 50 if we have too many
+            self.logger.info(f"⚠️  Large candidate pool: checking top {top_candidate_limit} of {len(scored_wallets)} for farming")
+
+        if len(scored_wallets) > top_candidate_limit:
+            self.logger.info(f"🚀 PERFORMANCE OPTIMIZATION: Running farming detection on top {top_candidate_limit} candidates only (not all {len(scored_wallets)})")
+
+            # Create a dict of top candidates for farming detection
+            top_candidates = {}
+            for wallet_data in scored_wallets[:top_candidate_limit]:
+                wallet = wallet_data['wallet']
+                top_candidates[wallet] = wallet_data['tokens']
+
+            # Run farming detection on top candidates only
+            self.logger.info(f"Running advanced farming detection on top {len(top_candidates)} candidates...")
+            farming_filtered_top = await self._filter_farming_wallets(top_candidates)
+
+            # Run wash trading detection on filtered top candidates
+            suspicious_wallets = self._detect_wash_trading_patterns(farming_filtered_top)
+
+            # Create a set of wallets that passed all checks
+            approved_wallets = set(farming_filtered_top.keys()) - suspicious_wallets
+
+            if suspicious_wallets:
+                self.logger.info(f"Filtered out {len(suspicious_wallets)} suspicious wallets from top candidates, {len(approved_wallets)} remaining")
+
+            # Filter scored_wallets to only include approved top candidates
+            # REMOVE all other candidates below top N since they weren't checked for farming
+            filtered_scored_wallets = []
+            removed_unchecked = 0
+
+            for wallet_data in scored_wallets:
+                wallet = wallet_data['wallet']
+                # Only keep wallets that were checked AND approved
+                if wallet in top_candidates:
+                    if wallet in approved_wallets:
+                        filtered_scored_wallets.append(wallet_data)
+                else:
+                    # Below top N - REMOVE since it wasn't checked for farming
+                    removed_unchecked += 1
+
+            scored_wallets = filtered_scored_wallets
+
+            if removed_unchecked > 0:
+                self.logger.info(f"Removed {removed_unchecked} unchecked candidates (below top {top_candidate_limit})")
+            self.logger.info(f"After farming/wash filtering: {len(scored_wallets)} candidates remaining")
+        else:
+            # Few candidates - run farming detection on all of them
+            self.logger.info(f"Running advanced farming detection on all {len(scored_wallets)} candidates (below threshold)...")
+
+            # Create dict for farming detection
+            all_candidates = {}
+            for wallet_data in scored_wallets:
+                wallet = wallet_data['wallet']
+                all_candidates[wallet] = wallet_data['tokens']
+
+            # Run farming detection
+            farming_filtered_all = await self._filter_farming_wallets(all_candidates)
+
+            # Run wash trading detection
+            suspicious_wallets = self._detect_wash_trading_patterns(farming_filtered_all)
+
+            # Create approved set
+            approved_wallets = set(farming_filtered_all.keys()) - suspicious_wallets
+
+            if suspicious_wallets:
+                self.logger.info(f"Filtered out {len(suspicious_wallets)} suspicious wallets, {len(approved_wallets)} remaining")
+
+            # Filter scored_wallets to only approved
+            scored_wallets = [w for w in scored_wallets if w['wallet'] in approved_wallets]
+            self.logger.info(f"After farming/wash filtering: {len(scored_wallets)} candidates remaining")
         
         for i, wallet_data in enumerate(scored_wallets[:15]):  # Show top 15
             w = wallet_data

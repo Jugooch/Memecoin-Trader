@@ -7,7 +7,7 @@ import logging
 import time
 from typing import Dict, Optional
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.clients.pumpfun_client import PumpFunClient
 from src.clients.moralis_client import MoralisClient
@@ -72,7 +72,22 @@ class TradingEngine:
         
         # Initialize transaction signer for live trading (using wallet keys from pumpportal)
         self.transaction_signer = None
-        
+
+        # Initialize fast transaction submitter if fast execution is enabled
+        self.fast_transaction_submitter = None
+        self.fast_execution_enabled = False
+
+        if hasattr(config, 'fast_execution') and config.fast_execution:
+            if config.fast_execution.get('enabled', False):
+                try:
+                    from src.core.fast_transaction_submitter import FastTransactionSubmitter
+                    self.fast_transaction_submitter = FastTransactionSubmitter(config.__dict__)
+                    self.fast_execution_enabled = True
+                    self.logger.info("✅ Fast execution enabled (Helius + Jito)")
+                except Exception as e:
+                    self.logger.error(f"❌ Failed to initialize fast execution: {e}")
+                    self.fast_execution_enabled = False
+
         # Debug logging
         self.logger.info(f"Checking transaction signer initialization...")
         self.logger.info(f"Has pumpportal config: {hasattr(config, 'pumpportal') and config.pumpportal is not None}")
@@ -108,23 +123,35 @@ class TradingEngine:
         
         # Initialize Discord notifier
         webhook_url = None
-        if hasattr(config, 'notifications') and config.notifications:
+
+        # Try multiple config locations for webhook URL
+        if hasattr(config, 'discord') and config.discord and isinstance(config.discord, dict):
+            # Standard location: discord.webhook_url
+            webhook_url = config.discord.get('webhook_url', None)
+            if webhook_url:
+                self.logger.info(f"DISCORD_DEBUG: Found discord.webhook_url: {webhook_url[:50]}...")
+        elif hasattr(config, 'notifications') and config.notifications:
+            # Legacy location: notifications.discord_webhook_url
             webhook_url = config.notifications.get('discord_webhook_url', None)
-            self.logger.info(f"DISCORD_DEBUG: Found notifications section, webhook_url: {webhook_url[:50] if webhook_url else 'None'}")
+            if webhook_url:
+                self.logger.info(f"DISCORD_DEBUG: Found notifications.discord_webhook_url: {webhook_url[:50]}...")
         elif hasattr(config, 'discord_webhook_url'):
+            # Root level location
             webhook_url = config.discord_webhook_url
-            self.logger.info(f"DISCORD_DEBUG: Found root discord_webhook_url: {webhook_url[:50] if webhook_url else 'None'}")
-        else:
+            if webhook_url:
+                self.logger.info(f"DISCORD_DEBUG: Found root discord_webhook_url: {webhook_url[:50]}...")
+
+        if not webhook_url:
             self.logger.warning("DISCORD_DEBUG: No Discord webhook URL found in config")
-            self.logger.info(f"DISCORD_DEBUG: Config notifications attr exists: {hasattr(config, 'notifications')}, value: {getattr(config, 'notifications', 'NONE')}")
-        
+            self.logger.info(f"DISCORD_DEBUG: Checked discord, notifications, and root level")
+
         # Check if webhook URL is actually set and not empty
         if webhook_url and webhook_url.strip():
             self.notifier = DiscordNotifier(webhook_url.strip())
-            self.logger.info(f"DISCORD_DEBUG: Notifier initialized successfully, enabled: {self.notifier.enabled}")
+            self.logger.info(f"✅ Discord notifier initialized")
         else:
             self.notifier = None
-            self.logger.warning(f"DISCORD_DEBUG: Notifier not initialized - webhook_url is empty or None: '{webhook_url}'")
+            self.logger.warning(f"⚠️ Discord notifier not initialized - no webhook URL configured")
         
         # Initialize P&L store
         self.pnl_store = PnLStore(
@@ -132,17 +159,46 @@ class TradingEngine:
             initial_capital=config.initial_capital
         )
         
-        # Initialize blockchain analytics for accurate P&L (Discord notifications only)
+        # Initialize blockchain analytics for SOL price and P&L tracking
+        # Uses Helius RPC (if fast execution enabled) or QuickNode RPC
+        # Falls back to SOL price only if no RPC configured
         self.blockchain_analytics = None
-        if config.quicknode_endpoint and self.transaction_signer:
-            try:
-                self.blockchain_analytics = BlockchainAnalytics(
-                    rpc_endpoint=config.quicknode_endpoint,
-                    api_key=config.quicknode_api_key
-                )
-                self.logger.info("✅ Blockchain analytics initialized for accurate P&L tracking")
-            except Exception as e:
-                self.logger.warning(f"⚠️ Blockchain analytics not available: {e}")
+        try:
+            rpc_endpoint = None
+            api_key = None
+            rpc_source = None
+
+            # Prefer Helius RPC if fast execution is enabled
+            if self.fast_execution_enabled and hasattr(config, 'fast_execution'):
+                helius_rpc = config.fast_execution.get('helius_rpc_endpoint')
+                if helius_rpc:
+                    rpc_endpoint = helius_rpc
+                    rpc_source = "Helius"
+                    # Helius includes API key in URL, no separate key needed
+                    api_key = None
+
+            # Fallback to QuickNode if no Helius or fast execution disabled
+            if not rpc_endpoint and config.quicknode_endpoint:
+                rpc_endpoint = config.quicknode_endpoint
+                api_key = config.quicknode_api_key if hasattr(config, 'quicknode_api_key') else None
+                rpc_source = "QuickNode"
+
+            # Always initialize (for SOL price at minimum)
+            if not rpc_endpoint:
+                rpc_endpoint = "https://placeholder"  # Placeholder - won't be used for RPC calls
+                rpc_source = None
+
+            self.blockchain_analytics = BlockchainAnalytics(
+                rpc_endpoint=rpc_endpoint,
+                api_key=api_key
+            )
+
+            if rpc_source:
+                self.logger.info(f"✅ Blockchain analytics initialized with full RPC support ({rpc_source})")
+            else:
+                self.logger.info("✅ Blockchain analytics initialized (SOL price only, no RPC)")
+        except Exception as e:
+            self.logger.warning(f"⚠️ Blockchain analytics not available: {e}")
         
         # Position tracking - OLD SYSTEM (will be phased out)
         self.active_positions = {}
@@ -317,14 +373,20 @@ class TradingEngine:
     async def _verify_transaction_amounts(self, tx_signature: str, mint: str, action: str) -> Dict:
         """Verify transaction amounts using live account balance - fast and accurate"""
         try:
-            if not self.transaction_signer:
+            if not self.transaction_signer and not (self.fast_execution_enabled and self.fast_transaction_submitter):
                 return {}
-                
+
             verified_amounts = {}
-            
+
             if action == 'buy':
                 # Get current token balance from live account data
-                current_balance = await self.transaction_signer.get_token_balance(mint)
+                # Support both fast execution and legacy paths
+                if self.fast_execution_enabled and self.fast_transaction_submitter:
+                    current_balance = await self.fast_transaction_submitter.get_token_balance(mint)
+                elif self.transaction_signer:
+                    current_balance = await self.transaction_signer.get_token_balance(mint)
+                else:
+                    current_balance = None
                 if current_balance and current_balance > 0:
                     verified_amounts['tokens_received'] = current_balance
                     self.logger.info(f"✅ Verified buy: {current_balance:,.0f} tokens from live balance")
@@ -350,13 +412,19 @@ class TradingEngine:
     async def _get_verified_token_balance(self, mint_address: str, position: Position) -> float:
         """
         DEPRECATED: Get token balance with smart ATA indexing awareness.
-        
+
         This function is being phased out in favor of verification-first position creation.
-        
+
         Handles the delay between token purchase and ATA indexing.
         """
         # Try blockchain query first
-        blockchain_balance = await self.transaction_signer.get_token_balance(mint_address)
+        # Support both fast execution and legacy paths
+        if self.fast_execution_enabled and self.fast_transaction_submitter:
+            blockchain_balance = await self.fast_transaction_submitter.get_token_balance(mint_address)
+        elif self.transaction_signer:
+            blockchain_balance = await self.transaction_signer.get_token_balance(mint_address)
+        else:
+            blockchain_balance = None
         
         # If blockchain query succeeds and returns tokens, use it
         if blockchain_balance is not None and blockchain_balance > 0:
@@ -376,9 +444,15 @@ class TradingEngine:
                 for attempt in range(4):  # More attempts for critical operation
                     delay = min(2 ** attempt, 8)  # Cap at 8 second delay
                     await asyncio.sleep(delay)
-                    
+
                     self.logger.info(f"🔍 Balance query attempt {attempt + 2} (after {delay}s delay)...")
-                    retry_balance = await self.transaction_signer.get_token_balance(mint_address)
+                    # Support both fast execution and legacy paths
+                    if self.fast_execution_enabled and self.fast_transaction_submitter:
+                        retry_balance = await self.fast_transaction_submitter.get_token_balance(mint_address)
+                    elif self.transaction_signer:
+                        retry_balance = await self.transaction_signer.get_token_balance(mint_address)
+                    else:
+                        retry_balance = None
                     
                     if retry_balance is not None and retry_balance > 0:
                         self.logger.info(f"✅ Success! Found {retry_balance} tokens on attempt {attempt + 2}")
@@ -408,45 +482,75 @@ class TradingEngine:
         # Both blockchain and position show 0 tokens
         return 0.0
     
-    async def _get_post_transaction_balance(self, mint_address: str) -> float:
+    async def _get_post_transaction_balance(self, mint_address: str, pre_sell_balance: float = None, tokens_sold: float = None) -> float:
         """
         DEPRECATED: Get token balance after a transaction with retry logic.
-        
+
         This function is being phased out in favor of verification-first position creation.
-        
+
         Used after sells to verify remaining balance.
+
+        Args:
+            mint_address: Token mint address
+            pre_sell_balance: Balance before sell (for stale data detection)
+            tokens_sold: Amount of tokens sold (for stale data detection)
         """
         # Try multiple times with delays (transaction might need time to settle)
         for attempt in range(4):
-            balance = await self.transaction_signer.get_token_balance(mint_address)
-            
+            # Support both fast execution and legacy paths
+            if self.fast_execution_enabled and self.fast_transaction_submitter:
+                balance = await self.fast_transaction_submitter.get_token_balance(mint_address)
+            elif self.transaction_signer:
+                balance = await self.transaction_signer.get_token_balance(mint_address)
+            else:
+                balance = None
+
             if balance is not None:
-                return balance
-            
+                # CRITICAL: Detect stale data - if balance hasn't decreased after a sell, RPC is stale!
+                if pre_sell_balance is not None and tokens_sold is not None and tokens_sold > 0:
+                    # Balance should have decreased by approximately tokens_sold
+                    expected_remaining = pre_sell_balance - tokens_sold
+                    # Allow 1% tolerance for rounding
+                    if balance > pre_sell_balance * 0.99:
+                        self.logger.warning(f"⚠️ STALE BALANCE DETECTED: Query returned {balance:.0f} but pre-sell was {pre_sell_balance:.0f} (sold {tokens_sold:.0f})")
+                        self.logger.warning(f"   RPC hasn't indexed the sell yet, retrying...")
+                        balance = None  # Treat as failed query
+
+                if balance is not None:
+                    return balance
+
             if attempt < 3:  # Don't sleep on last attempt
                 await asyncio.sleep(1 + attempt)  # 1s, 2s, 3s delays
                 self.logger.warning(f"Post-transaction balance query attempt {attempt + 1} failed, retrying...")
-        
-        # If all attempts failed, return 0 (assume fully sold)
-        self.logger.warning("All post-transaction balance queries failed, assuming 0")
-        return 0.0
+
+        # If all attempts failed, return None (cannot verify balance)
+        self.logger.error("❌ All post-transaction balance queries failed - cannot verify balance!")
+        return None
 
     async def buy_token(self, mint_address: str, usd_amount: float, paper_mode: bool = True, symbol: str = "UNKNOWN", confidence_score: float = None) -> Dict:
         """Execute a buy order for a token"""
         try:
             self.logger.info(f"Executing BUY for {mint_address}, amount: ${usd_amount}")
-            
-            # DUMP PROTECTION - Check before any other logic
-            dump_check = await self._check_dump_protection(mint_address)
-            if not dump_check.get('safe_to_enter', True):
-                reason = dump_check.get('reason', 'Unknown dump protection trigger')
-                self.logger.warning(f"🚨 DUMP PROTECTION: Skipping {mint_address[:8]}... - {reason}")
-                return {
-                    "success": False, 
-                    "error": f"Dump protection: {reason}",
-                    "dump_protection": dump_check
-                }
-            
+
+            # CRITICAL PATH OPTIMIZATION: Skip dump protection in fast execution mode
+            # Dump protection adds 700-1200ms (2 Moralis API calls) which causes us to arrive 7 slots late
+            # Fast execution relies on SPEED to get good prices, not pre-trade analysis
+            skip_dump_protection = self.fast_execution_enabled
+
+            if not skip_dump_protection:
+                # DUMP PROTECTION - Check before any other logic (legacy mode only)
+                dump_check = await self._check_dump_protection(mint_address)
+                if not dump_check.get('safe_to_enter', True):
+                    reason = dump_check.get('reason', 'Unknown dump protection trigger')
+                    self.logger.warning(f"🚨 DUMP PROTECTION: Skipping {mint_address[:8]}... - {reason}")
+                    return {
+                        "success": False,
+                        "error": f"Dump protection: {reason}",
+                        "dump_protection": dump_check
+                    }
+            else:
+                self.logger.debug("⚡ Dump protection skipped (fast execution mode)")
+
             if paper_mode:
                 return await self._execute_paper_buy(mint_address, usd_amount, symbol, confidence_score)
             else:
@@ -593,15 +697,31 @@ class TradingEngine:
         import time
         return time.time()
 
-    async def sell_token(self, mint_address: str, percentage: float, paper_mode: bool = True, symbol: str = "UNKNOWN", exit_reason: str = "unknown") -> Dict:
-        """Execute a sell order for a token"""
+    async def sell_token(self, mint_address: str, percentage: float, paper_mode: bool = True, symbol: str = "UNKNOWN", exit_reason: str = "unknown", current_price: float = None, low_priority: bool = False) -> Dict:
+        """Execute a sell order for a token
+
+        Args:
+            current_price: Optional current price (e.g., from LaserStream bonding curve).
+                          If provided, uses this price for P&L calculation instead of fetching from Moralis.
+            low_priority: If True, uses minimum fees and skips Jito (for dead tokens with no activity)
+                          This ensures we use the exact price that triggered the exit decision.
+        """
         try:
             # ENHANCED: Comprehensive exit logging with multi-tier details
             position_info = ""
             if mint_address in self.active_positions:
                 pos = self.active_positions[mint_address]
                 hold_time = (datetime.now() - pos.entry_time).total_seconds()
-                current_price = await self.moralis.get_current_price(mint_address, fresh=True) or pos.entry_price
+
+                # Use provided price (from LaserStream) if available, otherwise fetch from Moralis
+                # This ensures we use the same price that triggered the exit decision
+                if current_price is not None and current_price > 0:
+                    # LaserStream provided real-time bonding curve price
+                    pass  # Use the provided price
+                else:
+                    # Fallback to Moralis for backward compatibility
+                    current_price = await self.moralis.get_current_price(mint_address, fresh=True) or pos.entry_price
+
                 pnl_pct = ((current_price / pos.entry_price) - 1) * 100 if pos.entry_price > 0 else 0
                 
                 # Add multi-tier status to logging
@@ -618,7 +738,7 @@ class TradingEngine:
             if paper_mode:
                 return await self._execute_paper_sell(mint_address, percentage, symbol, exit_reason)
             else:
-                return await self._execute_real_sell(mint_address, percentage, symbol, exit_reason)
+                return await self._execute_real_sell(mint_address, percentage, symbol, exit_reason, low_priority)
                 
         except Exception as e:
             self.logger.error(f"Error executing sell: {e}")
@@ -755,27 +875,36 @@ class TradingEngine:
         try:
             # Check trading mode
             trading_mode = getattr(self.config, 'trading_mode', 'simulation')
-            
-            if trading_mode != 'auto':
+
+            if trading_mode in ['simulation', 'paper']:
                 self.logger.warning(f"Trading mode is '{trading_mode}', not executing real trade")
                 return await self._execute_paper_buy(mint_address, usd_amount, symbol)
-            
-            # Check if we have transaction signer
-            if not self.transaction_signer:
-                self.logger.error("Transaction signer not initialized for live trading")
-                return {"success": False, "error": "Transaction signer not configured"}
-            
-            # Check if we have QuickNode configuration
-            if not self.pumpfun or not self.config.quicknode_endpoint:
-                self.logger.error("QuickNode not configured for live trading")
-                return {"success": False, "error": "QuickNode not configured"}
-            
-            # Get wallet public key from pumpportal config
-            wallet_pubkey = self.config.pumpportal.get('wallet_public_key') if hasattr(self.config, 'pumpportal') else None
-            
-            if not wallet_pubkey:
-                self.logger.error("Wallet public key not configured in pumpportal section")
-                return {"success": False, "error": "Wallet public key not configured"}
+
+            # Check execution method
+            if self.fast_execution_enabled:
+                # Fast execution mode - uses Helius + Jito
+                if not self.fast_transaction_submitter:
+                    self.logger.error("Fast transaction submitter not initialized")
+                    return {"success": False, "error": "Fast execution not configured"}
+
+                # Fast execution uses wallet from fast_transaction_submitter (no pumpportal config needed)
+                wallet_pubkey = None  # Not needed for fast execution
+            else:
+                # Legacy execution mode - uses QuickNode + PumpPortal
+                if not self.transaction_signer:
+                    self.logger.error("Transaction signer not initialized for live trading")
+                    return {"success": False, "error": "Transaction signer not configured"}
+
+                if not self.pumpfun or not self.config.quicknode_endpoint:
+                    self.logger.error("QuickNode not configured for live trading")
+                    return {"success": False, "error": "QuickNode not configured"}
+
+                # Get wallet public key from pumpportal config (legacy mode only)
+                wallet_pubkey = self.config.pumpportal.get('wallet_public_key') if hasattr(self.config, 'pumpportal') else None
+
+                if not wallet_pubkey:
+                    self.logger.error("Wallet public key not configured in pumpportal section")
+                    return {"success": False, "error": "Wallet public key not configured"}
             
             # Convert USD to SOL using real-time price
             sol_price = await self._get_sol_price()
@@ -788,83 +917,121 @@ class TradingEngine:
             # We'll get the actual price from transaction simulation instead of Moralis
             # This removes latency and uses real-time pump.fun pricing
             self.logger.info(f"Creating transaction for ${usd_amount} ({sol_amount:.4f} SOL)")
+
+            # Check wallet balance (legacy mode only - fast execution handles this internally)
+            if not self.fast_execution_enabled:
+                wallet_balance = await self.transaction_signer.get_wallet_balance()
+                if wallet_balance is None or wallet_balance < sol_amount:
+                    self.logger.error(f"Insufficient balance: {wallet_balance:.4f} SOL < {sol_amount:.4f} SOL needed")
+                    return {"success": False, "error": f"Insufficient balance: {wallet_balance:.4f} SOL"}
             
-            # Check wallet balance
-            wallet_balance = await self.transaction_signer.get_wallet_balance()
-            if wallet_balance is None or wallet_balance < sol_amount:
-                self.logger.error(f"Insufficient balance: {wallet_balance:.4f} SOL < {sol_amount:.4f} SOL needed")
-                return {"success": False, "error": f"Insufficient balance: {wallet_balance:.4f} SOL"}
-            
-            # Create buy transaction via QuickNode pump-fun API
-            self.logger.info(f"Creating live buy transaction: ${usd_amount} ({sol_amount:.4f} SOL) for {symbol}")
-            
-            # Higher slippage for aggressive entry fills
-            slippage_bps = 3000  # 30% slippage to handle volatile tokens
-            
-            tx_result = await self.pumpfun.create_buy_transaction(
-                wallet_pubkey=wallet_pubkey,
-                mint_address=mint_address,
-                sol_amount=sol_amount,
-                slippage_bps=slippage_bps
-            )
-            
-            if not tx_result.get("success"):
-                self.logger.error(f"Failed to create buy transaction: {tx_result.get('error')}")
-                return tx_result
-            
-            # Get the base64 transaction
-            transaction_b64 = tx_result.get("transaction")
-            if not transaction_b64:
-                return {"success": False, "error": "No transaction returned"}
-            
-            # NEW: Simulate transaction to get accurate token estimate BEFORE signing
-            self.logger.info("Simulating transaction to get accurate token estimate...")
-            sim_result = await self.transaction_signer.simulate_transaction(transaction_b64)
-            
-            estimated_tokens = 0
-            if sim_result.get("success"):
-                estimated_tokens = sim_result.get("estimated_tokens", 0)
-                if estimated_tokens > 0:
-                    self.logger.info(f"✅ Simulation: Will receive {estimated_tokens:,.0f} tokens")
-                else:
-                    self.logger.warning("⚠️ Simulation successful but no tokens found - proceeding anyway")
+            # Execute transaction based on execution mode
+            if self.fast_execution_enabled:
+                # FAST EXECUTION: Use Helius + Jito
+                self.logger.info(f"⚡ Fast execution: ${usd_amount} ({sol_amount:.4f} SOL) for {symbol}")
+
+                tx_result = await self.fast_transaction_submitter.buy(
+                    mint=mint_address,
+                    sol_amount=sol_amount,
+                    slippage_bps=2000  # 20% slippage - simulation pre-validates, preventing ghost positions
+                )
+
+                if not tx_result.success:
+                    self.logger.error(f"Fast buy failed: {tx_result.error}")
+                    return {"success": False, "error": tx_result.error}
+
+                tx_signature = tx_result.signature
+                estimated_tokens = tx_result.tokens_received or 0
+                sim_result = {"success": True, "estimated_tokens": estimated_tokens}  # Mimic simulation result
+
+                self.logger.info(f"✅ Fast buy executed: {estimated_tokens:,.0f} tokens - TX: {tx_signature}")
+
             else:
-                self.logger.warning(f"⚠️ Simulation failed: {sim_result.get('error')} - proceeding with send")
-            
-            # Sign and send transaction
-            self.logger.info("Signing and sending transaction...")
-            send_result = await self.transaction_signer.sign_and_send_transaction(transaction_b64)
-            
-            if send_result.get("success"):
+                # LEGACY EXECUTION: Use QuickNode + PumpPortal
+                self.logger.info(f"Creating live buy transaction: ${usd_amount} ({sol_amount:.4f} SOL) for {symbol}")
+
+                # Higher slippage for aggressive entry fills
+                slippage_bps = 5000  # 50% slippage for ultra-volatile pump.fun tokens
+
+                tx_result = await self.pumpfun.create_buy_transaction(
+                    wallet_pubkey=wallet_pubkey,
+                    mint_address=mint_address,
+                    sol_amount=sol_amount,
+                    slippage_bps=slippage_bps
+                )
+
+                if not tx_result.get("success"):
+                    self.logger.error(f"Failed to create buy transaction: {tx_result.get('error')}")
+                    return tx_result
+
+                # Get the base64 transaction
+                transaction_b64 = tx_result.get("transaction")
+                if not transaction_b64:
+                    return {"success": False, "error": "No transaction returned"}
+
+                # Simulate transaction to get accurate token estimate BEFORE signing
+                self.logger.info("Simulating transaction to get accurate token estimate...")
+                sim_result = await self.transaction_signer.simulate_transaction(transaction_b64)
+
+                estimated_tokens = 0
+                if sim_result.get("success"):
+                    estimated_tokens = sim_result.get("estimated_tokens", 0)
+                    if estimated_tokens > 0:
+                        self.logger.info(f"✅ Simulation: Will receive {estimated_tokens:,.0f} tokens")
+                    else:
+                        self.logger.warning("⚠️ Simulation successful but no tokens found - proceeding anyway")
+                else:
+                    self.logger.warning(f"⚠️ Simulation failed: {sim_result.get('error')} - proceeding with send")
+
+                # Sign and send transaction
+                self.logger.info("Signing and sending transaction...")
+                send_result = await self.transaction_signer.sign_and_send_transaction(transaction_b64)
+
+                if not send_result.get("success"):
+                    self.logger.error(f"Transaction failed: {send_result.get('error')}")
+                    return send_result
+
                 tx_signature = send_result.get("signature")
+
+            # Common path continues here (position creation, P&L, Discord, etc.)
+            if tx_signature:
                 self.logger.info(f"✅ Live buy executed: {symbol} for ${usd_amount} - TX: {tx_signature}")
-                
+
+                # FAST PATH: Use bonding curve quotes for immediate position creation
+                # BACKGROUND: Launch async task to get actual costs from transaction receipt
+                # This ensures we don't slow down the bot while still getting accurate P&L eventually
+
                 # NEW: Create position with simulation-based token estimate OR price fallback
                 position_created = False
                 current_price = None
-                
+
                 if estimated_tokens > 0:
                     # Use simulation results for accurate position creation
-                    current_price = usd_amount / estimated_tokens  # Derive actual fill price
-                    self.logger.info(f"🎯 Using simulation data: {estimated_tokens:,.0f} tokens at derived price ${current_price:.8f}")
+                    # Note: estimated_tokens from bonding curve is in raw units (with 6 decimals)
+                    # Convert to UI units for position tracking (sell functions expect UI units)
+                    estimated_tokens_ui = estimated_tokens / 1e6  # Pump.fun uses 6 decimals
+                    current_price = usd_amount / estimated_tokens_ui  # Derive actual fill price per UI token
+                    self.logger.info(f"🎯 Using bonding curve quote: {estimated_tokens:,.0f} raw tokens ({estimated_tokens_ui:,.2f} UI) at derived price ${current_price:.8f}")
+
+                    # Store UI tokens in position (sell functions expect UI amounts)
+                    estimated_tokens = estimated_tokens_ui
                 else:
-                    # Fallback to Moralis price if simulation failed
-                    max_price_retries = 3
-                    for attempt in range(max_price_retries):
-                        self.logger.info(f"Getting current price for {symbol} (attempt {attempt + 1}/{max_price_retries})")
-                        current_price = await self.moralis.get_current_price(mint_address, fresh=True)
-                        
-                        if current_price > 0:
-                            break
-                        elif attempt < max_price_retries - 1:
-                            # Wait 2 seconds between retries for price data
-                            self.logger.warning(f"Price unavailable for {symbol}, retrying in 2s...")
-                            await asyncio.sleep(2)
-                    
+                    # CRITICAL PATH OPTIMIZATION: ONE quick Moralis call without retries
+                    # This path should rarely execute (only if bonding curve quote fails)
+                    self.logger.warning("⚠️ Bonding curve quote unavailable - attempting quick Moralis fallback")
+                    try:
+                        current_price = await asyncio.wait_for(
+                            self.moralis.get_current_price(mint_address, fresh=True),
+                            timeout=1.0  # 1 second timeout instead of 6+ seconds with retries
+                        )
+                    except asyncio.TimeoutError:
+                        self.logger.error("Moralis price fetch timed out after 1s")
+                        current_price = 0
+
                     if current_price > 0:
                         # Calculate estimated tokens based on current price with fee/slippage buffer
-                        # Account for: 1% pump.fun fee + 1% slippage + 5% safety margin = ~7% total buffer
-                        effective_usd = usd_amount * 0.93  # Conservative after all fees
+                        # Account for: 0.95% protocol + 0.30% dev fee + slippage = ~5% total buffer
+                        effective_usd = usd_amount * 0.95  # Conservative after fees
                         estimated_tokens = effective_usd / current_price
                         self.logger.info(f"📊 Using Moralis fallback: {estimated_tokens:,.0f} tokens at ${current_price:.8f}")
                 
@@ -897,12 +1064,36 @@ class TradingEngine:
                     
                     # Mark if this position was created with simulation data for better tracking
                     position.simulation_verified = sim_result.get("success") and sim_result.get("estimated_tokens", 0) > 0
-                    
+
+                    # CRITICAL: Mark position as UNVERIFIED (using bonding curve quotes)
+                    # Background task will update with actual costs from transaction receipt
+                    position.actual_costs_verified = False
+                    position.unverified_sol_invested = sol_amount  # Store quote-based estimate
+
                     self.active_positions[mint_address] = position
                     estimation_method = "simulation-based" if sim_result.get("success") and sim_result.get("estimated_tokens", 0) > 0 else "price-based estimate"
                     self.logger.info(f"🚀 Position created: {estimated_tokens:,.0f} tokens at ${current_price:.8f} ({estimation_method})")
+                    self.logger.warning(f"⚠️ Position costs UNVERIFIED - using bonding curve quote ({sol_amount:.6f} SOL)")
                     position_created = True
-                    
+
+                    # CRITICAL: Record BUY trade in P&L store immediately after position creation
+                    # This ensures the trade is tracked even if the position is created with simulation data
+                    self.pnl_store.add_trade(
+                        action="BUY",
+                        symbol=symbol,
+                        mint_address=mint_address,
+                        amount=estimated_tokens,
+                        price=current_price,
+                        usd_value=usd_amount,
+                        paper_mode=False
+                    )
+                    self.logger.info(f"✅ BUY trade recorded in P&L store: {estimated_tokens:,.0f} tokens at ${current_price:.8f}")
+
+                    # BACKGROUND TASK: Verify actual costs from transaction receipt
+                    # This keeps retrying until it succeeds, ensuring accurate P&L eventually
+                    if self.fast_execution_enabled and self.fast_transaction_submitter:
+                        asyncio.create_task(self._verify_buy_costs_async(mint_address, tx_signature, symbol, sol_price))
+
                 else:
                     # No position created - wait for WSS verification
                     self.logger.warning(f"❌ Could not get price for {symbol} after {max_price_retries} attempts - will wait for WSS verification")
@@ -1082,13 +1273,13 @@ class TradingEngine:
             "paper_mode": True
         }
 
-    async def _execute_real_sell(self, mint_address: str, percentage: float, symbol: str = "UNKNOWN", exit_reason: str = "unknown") -> Dict:
+    async def _execute_real_sell(self, mint_address: str, percentage: float, symbol: str = "UNKNOWN", exit_reason: str = "unknown", low_priority: bool = False) -> Dict:
         """Execute a real sell transaction via QuickNode/PumpFun API"""
         try:
             # Check trading mode
             trading_mode = getattr(self.config, 'trading_mode', 'simulation')
-            
-            if trading_mode != 'auto':
+
+            if trading_mode in ['simulation', 'paper']:
                 self.logger.warning(f"Trading mode is '{trading_mode}', not executing real trade")
                 return await self._execute_paper_sell(mint_address, percentage, symbol, exit_reason)
             
@@ -1098,16 +1289,22 @@ class TradingEngine:
                 return {"success": False, "error": "No active position"}
             
             position = self.active_positions[mint_address]
-            
+
+            # CRITICAL: Skip 0% sells (TP3 moonshot mode)
+            if percentage <= 0.0001:  # Effectively 0%
+                self.logger.info(f"⏭️ Skipping 0% sell for {mint_address[:8]}... (moonshot mode - holding position)")
+                position.is_selling = False  # Reset flag if it was set
+                return {"success": False, "error": "zero_percent_sell", "message": "Moonshot mode - holding position"}
+
             # Always use the position's symbol if it's been updated from "UF"
             actual_symbol = position.symbol if hasattr(position, 'symbol') and position.symbol != "UF" else symbol
-            
+
             # QOL: Show "Unknown" instead of "UF" for better user experience
             if actual_symbol == "UF":
                 actual_symbol = "Unknown"
-                
+
             self.logger.debug(f"🏷️ Using symbol: {actual_symbol} (position.symbol={getattr(position, 'symbol', 'missing')}, passed={symbol})")
-            
+
             # Check if reconciliation is needed - pause all sells until resolved
             if hasattr(position, 'needs_reconciliation') and position.needs_reconciliation:
                 self.logger.info(f"⏸️ Skipping sell for {actual_symbol} - reconciliation in progress")
@@ -1134,22 +1331,32 @@ class TradingEngine:
             position.is_selling = True
             position.selling_started_time = datetime.now()  # Track when selling started
             
-            # Check if we have transaction signer
-            if not self.transaction_signer:
-                self.logger.error("Transaction signer not initialized for live trading")
-                return {"success": False, "error": "Transaction signer not configured"}
-            
-            # Check if we have QuickNode configuration
-            if not self.pumpfun or not self.config.quicknode_endpoint:
-                self.logger.error("QuickNode not configured for live trading")
-                return {"success": False, "error": "QuickNode not configured"}
-            
-            # Get wallet public key from pumpportal config
-            wallet_pubkey = self.config.pumpportal.get('wallet_public_key') if hasattr(self.config, 'pumpportal') else None
-            
-            if not wallet_pubkey:
-                self.logger.error("Wallet public key not configured")
-                return {"success": False, "error": "Wallet public key not configured"}
+            # Check execution method
+            if self.fast_execution_enabled:
+                # Fast execution mode - uses Helius + Jito
+                if not self.fast_transaction_submitter:
+                    self.logger.error("Fast transaction submitter not initialized")
+                    position.is_selling = False
+                    return {"success": False, "error": "Fast execution not configured"}
+            else:
+                # Legacy execution mode - uses QuickNode + PumpPortal
+                if not self.transaction_signer:
+                    self.logger.error("Transaction signer not initialized for live trading")
+                    position.is_selling = False
+                    return {"success": False, "error": "Transaction signer not configured"}
+
+                if not self.pumpfun or not self.config.quicknode_endpoint:
+                    self.logger.error("QuickNode not configured for live trading")
+                    position.is_selling = False
+                    return {"success": False, "error": "QuickNode not configured"}
+
+                # Get wallet public key from pumpportal config
+                wallet_pubkey = self.config.pumpportal.get('wallet_public_key') if hasattr(self.config, 'pumpportal') else None
+
+                if not wallet_pubkey:
+                    self.logger.error("Wallet public key not configured")
+                    position.is_selling = False
+                    return {"success": False, "error": "Wallet public key not configured"}
             
             # CRITICAL: Never attempt to sell positions with 0 tokens (ghost positions)
             if position.amount <= 0:
@@ -1208,74 +1415,219 @@ class TradingEngine:
                     # Low confidence - proceed but expect potential failure
                     self.logger.warning(f"❓ Uncertain token availability - proceeding with sell attempt")
             
-            # Create sell transaction
-            self.logger.info(f"Creating live sell transaction: {percentage*100:.0f}% of {symbol} position ({tokens_to_sell:.2f} tokens)")
-            
-            # Use 3% slippage for live sells
-            slippage_bps = 300  # 3% slippage
-            
-            tx_result = await self.pumpfun.create_sell_transaction(
-                wallet_pubkey=wallet_pubkey,
-                mint_address=mint_address,
-                token_amount=conservative_sell_amount,
-                slippage_bps=slippage_bps
-            )
-            
-            if not tx_result.get("success"):
-                self.logger.error(f"Failed to create sell transaction: {tx_result.get('error')}")
-                position.is_selling = False  # Reset selling flag on failure
-                return tx_result
-            
-            # Get the base64 transaction
-            transaction_b64 = tx_result.get("transaction")
-            if not transaction_b64:
-                position.is_selling = False  # Reset selling flag on failure
-                return {"success": False, "error": "No transaction returned"}
-            
-            # Sign and send transaction
-            self.logger.info("Signing and sending sell transaction...")
-            send_result = await self.transaction_signer.sign_and_send_transaction(transaction_b64)
-            
-            if send_result.get("success"):
-                tx_signature = send_result.get("signature")
-                pnl_pct = ((current_price / position.entry_price) - 1) * 100
-                
-                self.logger.info(f"✅ Live sell executed: {percentage*100:.0f}% of {symbol} at {pnl_pct:+.1f}% P&L - TX: {tx_signature}")
-                
-                # Get actual SOL received from transaction logs (most accurate)
-                self.logger.info("Getting exact SOL received from transaction logs...")
-                
-                # Enhanced retry logic for transaction parsing
-                actual_sol_received = 0.0
-                max_retries = 5
-                retry_delays = [1, 2, 2, 3, 5]  # Progressive delays
-                
-                wallet_address = self.transaction_signer.get_wallet_address()
-                for attempt in range(max_retries):
-                    try:
-                        # Wait before checking (progressive delays)
-                        await asyncio.sleep(retry_delays[attempt])
-                        
-                        tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
-                        
-                        if tx_details and wallet_address:
-                            actual_sol_received = self.transaction_signer.parse_sol_change_from_logs(
-                                tx_details, wallet_address
-                            )
-                            if actual_sol_received > 0:
-                                self.logger.info(f"✅ Parsed actual SOL received: {actual_sol_received:.6f} SOL (attempt {attempt+1})")
-                                break
-                            else:
-                                self.logger.warning(f"Attempt {attempt+1}: SOL parsing returned 0")
+            # Execute transaction based on execution mode
+            if self.fast_execution_enabled:
+                # FAST EXECUTION: Use Helius + Jito (or low-priority for stale positions)
+                if low_priority:
+                    self.logger.info(f"🐌 Low-priority execution: Dumping stale {symbol} ({tokens_to_sell:.2f} tokens) with minimal fees")
+                else:
+                    self.logger.info(f"⚡ Fast execution: Selling {percentage*100:.0f}% of {symbol} ({tokens_to_sell:.2f} tokens)")
+
+                tx_result = await self.fast_transaction_submitter.sell(
+                    mint=mint_address,
+                    token_amount=conservative_sell_amount,
+                    slippage_bps=5000,  # 50% slippage - ensures sells execute (prevents stuck positions)
+                    low_priority=low_priority  # Use minimal fees for stale positions
+                )
+
+                if not tx_result.success:
+                    error_msg = tx_result.error or ""
+                    self.logger.error(f"Fast sell failed: {error_msg}")
+
+                    # Check for error 3012 (account not initialized) - RPC hasn't indexed token account yet
+                    if "3012" in error_msg or "not initialized" in error_msg.lower() or "expected this account to be already initialized" in error_msg.lower():
+                        self.logger.warning(f"🔄 ERROR 3012 DETECTED - {symbol}: Token account not indexed yet, triggering smart retry")
+                        retry_result = await self._smart_sell_retry(
+                            mint_address, symbol, exit_reason
+                        )
+                        if retry_result.get('success'):
+                            return retry_result
+                        elif retry_result.get('error') == 'position_recovered':
+                            # Position recovered during retry - this is SUCCESS, not failure!
+                            self.logger.info(f"🎆 {symbol}: Position recovered during smart retry - sell canceled successfully")
+                            position.is_selling = False
+                            return retry_result
+                        # If still failing after smart retries AND not recovered, fall through to other error handling
+
+                    # Use same error handling as legacy path
+                    # Check for balance/indexing issues - trigger smart retry
+                    if 'NotEnoughTokensToSell' in error_msg or '0x1787' in error_msg or "not enough tokens" in error_msg.lower() or "insufficient" in error_msg.lower():
+                        self.logger.warning(f"🔄 BALANCE/INDEXING ERROR - {symbol}: Triggering smart retry")
+                        retry_result = await self._smart_sell_retry(
+                            mint_address, symbol, exit_reason
+                        )
+                        if retry_result.get('success'):
+                            return retry_result
+                        elif retry_result.get('error') == 'position_recovered':
+                            # Position recovered during retry - this is SUCCESS, not failure!
+                            self.logger.info(f"🎆 {symbol}: Position recovered during smart retry - sell canceled successfully")
+                            position.is_selling = False
+                            return retry_result  # Don't do reconciliation for recovered positions
+                        # If still failing after smart retries AND not recovered, fall through to reconciliation
+
+                    # Check if this is a traditional slippage error - retry with higher slippage
+                    elif self._is_slippage_error(error_msg) and not ('NotEnoughTokensToSell' in error_msg or '0x1787' in error_msg):
+                        self.logger.warning(f"🔄 SELL SLIPPAGE ERROR - {symbol}: Retrying with higher slippage (must exit position)")
+                        retry_result = await self._retry_sell_with_higher_slippage(
+                            mint_address, percentage, symbol, exit_reason
+                        )
+                        if retry_result.get('success'):
+                            return retry_result
                         else:
-                            self.logger.warning(f"Attempt {attempt+1}: Transaction not fully indexed yet")
-                    except Exception as e:
-                        self.logger.warning(f"Attempt {attempt+1} failed: {e}")
-                
-                if actual_sol_received <= 0:
-                    self.logger.error("❌ CRITICAL: Failed to parse actual SOL after all retries - DO NOT TRUST P&L")
-                    # NEVER use market estimate for sells - better to report unknown P&L
-                    actual_sol_received = 0.0
+                            # All retries failed - position is stuck, but keep trying later
+                            self.logger.error(f"❌ SELL RETRIES FAILED - {symbol}: Position may be stuck")
+                            position.is_selling = False  # Reset flag so we can try again later
+                            return retry_result
+
+                    # Final fallback: trigger reconciliation for persistent balance issues
+                    if 'NotEnoughTokensToSell' in error_msg or '0x1787' in error_msg or "not enough tokens" in error_msg.lower():
+                        self.logger.warning(f"🚫 Balance mismatch detected - entering reconciliation mode for {symbol}")
+
+                        # Mark position as needing reconciliation and preserve current state
+                        position.needs_reconciliation = True
+                        position.is_selling = False
+                        position.pre_reconcile_state = {
+                            'tp1_hit': position.tp1_hit_time is not None,
+                            'tp2_hit': position.tp2_hit_time is not None,
+                            'tp3_hit': position.tp3_hit_time is not None,
+                            'last_exit_reason': exit_reason,
+                            'attempted_percentage': percentage
+                        }
+
+                        self.logger.info(f"⏸️ PAUSING {symbol}: Will reconcile balance and resume monitoring")
+                        self.logger.info(f"   Current TP state: TP1={position.tp1_hit_time is not None}, TP2={position.tp2_hit_time is not None}, TP3={position.tp3_hit_time is not None}")
+
+                        # Start reconciliation in background (don't wait)
+                        asyncio.create_task(self._reconcile_and_resume(mint_address, symbol))
+
+                        return {"success": False, "error": "reconciliation_triggered", "message": f"Position reconciliation started for {symbol}"}
+
+                    position.is_selling = False  # Reset selling flag on failure
+                    return {"success": False, "error": error_msg}
+                else:
+                    # Sell succeeded on first try
+                    tx_signature = tx_result.signature
+                    self.logger.info(f"✅ Fast sell executed: {percentage*100:.0f}% of {symbol} - TX: {tx_signature}")
+
+            else:
+                # LEGACY EXECUTION: Use QuickNode + PumpPortal
+                self.logger.info(f"Creating live sell transaction: {percentage*100:.0f}% of {symbol} position ({tokens_to_sell:.2f} tokens)")
+
+                # Use 20% slippage for live sells (was 3%, too tight for volatile tokens)
+                slippage_bps = 2000  # 20% slippage
+
+                tx_result = await self.pumpfun.create_sell_transaction(
+                    wallet_pubkey=wallet_pubkey,
+                    mint_address=mint_address,
+                    token_amount=conservative_sell_amount,
+                    slippage_bps=slippage_bps
+                )
+
+                if not tx_result.get("success"):
+                    self.logger.error(f"Failed to create sell transaction: {tx_result.get('error')}")
+                    position.is_selling = False
+                    return tx_result
+
+                # Get the base64 transaction
+                transaction_b64 = tx_result.get("transaction")
+                if not transaction_b64:
+                    position.is_selling = False
+                    return {"success": False, "error": "No transaction returned"}
+
+                # Sign and send transaction
+                self.logger.info("Signing and sending sell transaction...")
+                send_result = await self.transaction_signer.sign_and_send_transaction(transaction_b64)
+
+                if not send_result.get("success"):
+                    error_msg = send_result.get('error', '')
+                    self.logger.error(f"Sell transaction failed: {error_msg}")
+
+                    # Check for error 3012 (account not initialized) - RPC hasn't indexed token account yet
+                    if "3012" in str(error_msg) or "not initialized" in str(error_msg).lower() or "expected this account to be already initialized" in str(error_msg).lower():
+                        self.logger.warning(f"🔄 ERROR 3012 DETECTED - {symbol}: Token account not indexed yet, triggering smart retry")
+                        retry_result = await self._smart_sell_retry(
+                            mint_address, symbol, exit_reason
+                        )
+                        if retry_result.get('success'):
+                            return retry_result
+                        elif retry_result.get('error') == 'position_recovered':
+                            # Position recovered during retry - this is SUCCESS, not failure!
+                            self.logger.info(f"🎆 {symbol}: Position recovered during smart retry - sell canceled successfully")
+                            position.is_selling = False
+                            return retry_result
+                        # If still failing after smart retries, fall through to return error
+
+                    position.is_selling = False
+                    return send_result
+
+                tx_signature = send_result.get("signature")
+
+            # Common path continues here (P&L calculation, verification, Discord, etc.)
+            if tx_signature:
+                pnl_pct = ((current_price / position.entry_price) - 1) * 100
+
+                self.logger.info(f"✅ Live sell executed: {percentage*100:.0f}% of {symbol} at {pnl_pct:+.1f}% P&L - TX: {tx_signature}")
+
+                # FAST PATH: Use bonding curve quotes for immediate P&L calculation
+                # WAIT FOR VERIFICATION: Before Discord notification, we'll wait for actual proceeds
+                # This ensures Discord always gets accurate P&L without slowing down the bot
+
+                # Get SOL price for verification
+                sol_price_for_verification = await self._get_sol_price()
+                verification_task = None
+                if sol_price_for_verification and self.fast_execution_enabled and self.fast_transaction_submitter:
+                    # Store verification task so we can await it before Discord notification
+                    verification_task = asyncio.create_task(
+                        self._verify_sell_proceeds_async(mint_address, tx_signature, symbol, sol_price_for_verification)
+                    )
+
+                # Get actual SOL received from transaction logs (most accurate)
+                # Note: For fast execution, we'll use bonding curve quote for initial P&L
+                actual_sol_received = 0.0
+
+                if self.fast_execution_enabled:
+                    # Use bonding curve quote from TransactionResult
+                    actual_sol_received = tx_result.sol_received if tx_result.sol_received else 0
+                    if actual_sol_received > 0:
+                        self.logger.info(f"💵 Bonding curve SOL: {actual_sol_received:.6f} SOL (will verify before Discord)")
+                    else:
+                        self.logger.warning(f"⚠️ No bonding curve quote available - P&L will be unverified")
+
+                elif self.transaction_signer:
+                    # Legacy execution: Parse transaction logs for exact SOL received
+                    self.logger.info("Getting exact SOL received from transaction logs...")
+
+                    max_retries = 5
+                    retry_delays = [1, 2, 2, 3, 5]  # Progressive delays
+
+                    wallet_address = self.transaction_signer.get_wallet_address()
+                    for attempt in range(max_retries):
+                        try:
+                            # Wait before checking (progressive delays)
+                            await asyncio.sleep(retry_delays[attempt])
+
+                            tx_details = await self.transaction_signer.get_transaction_details(tx_signature)
+
+                            if tx_details and wallet_address:
+                                actual_sol_received = self.transaction_signer.parse_sol_change_from_logs(
+                                    tx_details, wallet_address
+                                )
+                                if actual_sol_received > 0:
+                                    self.logger.info(f"✅ Parsed actual SOL received: {actual_sol_received:.6f} SOL (attempt {attempt+1})")
+                                    break
+                                else:
+                                    self.logger.warning(f"Attempt {attempt+1}: SOL parsing returned 0")
+                            else:
+                                self.logger.warning(f"Attempt {attempt+1}: Transaction not fully indexed yet")
+                        except Exception as e:
+                            self.logger.warning(f"Attempt {attempt+1} failed: {e}")
+
+                    if actual_sol_received <= 0:
+                        self.logger.error("❌ CRITICAL: Failed to parse actual SOL after all retries - DO NOT TRUST P&L")
+                        # NEVER use market estimate for sells - better to report unknown P&L
+                        actual_sol_received = 0.0
+                else:
+                    self.logger.warning("⚠️ No transaction signer available - cannot parse SOL received")
                 
                 # Calculate cost basis using actual SOL invested (more accurate)
                 if hasattr(position, 'sol_invested') and position.sol_invested > 0:
@@ -1300,21 +1652,37 @@ class TradingEngine:
                 if actual_sol_received > 0:
                     # Get real-time SOL price from blockchain analytics
                     sol_price_usd = await self._get_sol_price()
-                    
+
                     if sol_price_usd is None:
                         self.logger.error("Cannot get SOL price for P&L calculation - marking as unverified")
                         usd_value = 0
                         profit_usd = None  # Mark as unknown
                         profit_pct = 0
                     else:
-                        usd_value = actual_sol_received * sol_price_usd
-                        self.logger.info(f"Actual SOL received: {actual_sol_received:.6f} SOL (${usd_value:.2f} at ${sol_price_usd}/SOL)")
-                        
-                        profit_usd = usd_value - cost_basis_usd
-                        profit_pct = (profit_usd / cost_basis_usd) * 100 if cost_basis_usd > 0 else 0
-                    
+                        # CRITICAL: When using transaction receipts, actual_sol_spent and actual_sol_received
+                        # already include ALL fees (they are wallet deltas). Don't subtract fees again!
+
+                        # Get actual cost basis from position (which now uses actual_sol_spent from receipt)
+                        percentage_sold_calc = conservative_sell_amount / position.tokens_initial if position.tokens_initial > 0 else 1.0
+                        actual_sol_cost = position.sol_invested * percentage_sold_calc  # This is actual SOL from buy receipt
+
+                        # Simple and 100% accurate P&L calculation using wallet deltas
+                        total_cost = actual_sol_cost * sol_price_usd  # What we spent (including all fees)
+                        net_proceeds = actual_sol_received * sol_price_usd  # What we received (net of all fees)
+
+                        profit_usd = net_proceeds - total_cost
+                        profit_pct = (profit_usd / total_cost) * 100 if total_cost > 0 else 0
+
+                        self.logger.info(f"📊 WALLET DELTA P&L (100% accurate from receipts):")
+                        self.logger.info(f"   Total cost: {actual_sol_cost:.6f} SOL = ${total_cost:.2f}")
+                        self.logger.info(f"   Total received: {actual_sol_received:.6f} SOL = ${net_proceeds:.2f}")
+                        self.logger.info(f"   Profit: {actual_sol_received - actual_sol_cost:+.6f} SOL = ${profit_usd:+.2f} ({profit_pct:+.1f}%)")
+
+                        # Update usd_value for downstream usage
+                        usd_value = net_proceeds  # Use net proceeds for consistency
+
                     if profit_usd is not None:
-                        self.logger.info(f"VERIFIED Sell P&L: ${cost_basis_usd:.2f} cost → ${usd_value:.2f} received = ${profit_usd:+.2f} ({profit_pct:+.1f}%)")
+                        self.logger.info(f"✅ TRUE P&L (with fees): ${total_cost:.2f} total cost → ${net_proceeds:.2f} net received = ${profit_usd:+.2f} ({profit_pct:+.1f}%)")
                     else:
                         self.logger.warning(f"UNVERIFIED Sell P&L: Cannot calculate without SOL price")
                 else:
@@ -1340,11 +1708,50 @@ class TradingEngine:
                         self.logger.info(f"⚡ Position updated via realtime tracking")
                 else:
                     # OLD: Update position using post-transaction balance verification (SLOW)
-                    remaining_balance = await self._get_post_transaction_balance(mint_address)
-                    
-                    # Update position to match verified reality
-                    position.amount = remaining_balance
-                    position.cost_usd_remaining -= cost_basis_usd
+                    # OPTIMIZATION: For 100% sells, skip verification - we know balance = 0
+                    if percentage >= 0.999:
+                        self.logger.info(f"⚡ 100% sell - skipping balance verification (position will close)")
+                        remaining_balance = 0  # We sold everything
+                    else:
+                        # For partial sells, verify remaining balance with stale data detection
+                        remaining_balance = await self._get_post_transaction_balance(
+                            mint_address,
+                            pre_sell_balance=position.amount,
+                            tokens_sold=conservative_sell_amount
+                        )
+
+                    # CRITICAL: If balance query failed, trigger reconciliation to recover!
+                    if remaining_balance is None:
+                        self.logger.error(f"❌ CRITICAL: Cannot verify balance for {mint_address[:8]}... - triggering reconciliation!")
+
+                        # Calculate estimated remaining balance to continue tracking
+                        estimated_remaining = max(0, position.amount - conservative_sell_amount)
+                        position.amount = estimated_remaining
+                        position.cost_usd_remaining -= cost_basis_usd
+
+                        # Mark for reconciliation to verify actual balance
+                        position.needs_reconciliation = True
+                        position.is_selling = False
+                        position.pre_reconcile_state = {
+                            'tp1_hit': position.tp1_hit_time is not None,
+                            'tp2_hit': position.tp2_hit_time is not None,
+                            'tp3_hit': position.tp3_hit_time is not None,
+                            'last_exit_reason': exit_reason,
+                            'attempted_percentage': percentage
+                        }
+
+                        self.logger.warning(f"⚠️ Using estimated balance: {estimated_remaining:.0f} tokens (sold {conservative_sell_amount:.0f})")
+                        self.logger.info(f"⏸️ PAUSING {symbol}: Will reconcile actual balance and resume monitoring")
+
+                        # Start reconciliation in background (don't wait)
+                        asyncio.create_task(self._reconcile_and_resume(mint_address, symbol))
+
+                        # Continue execution to log trade and update P&L with estimated values
+                        # Reconciliation will correct the balance once it completes
+                    else:
+                        # Update position to match verified reality
+                        position.amount = remaining_balance
+                        position.cost_usd_remaining -= cost_basis_usd
                 
                 # Also update SOL invested amount if we have it
                 if hasattr(position, 'sol_invested') and position.sol_invested > 0:
@@ -1360,10 +1767,29 @@ class TradingEngine:
                 
                 # Remove position if no tokens remain OR if we sold 100%
                 if position.amount <= 0.0001 or percentage >= 0.999:  # Account for dust or full exit
+                    # CRITICAL: Save cost basis for verification task before deleting position
+                    # Verification might still be running in background and needs this data
+                    if not hasattr(self, '_recent_closed_positions'):
+                        self._recent_closed_positions = {}
+
+                    self._recent_closed_positions[mint_address] = {
+                        'sol_invested': getattr(position, 'sol_invested', 0),
+                        'cost_usd': getattr(position, 'cost_usd_remaining', 0),
+                        'closed_at': datetime.now(),
+                        'symbol': symbol
+                    }
+
+                    # Cleanup old closed positions (keep only last 60 seconds for verification)
+                    cutoff_time = datetime.now() - timedelta(seconds=60)
+                    self._recent_closed_positions = {
+                        k: v for k, v in self._recent_closed_positions.items()
+                        if v['closed_at'] > cutoff_time
+                    }
+
                     del self.active_positions[mint_address]
                     tracking_method = "realtime" if self.use_realtime_positions else "blockchain verified"
                     self.logger.info(f"✅ Position fully closed for {mint_address[:8]}... ({tracking_method})")
-                    
+
                     # Also clean up from realtime positions if used
                     if self.use_realtime_positions and hasattr(self, 'realtime_positions') and mint_address in self.realtime_positions.positions:
                         del self.realtime_positions.positions[mint_address]
@@ -1388,8 +1814,56 @@ class TradingEngine:
                 self.total_trades += 1
                 if profit_usd is not None and profit_usd > 0:
                     self.winning_trades += 1
-                
-                # Send Discord notification
+
+                # CRITICAL: Wait for sell verification before sending Discord notification
+                # This ensures Discord always gets 100% accurate P&L
+                verified_sol_received = None
+                verified_profit_usd = profit_usd  # Default to bonding curve estimate
+                verified_profit_pct = profit_pct
+
+                if verification_task:
+                    try:
+                        self.logger.info(f"⏳ Waiting for sell verification before Discord notification...")
+                        # Wait up to 15 seconds for verification
+                        verified_data = await asyncio.wait_for(verification_task, timeout=15.0)
+
+                        if verified_data:
+                            verified_sol_received = verified_data.get('sol_received')
+                            verified_cost_sol = verified_data.get('cost_sol')
+
+                            if verified_sol_received and verified_cost_sol and sol_price_for_verification:
+                                # Recalculate P&L with verified amounts
+                                verified_proceeds = verified_sol_received * sol_price_for_verification
+                                verified_cost = verified_cost_sol * sol_price_for_verification
+                                verified_profit_usd = verified_proceeds - verified_cost
+                                verified_profit_pct = (verified_profit_usd / verified_cost * 100) if verified_cost > 0 else 0
+
+                                self.logger.info(f"✅ Using VERIFIED P&L for Discord: ${verified_profit_usd:+.2f} ({verified_profit_pct:+.1f}%)")
+
+                                # Update variables for Discord notification
+                                usd_value = verified_proceeds
+                                profit_usd = verified_profit_usd
+                                profit_pct = verified_profit_pct
+
+                                # CRITICAL: Update P&L store with verified amounts
+                                # This replaces the bonding curve quote-based SELL entry with accurate data
+                                self.pnl_store.add_trade(
+                                    action="SELL_VERIFIED",
+                                    symbol=actual_symbol,
+                                    mint_address=mint_address,
+                                    amount=tokens_to_sell,
+                                    price=current_price,
+                                    usd_value=verified_proceeds,  # Use verified proceeds, not quote!
+                                    realized_pnl=verified_profit_usd,  # Use verified P&L!
+                                    paper_mode=False
+                                )
+                                self.logger.info(f"💾 P&L store updated with VERIFIED amounts: ${verified_proceeds:.2f} proceeds, ${verified_profit_usd:+.2f} P&L")
+                    except asyncio.TimeoutError:
+                        self.logger.warning(f"⚠️ Verification timeout (15s) - using bonding curve estimate for Discord")
+                    except Exception as e:
+                        self.logger.error(f"Error waiting for verification: {e}")
+
+                # Send Discord notification (now with verified P&L if available)
                 if self.notifier:
                     await self.notifier.send_trade_notification(
                         side="SELL",
@@ -1399,7 +1873,7 @@ class TradingEngine:
                         price=current_price,
                         usd_amount=usd_value,
                         equity=self.pnl_store.current_equity,
-                        realized_pnl=profit_usd,  # Use realized_pnl parameter for profit
+                        realized_pnl=profit_usd,  # Now uses verified P&L if available
                         paper_mode=False
                     )
                 
@@ -1554,28 +2028,49 @@ class TradingEngine:
                 tp3_sell_pct = multi_tier_config.get('tp3_sell_pct', 0.15)
             
             # TP1 - First take profit
-            if current_price >= position.tp_price and position.tp1_hit_time is None:
+            # SAFETY MARGIN: Increase TP threshold by 5% for unverified positions (compensates for quote inaccuracy)
+            is_verified = getattr(position, 'actual_costs_verified', False)
+            safety_margin = 1.0 if is_verified else 1.05  # 5% extra buffer for unverified
+            tp1_price_adjusted = position.tp_price * safety_margin
+
+            if current_price >= tp1_price_adjusted and position.tp1_hit_time is None:
                 position.tp1_hit_time = datetime.now()
                 position.tp1_percentage_sold = tp1_sell_pct
+
+                if not is_verified:
+                    self.logger.warning(f"⚠️ TP1 triggered with UNVERIFIED costs (+5% safety margin applied)")
+                    self.logger.info(f"   Target: ${position.tp_price:.8f}, Adjusted: ${tp1_price_adjusted:.8f}")
+
                 self.logger.info(f"🎯 TP1 HIT: Selling {tp1_sell_pct*100:.0f}% at +{current_gain_pct:.1f}% gain")
+                self.logger.info(f"   Current price: ${current_price:.8f}, TP1 target: ${position.tp_price:.8f}")
                 return ("take_profit_partial", tp1_sell_pct)
-            
+
             # TP2 - Second take profit
             if current_price >= tp2_price and position.tp2_hit_time is None and position.tp1_hit_time is not None:
                 position.tp2_hit_time = datetime.now()
                 position.tp2_percentage_sold = tp2_sell_pct
                 self.logger.info(f"🚀 TP2 HIT: Selling {tp2_sell_pct*100:.0f}% at +{current_gain_pct:.1f}% gain")
+                self.logger.info(f"   Current price: ${current_price:.8f}, TP2 target: ${tp2_price:.8f}")
                 return ("take_profit_partial", tp2_sell_pct)
-            
+
             # TP3 - Third take profit
             if current_price >= tp3_price and position.tp3_hit_time is None and position.tp2_hit_time is not None:
                 position.tp3_hit_time = datetime.now()
                 position.tp3_percentage_sold = tp3_sell_pct
                 self.logger.info(f"🌙 TP3 HIT: Selling {tp3_sell_pct*100:.0f}% at +{current_gain_pct:.1f}% gain (Moonshot!)")
+                self.logger.info(f"   Current price: ${current_price:.8f}, TP3 target: ${tp3_price:.8f}")
                 return ("take_profit_partial", tp3_sell_pct)
         else:
             # Original single TP1 logic for conservative mode
-            if current_price >= position.tp_price and position.tp1_hit_time is None:
+            # SAFETY MARGIN: Apply same 5% buffer for unverified positions
+            is_verified = getattr(position, 'actual_costs_verified', False)
+            safety_margin = 1.0 if is_verified else 1.05
+            tp_price_adjusted = position.tp_price * safety_margin
+
+            if current_price >= tp_price_adjusted and position.tp1_hit_time is None:
+                if not is_verified:
+                    self.logger.warning(f"⚠️ TP triggered with UNVERIFIED costs (+5% safety margin)")
+
                 position.tp1_hit_time = datetime.now()
                 time_to_tp1 = (position.tp1_hit_time - position.entry_time).total_seconds()
                 
@@ -1882,14 +2377,15 @@ class TradingEngine:
             elif unrealized_gain >= 50:
                 k = 4.5  # Wide for good gains
             elif hold_time_seconds < 60:
-                # First minute: MAXIMUM tolerance for volatility
-                k = 7.0  # Extremely wide - only catch catastrophic dumps
+                # First minute: ULTRA WIDE tolerance - Pump.fun tokens are extremely volatile
+                # Need to overcome ~$3-5 in fees per round trip
+                k = 12.0  # Ultra ultra wide - only catch catastrophic -15%+ dumps
             elif hold_time_seconds < 180:
                 # First 3 minutes: still very tolerant
-                k = 5.5  # Very wide for new positions establishing direction
+                k = 8.0  # Ultra wide for new positions establishing direction
             else:
                 # After 3 minutes: still more tolerant than before
-                k = 4.0  # Wide stop for aggressive trading (was 2.5)
+                k = 6.0  # Very wide stop for aggressive trading
             
             # Calculate ATR-based stop
             atr_stop = position.peak_price - (k * atr)
@@ -2034,14 +2530,20 @@ class TradingEngine:
         position = self.active_positions.get(mint_address)
         if not position:
             return None
-            
+
         max_attempts = 10
         base_delay = 1  # Start with 1 second
         buy_age = (datetime.now() - position.entry_time).total_seconds()
-        
+
         for attempt in range(max_attempts):
             try:
-                actual_balance = await self.transaction_signer.get_token_balance(mint_address)
+                # Support both fast execution and legacy paths
+                actual_balance = None
+                if self.fast_execution_enabled and self.fast_transaction_submitter:
+                    actual_balance = await self.fast_transaction_submitter.get_token_balance(mint_address)
+                elif self.transaction_signer:
+                    actual_balance = await self.transaction_signer.get_token_balance(mint_address)
+
                 if actual_balance is not None:
                     self.logger.info(f"📊 Reconciliation attempt {attempt + 1}: {actual_balance:,.0f} tokens (buy age: {buy_age:.0f}s)")
                     
@@ -2107,17 +2609,21 @@ class TradingEngine:
     async def _reconcile_and_resume(self, mint_address: str, symbol: str) -> None:
         """Background task to reconcile and resume trading"""
         self.logger.info(f"🔄 Starting reconciliation for {symbol}...")
-        
+
+        # Check if position still exists before attempting reconciliation
+        position = self.active_positions.get(mint_address)
+        if not position:
+            self.logger.warning(f"⚠️ Reconciliation skipped for {symbol} - position already closed/removed")
+            return
+
         actual_balance = await self._attempt_reconciliation(mint_address)
-        
+
         if actual_balance is not None:
             await self._resume_after_reconciliation(mint_address, actual_balance)
         else:
-            self.logger.error(f"❌ Failed to reconcile {symbol} after 10 attempts - position may need manual intervention")
+            self.logger.error(f"❌ Failed to reconcile {symbol} - all balance queries failed after retries")
             # Keep position paused but don't break it completely
-            position = self.active_positions.get(mint_address)
-            if position:
-                position.needs_reconciliation = True  # Keep it paused
+            position.needs_reconciliation = True  # Keep it paused
 
     async def _get_transaction_details_with_retry(self, tx_signature: str, mint_address: str) -> Optional[Dict]:
         """Get transaction details with exponential backoff retry"""
@@ -2380,7 +2886,13 @@ class TradingEngine:
         for attempt in range(max_attempts):
             try:
                 # Get current token balance from blockchain
-                current_balance = await self.transaction_signer.get_token_balance(mint_address)
+                # Support both fast execution and legacy paths
+                if self.fast_execution_enabled and self.fast_transaction_submitter:
+                    current_balance = await self.fast_transaction_submitter.get_token_balance(mint_address)
+                elif self.transaction_signer:
+                    current_balance = await self.transaction_signer.get_token_balance(mint_address)
+                else:
+                    current_balance = None
                 
                 if current_balance and current_balance > 0:
                     self.logger.info(f"✅ Verification successful on attempt {attempt + 1}: {current_balance:,.0f} tokens")
@@ -2453,11 +2965,11 @@ class TradingEngine:
                 
                 if diff_pct > 2:
                     self.logger.info(f"📊 Adjusting position: {estimated_tokens:,.0f} → {actual_tokens:,.0f} tokens ({diff_pct:.1f}% difference)")
-                    
+
                     # Adjust position amounts
                     old_entry_price = position.entry_price
                     new_entry_price = position.cost_usd_remaining / actual_tokens
-                    
+
                     position.amount = actual_tokens
                     position.tokens_initial = actual_tokens
                     position.entry_price = new_entry_price
@@ -2465,11 +2977,24 @@ class TradingEngine:
                     position.tp_price = new_entry_price * self.config.tp_multiplier
                     position.sl_price = new_entry_price * self.config.stop_loss_pct
                     position.verified_from_blockchain = True
-                    
+
                     self.logger.info(f"✅ Position reconciled: entry price ${old_entry_price:.8f} → ${new_entry_price:.8f}")
                 else:
                     self.logger.info(f"✅ Position accurate: {diff_pct:.1f}% difference (no adjustment needed)")
                     position.verified_from_blockchain = True
+
+                # CRITICAL FIX: Record BUY trade in P&L store (was missing!)
+                # This position was created immediately, so we need to record it now after verification
+                self.pnl_store.add_trade(
+                    action="BUY",
+                    symbol=symbol,
+                    mint_address=mint_address,
+                    amount=actual_tokens,
+                    price=position.entry_price,
+                    usd_value=position.cost_usd_remaining,
+                    paper_mode=False
+                )
+                self.logger.info(f"✅ BUY trade recorded in P&L store: {actual_tokens:,.0f} tokens at ${position.entry_price:.8f}")
             else:
                 # Could not verify - keep position but mark as unverified
                 self.logger.warning(f"⚠️ Could not verify transaction for {symbol} - keeping position with estimated amounts")
@@ -2729,7 +3254,182 @@ class TradingEngine:
         # Everything else: Full safety checks
         self.logger.info(f"🛡️  SAFE EXECUTION: Full safety checks ({wallet_confidence:.0f}%, {signal_strength:.1f} signal)")
         return "none"
-    
+
+    async def _verify_buy_costs_async(self, mint_address: str, tx_signature: str, symbol: str, sol_price: float):
+        """
+        Background task to verify actual SOL spent from transaction receipt.
+        Keeps retrying until success to ensure accurate P&L tracking.
+        """
+        try:
+            self.logger.info(f"🔄 Background verification started for {symbol} buy (tx: {tx_signature[:8]}...)")
+
+            # Retry for up to 15 seconds (more generous for indexing delay)
+            max_attempts = 30
+            delay = 0.5  # 500ms between attempts
+
+            for attempt in range(max_attempts):
+                # Check if position still exists (might have been sold already)
+                if mint_address not in self.active_positions:
+                    self.logger.info(f"⏭️ Position {symbol} already closed - skipping verification")
+                    return
+
+                position = self.active_positions[mint_address]
+
+                # Check if already verified (shouldn't happen, but safety check)
+                if getattr(position, 'actual_costs_verified', False):
+                    self.logger.debug(f"✅ Position {symbol} already verified - skipping")
+                    return
+
+                # Try to get actual SOL spent from transaction receipt
+                verification = await self.fast_transaction_submitter.get_transaction_sol_delta(tx_signature, is_buy=True)
+
+                # Check if transaction definitively FAILED on-chain (ghost position!)
+                if verification.status == "failed_on_chain":
+                    self.logger.error(f"👻 GHOST POSITION DETECTED: Buy transaction {tx_signature[:8]}... FAILED ON-CHAIN!")
+                    self.logger.error(f"   Token: {symbol} ({mint_address[:8]}...)")
+                    self.logger.error(f"   Error: {verification.error_detail}")
+                    self.logger.error(f"   Removing ghost position from tracking...")
+
+                    # Delete the ghost position
+                    if mint_address in self.active_positions:
+                        del self.active_positions[mint_address]
+                        self.logger.info(f"✅ Ghost position removed for {symbol}")
+
+                        # Clean up related tracking structures
+                        if hasattr(self, '_active_sells') and mint_address in self._active_sells:
+                            del self._active_sells[mint_address]
+
+                        # Remove from realtime positions if using that system
+                        if self.use_realtime_positions and hasattr(self, 'realtime_positions') and mint_address in self.realtime_positions.positions:
+                            del self.realtime_positions.positions[mint_address]
+
+                    # Log a failed trade in P&L (no cost since transaction failed)
+                    self.pnl_store.add_trade(
+                        action="BUY_FAILED",
+                        symbol=symbol,
+                        mint_address=mint_address,
+                        amount=0,
+                        price=0,
+                        usd_value=0,
+                        paper_mode=False
+                    )
+
+                    self.logger.info(f"✅ Ghost position cleanup complete for {symbol}")
+                    return  # Position deleted, exit verification
+
+                # Check if transaction succeeded
+                if verification.status == "success" and verification.sol_amount:
+                    # SUCCESS! Update position with actual costs
+                    actual_sol_spent = verification.sol_amount
+                    quote_estimate = getattr(position, 'unverified_sol_invested', position.sol_invested)
+                    discrepancy = actual_sol_spent - quote_estimate
+                    discrepancy_pct = (discrepancy / quote_estimate * 100) if quote_estimate > 0 else 0
+
+                    self.logger.info(f"✅ VERIFIED {symbol} buy costs after {attempt + 1} attempts ({(attempt + 1) * delay:.1f}s)")
+                    self.logger.info(f"   Quote estimate: {quote_estimate:.6f} SOL")
+                    self.logger.info(f"   Actual spent: {actual_sol_spent:.6f} SOL")
+                    self.logger.info(f"   Discrepancy: {discrepancy:+.6f} SOL ({discrepancy_pct:+.1f}%)")
+
+                    # Update position with actual costs
+                    position.sol_invested = actual_sol_spent
+                    position.actual_costs_verified = True
+
+                    # Update cost basis in USD
+                    actual_usd_cost = actual_sol_spent * sol_price
+                    position.cost_usd_remaining = actual_usd_cost
+                    position.avg_cost_per_token = actual_usd_cost / position.amount if position.amount > 0 else 0
+
+                    # Update P&L store with corrected values
+                    self.pnl_store.add_trade(
+                        action="BUY_VERIFIED",
+                        symbol=symbol,
+                        mint_address=mint_address,
+                        amount=position.amount,
+                        price=position.avg_cost_per_token,
+                        usd_value=actual_usd_cost,
+                        paper_mode=False
+                    )
+
+                    return  # SUCCESS!
+
+                # Status is "not_found" - transaction not indexed yet, wait and retry
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(delay)
+
+            # Failed to verify after all attempts
+            self.logger.warning(f"⚠️ Failed to verify {symbol} buy costs after {max_attempts} attempts ({max_attempts * delay:.0f}s)")
+            self.logger.warning(f"   Position will use unverified bonding curve quote for P&L calculations")
+
+        except Exception as e:
+            self.logger.error(f"Error in buy cost verification for {symbol}: {e}", exc_info=True)
+
+    async def _verify_sell_proceeds_async(self, mint_address: str, tx_signature: str, symbol: str, sol_price: float):
+        """
+        Background task to verify actual SOL received from transaction receipt.
+        Keeps retrying until success to ensure accurate P&L tracking.
+
+        Returns:
+            dict with 'sol_received' and 'cost_sol' if successful, None otherwise
+        """
+        try:
+            self.logger.info(f"🔄 Background verification started for {symbol} sell (tx: {tx_signature[:8]}...)")
+
+            # Retry for up to 15 seconds
+            max_attempts = 30
+            delay = 0.5
+
+            for attempt in range(max_attempts):
+                # Try to get actual SOL received from transaction receipt
+                verification = await self.fast_transaction_submitter.get_transaction_sol_delta(tx_signature, is_buy=False)
+
+                # Check if sell transaction failed on-chain
+                if verification.status == "failed_on_chain":
+                    self.logger.error(f"❌ Sell transaction {tx_signature[:8]}... FAILED ON-CHAIN!")
+                    self.logger.error(f"   Token: {symbol} ({mint_address[:8]}...)")
+                    self.logger.error(f"   Error: {verification.error_detail}")
+                    self.logger.error(f"   Sell failed - position still exists")
+                    # Note: Position still exists, sell just failed
+                    return None
+
+                # Check if sell succeeded
+                if verification.status == "success" and verification.sol_amount and verification.sol_amount > 0:
+                    # SUCCESS! Get cost basis from position (if still exists) or from buy verification
+                    actual_sol_received = verification.sol_amount
+                    actual_usd_received = actual_sol_received * sol_price
+
+                    self.logger.info(f"✅ VERIFIED {symbol} sell proceeds after {attempt + 1} attempts ({(attempt + 1) * delay:.1f}s)")
+                    self.logger.info(f"   Actual received: {actual_sol_received:.6f} SOL (${actual_usd_received:.2f})")
+
+                    # Try to get cost basis from active position (might still exist during partial sells)
+                    # or from recently closed position data
+                    cost_sol = None
+                    if mint_address in self.active_positions:
+                        position = self.active_positions[mint_address]
+                        if hasattr(position, 'sol_invested'):
+                            cost_sol = position.sol_invested
+                    elif hasattr(self, '_recent_closed_positions') and mint_address in self._recent_closed_positions:
+                        # Position was closed - get cost from cache
+                        cost_sol = self._recent_closed_positions[mint_address].get('sol_invested')
+                        self.logger.debug(f"Retrieved cost basis from closed position cache: {cost_sol:.6f} SOL")
+
+                    return {
+                        'sol_received': actual_sol_received,
+                        'cost_sol': cost_sol,
+                        'usd_received': actual_usd_received
+                    }
+
+                # Status is "not_found" - transaction not indexed yet, wait and retry
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(delay)
+
+            # Failed to verify after all attempts
+            self.logger.warning(f"⚠️ Failed to verify {symbol} sell proceeds after {max_attempts} attempts ({max_attempts * delay:.0f}s)")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error in sell proceeds verification for {symbol}: {e}", exc_info=True)
+            return None
+
     async def _get_sol_price(self) -> Optional[float]:
         """Get current SOL price in USD"""
         if self.blockchain_analytics:
@@ -2936,18 +3636,23 @@ class TradingEngine:
                 
                 # Try to execute the sell with current conditions
                 tokens_to_sell = position.amount * percentage
-                
+
                 # Check if we have tokens available now (simple balance check)
-                if self.transaction_signer:
+                # Support both fast execution and legacy paths
+                actual_balance = None
+                if self.fast_execution_enabled and self.fast_transaction_submitter:
+                    actual_balance = await self.fast_transaction_submitter.get_token_balance(mint_address)
+                elif self.transaction_signer:
                     actual_balance = await self.transaction_signer.get_token_balance(mint_address)
-                    if actual_balance is not None and actual_balance > 0:
-                        self.logger.info(f"✅ Smart retry {retry_attempt + 1}: Balance available! {actual_balance:,.0f} tokens")
-                        
-                        # Update position with actual balance if significantly different
-                        if abs(actual_balance - position.amount) / position.amount > 0.05:  # 5% difference
-                            self.logger.info(f"📊 Adjusting position: {position.amount:,.0f} → {actual_balance:,.0f} tokens")
-                            position.amount = actual_balance
-                            tokens_to_sell = actual_balance * percentage
+
+                if actual_balance is not None and actual_balance > 0:
+                    self.logger.info(f"✅ Smart retry {retry_attempt + 1}: Balance available! {actual_balance:,.0f} tokens")
+
+                    # Update position with actual balance if significantly different
+                    if abs(actual_balance - position.amount) / position.amount > 0.05:  # 5% difference
+                        self.logger.info(f"📊 Adjusting position: {position.amount:,.0f} → {actual_balance:,.0f} tokens")
+                        position.amount = actual_balance
+                        tokens_to_sell = actual_balance * percentage
                         
                         # Try the actual sell - use simplified transaction execution
                         tx_result = await self._execute_sell_transaction(
@@ -3023,9 +3728,9 @@ class TradingEngine:
                                 "paper_mode": False
                             }
                         else:
-                            retry_error = result.get('error', '')
+                            retry_error = tx_result.get('error', '')
                             self.logger.warning(f"🔄 Smart retry {retry_attempt + 1} failed: {retry_error}")
-                            
+
                             # If it's still a balance error, continue retrying
                             if 'NotEnoughTokensToSell' not in retry_error and '0x1787' not in retry_error:
                                 # Different error type, don't keep retrying
@@ -3129,7 +3834,13 @@ class TradingEngine:
             balance_checks = []
             for i in range(3):
                 try:
-                    balance = await self.transaction_signer.get_token_balance(mint_address)
+                    # Support both fast execution and legacy paths
+                    if self.fast_execution_enabled and self.fast_transaction_submitter:
+                        balance = await self.fast_transaction_submitter.get_token_balance(mint_address)
+                    elif self.transaction_signer:
+                        balance = await self.transaction_signer.get_token_balance(mint_address)
+                    else:
+                        balance = None
                     balance_checks.append(balance if balance is not None else 0)
                     if i < 2:  # Don't wait after last check
                         await asyncio.sleep(2)  # Wait 2s between checks
@@ -3233,10 +3944,16 @@ class TradingEngine:
         """
         # Tier 1: Quick primary check (500ms timeout)
         try:
-            balance = await asyncio.wait_for(
-                self.transaction_signer.get_token_balance(mint_address),
-                timeout=0.5
-            )
+            # Support both fast execution and legacy paths
+            if self.fast_execution_enabled and self.fast_transaction_submitter:
+                balance_coro = self.fast_transaction_submitter.get_token_balance(mint_address)
+            elif self.transaction_signer:
+                balance_coro = self.transaction_signer.get_token_balance(mint_address)
+            else:
+                # No balance checker available - skip check
+                return {'available': False, 'confidence': 'none', 'balance': 0}
+
+            balance = await asyncio.wait_for(balance_coro, timeout=0.5)
             if balance >= expected_amount:
                 return {'available': True, 'confidence': 'high', 'balance': balance}
             elif balance is not None:
@@ -3248,10 +3965,16 @@ class TradingEngine:
         
         # Tier 2: Fallback to a simple existence check
         try:
-            balance = await asyncio.wait_for(
-                self.transaction_signer.get_token_balance(mint_address),
-                timeout=1.0
-            )
+            # Support both fast execution and legacy paths
+            if self.fast_execution_enabled and self.fast_transaction_submitter:
+                balance_coro = self.fast_transaction_submitter.get_token_balance(mint_address)
+            elif self.transaction_signer:
+                balance_coro = self.transaction_signer.get_token_balance(mint_address)
+            else:
+                # No balance checker available
+                return {'available': False, 'confidence': 'none', 'balance': 0}
+
+            balance = await asyncio.wait_for(balance_coro, timeout=1.0)
             if balance is not None and balance >= expected_amount:
                 return {'available': True, 'confidence': 'medium', 'balance': balance}
             elif balance is not None:

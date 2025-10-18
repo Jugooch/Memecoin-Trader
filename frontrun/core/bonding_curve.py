@@ -24,6 +24,15 @@ FEE_BPS = 100  # 1% fee (100 basis points)
 BPS_DENOMINATOR = 10_000
 PUMP_FUN_PROGRAM = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
 
+# Initial bonding curve state for newly created tokens
+# Source: Pump.fun Protocol Specification (SPEC.md)
+# These values are the state BEFORE any buys (perfect for frontrunning dev)
+INITIAL_VIRTUAL_TOKEN_RESERVES = 1_073_000_000_000_000  # 1.073B tokens (6 decimals)
+INITIAL_VIRTUAL_SOL_RESERVES = 30_000_000_000  # 30 SOL (9 decimals)
+INITIAL_REAL_TOKEN_RESERVES = 793_100_000_000_000  # 793.1M tokens (6 decimals)
+INITIAL_REAL_SOL_RESERVES = 0  # No SOL yet (before first buy)
+INITIAL_TOKEN_TOTAL_SUPPLY = 1_000_000_000_000_000  # 1B tokens (6 decimals)
+
 
 @dataclass
 class BondingCurveState:
@@ -591,3 +600,62 @@ def get_market_cap_sol(curve_state: BondingCurveState) -> float:
     market_cap_lamports = curve_state.token_total_supply * price_per_token_lamports
 
     return market_cap_lamports / 1e9
+
+
+def get_initial_bonding_curve_state() -> BondingCurveState:
+    """
+    Get initial bonding curve state for newly created tokens
+
+    This is the state BEFORE any buys happen (before dev's first buy).
+    Use this for frontrunning dev buys to avoid RPC fetch delays.
+
+    Returns:
+        BondingCurveState with initial values
+    """
+    return BondingCurveState(
+        virtual_token_reserves=INITIAL_VIRTUAL_TOKEN_RESERVES,
+        virtual_sol_reserves=INITIAL_VIRTUAL_SOL_RESERVES,
+        real_token_reserves=INITIAL_REAL_TOKEN_RESERVES,
+        real_sol_reserves=INITIAL_REAL_SOL_RESERVES,
+        token_total_supply=INITIAL_TOKEN_TOTAL_SUPPLY,
+        complete=False
+    )
+
+
+def calculate_curve_state_after_buy(
+    initial_state: BondingCurveState,
+    sol_spent: int,
+    tokens_received: int
+) -> BondingCurveState:
+    """
+    Calculate bonding curve state after a buy transaction
+
+    This simulates what the on-chain state will be after our buy,
+    allowing us to build sell transactions without fetching from RPC.
+
+    Args:
+        initial_state: Bonding curve state before the buy
+        sol_spent: SOL spent on the buy (lamports, after fees)
+        tokens_received: Tokens received from the buy (base units)
+
+    Returns:
+        Updated BondingCurveState after the buy
+    """
+    # After a buy:
+    # - virtual_sol_reserves increases by sol_spent (after fees)
+    # - virtual_token_reserves decreases by tokens_received
+    # - real_sol_reserves increases by sol_spent
+    # - real_token_reserves decreases by tokens_received
+
+    # Calculate fee (1%)
+    fee_lamports = (sol_spent * FEE_BPS) // BPS_DENOMINATOR
+    sol_after_fee = sol_spent - fee_lamports
+
+    return BondingCurveState(
+        virtual_token_reserves=initial_state.virtual_token_reserves - tokens_received,
+        virtual_sol_reserves=initial_state.virtual_sol_reserves + sol_after_fee,
+        real_token_reserves=initial_state.real_token_reserves - tokens_received,
+        real_sol_reserves=initial_state.real_sol_reserves + sol_after_fee,
+        token_total_supply=initial_state.token_total_supply,
+        complete=False
+    )

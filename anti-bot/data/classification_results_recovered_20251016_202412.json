@@ -1,0 +1,2067 @@
+{
+  "metadata": {
+    "recovered_from": "anti-bot\\data\\checkpoints\\checkpoint_20251016_200603.json",
+    "start_time": "2025-10-16T14:21:01.866599",
+    "checkpoint_time": "2025-10-16T20:06:04.024968",
+    "runtime_hours": 5.750599546944445,
+    "transactions_seen": 301979,
+    "trades_seen": 296608,
+    "wallets_tracked": 31021,
+    "mints_tracked": 6035
+  },
+  "label_distribution": {
+    "deployer": 1677,
+    "metric_bot": 3544,
+    "sybil": 7481,
+    "unknown": 17585,
+    "organic": 682,
+    "early_exit": 52
+  },
+  "detection_stats": {
+    "sybil_clusters": 7550,
+    "metric_bots": 6217,
+    "bait_clusters": 0
+  },
+  "funding_graph_stats": {
+    "cached_wallets": 19005,
+    "parent_nodes": 1583,
+    "suspicious_flagged": 25674,
+    "cache_hits": 0,
+    "cache_misses": 0,
+    "hit_rate": 0.0,
+    "rpc_calls": 25674,
+    "rpc_calls_avoided": 0,
+    "efficiency": "0.0%"
+  },
+  "sample_classifications": {
+    "deployer": [
+      {
+        "wallet": "5rxjtTmv1e7WrS8BSaRijVYGAD2ZZpDVb64YDyWrSFj6",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 2 token(s)"
+        ],
+        "observations": 24,
+        "trades": 24
+      },
+      {
+        "wallet": "C9XZuGBopbQHiz1pWgbZuKuySJhD6HHXeqKkFjJtJhzX",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 2 token(s)"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "AegcDoSycihx4yW5cyr6E39AzAsjmxFhKY7TTu4uxWTR",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 64,
+        "trades": 64
+      },
+      {
+        "wallet": "9GAQPQPPuPgphLofKosEPtFFWLszYgsyoRKqZwDwext4",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 5 token(s)"
+        ],
+        "observations": 11,
+        "trades": 11
+      },
+      {
+        "wallet": "8ZCWjPxwxaHXggyTpp9tFeaP2B5yhmCDhHXU4ZQecu1S",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "2PzbzVMbXjYFGS8huZVEoepkWCUuDmUL7eC62HkJ5jQH",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 44,
+        "trades": 44
+      },
+      {
+        "wallet": "5TaPtQ9DE1YMUfiyLv7CCNx1CEh88nWx3sPmNRz9zL75",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 15 token(s)"
+        ],
+        "observations": 54,
+        "trades": 54
+      },
+      {
+        "wallet": "KWCbAtiCRwPGq4C6CftopH7BA9CyPSBVRM5jLMYyMaP",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 8 token(s)"
+        ],
+        "observations": 21,
+        "trades": 21
+      },
+      {
+        "wallet": "8HeDT75s5g4CtCimH5B5nySqCiQhtWii8UnZhxBtFo38",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 13 token(s)"
+        ],
+        "observations": 33,
+        "trades": 33
+      },
+      {
+        "wallet": "8B3QMkKsEEdqFH9DrVLCpADs8TUbj55yYSBUEPNGfXSS",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 30,
+        "trades": 30
+      },
+      {
+        "wallet": "3SMxPwdQKQRrERMMqYTLWwut4gKDGNiD5r9d7y8DeJrA",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 5 token(s)"
+        ],
+        "observations": 11,
+        "trades": 11
+      },
+      {
+        "wallet": "5eEQ8vGiDC8eAoQohwcB1soBDxHM5Lbk81XUzLhpySHx",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "DLWdqbSiVFMde4iPa2EHL7j2GDtyabyLAyCqaqMmNYrd",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "DqmQVdg3TvJRP7KFA62E4PpiR75HVV15DwpLHdtphnKZ",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 7 token(s)"
+        ],
+        "observations": 39,
+        "trades": 39
+      },
+      {
+        "wallet": "3FAQFDNfXuottobRYn1nMLZQVGnva6qbbYXPX8hMBh9u",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "BtMBMPkoNbnLF9Xn552guQq528KKXcsNBNNBre3oaQtr",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 2 token(s)"
+        ],
+        "observations": 91,
+        "trades": 91
+      },
+      {
+        "wallet": "HXuuXP9ZNn7WGaKKqiAcX5473TeyXb91afB7mKkRvCF8",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 6 token(s)"
+        ],
+        "observations": 14,
+        "trades": 14
+      },
+      {
+        "wallet": "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 74,
+        "trades": 74
+      },
+      {
+        "wallet": "Da6iKnjdq2GzbEBucN845ht5XjLx7YvEXsZS8HsKehB4",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "moanTeQ4d1c1wtZYENytCm1yZDXwUcUYTnSNpjpB4jF",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 6 token(s)"
+        ],
+        "observations": 24,
+        "trades": 24
+      },
+      {
+        "wallet": "J71fGHHBvLjEJo9p7GL5L3G7Rj1gt8d9iSBa4QzKr4uf",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "bwamJzztZsepfkteWRChggmXuiiCQvpLqPietdNfSXa",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 59 token(s)"
+        ],
+        "observations": 174,
+        "trades": 174
+      },
+      {
+        "wallet": "He9mv9JgbjLaYWcq1UzcpxGHbZk5jySAL44hvwPvXE17",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 3 token(s)"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "whamNNP9tHoxLg92yHvJPdYhghEoCg1qYTsh5a2oLbx",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 7 token(s)"
+        ],
+        "observations": 16,
+        "trades": 16
+      },
+      {
+        "wallet": "Eq8wRBS83Vj8ZDb6jHzNcMNBfSsRZDjQa1rgCZnQrYtd",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 5 token(s)"
+        ],
+        "observations": 10,
+        "trades": 10
+      },
+      {
+        "wallet": "E4UYG4WxrfZmR9a2RBQ14rarLdqyHtvxPKZmH1ckoDxk",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 2 token(s)"
+        ],
+        "observations": 8,
+        "trades": 8
+      },
+      {
+        "wallet": "H2y8Rs8tYgEpbzSXDtKq3HDiuMGzCSFYtWSnocjZSm7X",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "BnSJys7v985tCpKBa1vAD1Vy24JqJ6J9fAabUjfm8Tya",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 3 token(s)"
+        ],
+        "observations": 18,
+        "trades": 18
+      },
+      {
+        "wallet": "ACMpmazTwLru3WWVYq2ep8df48ipnHfJVpGrGPCAzCDr",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 18,
+        "trades": 18
+      },
+      {
+        "wallet": "2Xfj5XeznXHVg8Aoy17cdqaYgft5Ew2rbZxq3EJCi25L",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "feemRpnaSibaptAVUF7veQg4JLZukTsUFfBU7MihyTo",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 3 token(s)"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "q3v51wbUUQPsi7reWHkLRo9SyyxcAak14XyCh2ie59J",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 2 token(s)"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "Gk8QFew2GVuqv5xNFGtZ3kMyRa4ABuJxqSDV7iBudwCn",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 4 token(s)"
+        ],
+        "observations": 17,
+        "trades": 17
+      },
+      {
+        "wallet": "4Q9gLASmHoT2h9rGWjRJFcC6futtkMARwQYFpiEobRYV",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "FLVvBFjqeiwALRNoH8xjPesChet5wkzXB1vBbYt9pzJ7",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 47 token(s)"
+        ],
+        "observations": 116,
+        "trades": 116
+      },
+      {
+        "wallet": "AuAgJ9XgPaWSaacfuonwb45RUUeJSzDuMzsJWuzv83Fs",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 59,
+        "trades": 59
+      },
+      {
+        "wallet": "1pgKHM8wHJwfjc5FUW2e3PbZQJuCSWGKYZdsseX5Lgd",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 2 token(s)"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "vbXpsjNXdg57VatGKiYN1ZY4ffwqoumPzztCMnJCxd9",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "36DWP52MVRDooYNrcRVDyoCh2R1fPXCYqKJQYg9pFQoE",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "3QEvxoxv68zcCQV26CengvzC56qXf4PVHsFAMBhxtVfZ",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 13 token(s)"
+        ],
+        "observations": 32,
+        "trades": 32
+      },
+      {
+        "wallet": "9qfBUMC8fuSPi39zFdo98GFgYzYu8AuYHsAR1E9QePNC",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 13,
+        "trades": 13
+      },
+      {
+        "wallet": "g3LGZczYoBzDvm5hMEcRV4ZrGXCUxNSceszbYpBnUMq",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 50,
+        "trades": 50
+      },
+      {
+        "wallet": "ALD7aJGfymztcyEUnfJFJ3b8bmeM4AXFKTVSLXnP2D41",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 4 token(s)"
+        ],
+        "observations": 28,
+        "trades": 28
+      },
+      {
+        "wallet": "rzzUxQqmt7Ua5NsXj6dUx76zFwnwkrpVqnTzpm98akb",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 11,
+        "trades": 11
+      },
+      {
+        "wallet": "Hw3Tkce1Hh3q7KgDqCXWTsWrv4yMm8JijqfYw1EPno4p",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 38,
+        "trades": 38
+      },
+      {
+        "wallet": "726rPsfs1s2YXdskg3ZpJHxjc5jPaQBEXUghXc5no9B8",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "2ZcMnEYjbLGmiUjDQXDb9e1o1F1CsB2jKeu2sDzxt4zy",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 2 token(s)"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "REFUtFhEPhKiSF6a7bPWSHCNUCahjg78zbKYAc9kj5n",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "4dnWLzmdkLeuDe6hwRBpPqrDbQZ59hpoBu8JLztAescf",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 21 token(s)"
+        ],
+        "observations": 42,
+        "trades": 42
+      },
+      {
+        "wallet": "8sZCezS3SpzL4GCD9FNkYswUaJm3YkScusKSuUetBz4F",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 2 token(s)"
+        ],
+        "observations": 4,
+        "trades": 4
+      }
+    ],
+    "metric_bot": [
+      {
+        "wallet": "C3Fu5H9DiuwBKbpPRQweSv7Nmsu834847v9DSdbZ2aUp",
+        "confidence": 0.6463600228492246,
+        "reasons": [
+          "Template timing: CV=0.04",
+          "Consistent delay: std=0.16s",
+          "Template CU: variance=0",
+          "Fast flips: 13.5s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "FD5YQ3F2j6cPDdPwaduLmUF2cvV2p3T5xr3p6LsjrPQM",
+        "confidence": 0.635901694399164,
+        "reasons": [
+          "Template timing: CV=0.01",
+          "Consistent delay: std=0.06s",
+          "Fast flips: 7.4s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "FV7scPUuDeTPLfkdMdepWbMFckBtvUGL4xnB7bkR2NGb",
+        "confidence": 0.6344496495488648,
+        "reasons": [
+          "Template timing: CV=0.13",
+          "Consistent delay: std=0.03s",
+          "Template CU: variance=0"
+        ],
+        "observations": 10,
+        "trades": 10
+      },
+      {
+        "wallet": "9zayQ1UKkczEwpJ3nXVHM55uywDp5RCHKSAaBQ6cYVtG",
+        "confidence": 0.6315147378565685,
+        "reasons": [
+          "Template timing: CV=0.17",
+          "Consistent delay: std=0.16s",
+          "Template CU: variance=0"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "3NdynKUphoH6h4E7JAcbG1qLWmJgY8CeafQR2jWpYBpz",
+        "confidence": 0.6304862418565429,
+        "reasons": [
+          "Template timing: CV=0.04",
+          "Template CU: variance=0",
+          "Fast flips: 21.4s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "7DFuQtFYYsW21QLMUJ5hpdX1ykDLfqitFg84wG3vc8RQ",
+        "confidence": 0.6265091545935227,
+        "reasons": [
+          "Template timing: CV=0.26",
+          "Consistent delay: std=0.14s",
+          "Template CU: variance=0"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "8mM8JEoPGgPMwpr2qPk69T2XnRsE4PSohazp5snM1u29",
+        "confidence": 0.6261096798214498,
+        "reasons": [
+          "Template timing: CV=0.32",
+          "Consistent delay: std=0.09s",
+          "Template CU: variance=0"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "DrMkhg4mJBQyy5zygw6PJB9g6zMKcgHzEYcPrcSu7x2v",
+        "confidence": 0.6227375532945442,
+        "reasons": [
+          "Template timing: CV=0.19",
+          "Consistent delay: std=0.07s",
+          "Template CU: variance=0",
+          "Fast flips: 10.3s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "TeEhpDV5JFRtZtigD13NND5qQXpuz7fp1ptAPJu8U7P",
+        "confidence": 0.6202432764862046,
+        "reasons": [
+          "Template timing: CV=0.24",
+          "Consistent delay: std=0.24s",
+          "Template CU: variance=0"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "B9ftWwduPwP743xCexPDuwTopEUh2epeTMhf2auqu3L5",
+        "confidence": 0.6177617968084954,
+        "reasons": [
+          "Template timing: CV=0.05",
+          "Consistent delay: std=0.01s",
+          "Fast flips: 4.0s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "38yYvvPETBzFiE29X4VRVsPy4zxemJ3JJnhKhcikydh7",
+        "confidence": 0.6172097018519527,
+        "reasons": [
+          "Template timing: CV=0.13",
+          "Consistent delay: std=0.11s",
+          "Template CU: variance=0"
+        ],
+        "observations": 10,
+        "trades": 10
+      },
+      {
+        "wallet": "7kpqn4KGNqZ3XLz8iva1xNVKPL7MoshyzeQLGxw6PFz5",
+        "confidence": 0.6171552639082223,
+        "reasons": [
+          "Consistent delay: std=0.20s",
+          "Template CU: variance=0",
+          "Fast flips: 4.6s median hold"
+        ],
+        "observations": 11,
+        "trades": 11
+      },
+      {
+        "wallet": "H9RNxbkjn3ZSauCYzEy6ygxchPinLpi3JAKEti1qa83q",
+        "confidence": 0.6155555100784494,
+        "reasons": [
+          "Burst-triggered: 9/11 buys after bursts",
+          "Template timing: CV=0.30",
+          "Consistent delay: std=0.18s",
+          "Template CU: variance=0"
+        ],
+        "observations": 14,
+        "trades": 14
+      },
+      {
+        "wallet": "Byx8fZQ6pqjq5h9hynQDmgvv5gqPNme6jVZT4bjeujXz",
+        "confidence": 0.6134779581685714,
+        "reasons": [
+          "Burst-triggered: 9/11 buys after bursts",
+          "Template timing: CV=0.30",
+          "Consistent delay: std=0.20s",
+          "Template CU: variance=0"
+        ],
+        "observations": 14,
+        "trades": 14
+      },
+      {
+        "wallet": "3bPsVpFMMY3thLErsfAKAnrSnAHgkn5PtfYfRbkdFdNw",
+        "confidence": 0.6134720947441685,
+        "reasons": [
+          "Template timing: CV=0.02",
+          "Template CU: variance=0",
+          "Fast flips: 13.5s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "GNfjPVGWnwsh8EoziGZvPxdmcjwFXQFedLjbKkxvwvCX",
+        "confidence": 0.6129907742011166,
+        "reasons": [
+          "Template timing: CV=0.09",
+          "Consistent delay: std=0.30s",
+          "Template CU: variance=0",
+          "Fast flips: 8.4s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "8pUhexF4vFPMmVLXi2UADcADmYtszZ3FS8s3PcZenHnX",
+        "confidence": 0.6127940572101778,
+        "reasons": [
+          "Template timing: CV=0.00",
+          "Template CU: variance=0",
+          "Fast flips: 16.5s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "GXxk71ykfg2rWBAWogGZCAMFEyV41o3P43xhtud7SeWV",
+        "confidence": 0.6126133068458557,
+        "reasons": [
+          "Template timing: CV=0.26",
+          "Template CU: variance=0"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "Go157Mvm3Ham8XH7V4tHh2gi9JEcyq79dYg5m9KpBzM1",
+        "confidence": 0.612494030737584,
+        "reasons": [
+          "Burst-triggered: 8/10 buys after bursts",
+          "Template timing: CV=0.30",
+          "Consistent delay: std=0.20s",
+          "Template CU: variance=0"
+        ],
+        "observations": 13,
+        "trades": 13
+      },
+      {
+        "wallet": "9fSa2WNm8trUGjWjvGpcGLjSRWVjnENhpD3JVVDshBjg",
+        "confidence": 0.6124241716630133,
+        "reasons": [
+          "Template timing: CV=0.22",
+          "Consistent delay: std=0.09s",
+          "Template CU: variance=0"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "9gPGCF3iCoJAZGVzXed2t7RC71GBDet1pxvatieJ1wLz",
+        "confidence": 0.6122798753015699,
+        "reasons": [
+          "Template timing: CV=0.24",
+          "Consistent delay: std=0.21s",
+          "Template CU: variance=0"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "9eHGTu8GcQdQMYiz7JDptv7RHwv5c8YN2gAkuzoJug2q",
+        "confidence": 0.6116053514181823,
+        "reasons": [
+          "Template timing: CV=0.06",
+          "Template CU: variance=0",
+          "Fast flips: 12.0s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "Ht3tyzR6UieY4MrQN9QFuxp1ANhsFM635pNDxYQTyZ3q",
+        "confidence": 0.6111256959243375,
+        "reasons": [
+          "Consistent delay: std=0.09s",
+          "Template CU: variance=0",
+          "Fast flips: 24.1s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "4UYULNQZNg5AAUpdYmr2yiG3heiftufKGCHTyhzq3XVj",
+        "confidence": 0.6108668697022078,
+        "reasons": [
+          "Burst-triggered: 9/10 buys after bursts",
+          "Template timing: CV=0.28",
+          "Consistent delay: std=0.30s",
+          "Template CU: variance=0"
+        ],
+        "observations": 13,
+        "trades": 13
+      },
+      {
+        "wallet": "GQ3QLdoMX9PhdegRRdeUaCuWgypEfjgsyNiFY7SbYbZf",
+        "confidence": 0.6106573321426921,
+        "reasons": [
+          "Template timing: CV=0.24",
+          "Consistent delay: std=0.10s",
+          "Fast flips: 17.1s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "7VHxxi6n45iYsusVrAQy1i9xuweWPKvXEsA8ogXKEbmC",
+        "confidence": 0.6096607479002232,
+        "reasons": [
+          "Burst-triggered: 9/11 buys after bursts",
+          "Template timing: CV=0.30",
+          "Consistent delay: std=0.25s",
+          "Template CU: variance=0"
+        ],
+        "observations": 14,
+        "trades": 14
+      },
+      {
+        "wallet": "DF4UWsnakSRxn7o8pxKkf45xxw9WFgQ95MrEersAptcg",
+        "confidence": 0.6087378068073369,
+        "reasons": [
+          "Template timing: CV=0.26",
+          "Consistent delay: std=0.07s",
+          "Fast flips: 24.4s median hold"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "HSPiDqF8FSXQxGYMb2FrqJoPhuN4Mw3MdRK696SdkJa3",
+        "confidence": 0.6086351201476216,
+        "reasons": [
+          "Consistent delay: std=0.00s",
+          "Template CU: variance=0",
+          "Fast flips: 2.0s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "FqeLCxJaM4wjY757BgRMwpTaTCJKHLXbMCGpSx4rQ2iH",
+        "confidence": 0.6084535416998131,
+        "reasons": [
+          "Consistent delay: std=0.22s",
+          "Template CU: variance=0"
+        ],
+        "observations": 8,
+        "trades": 8
+      },
+      {
+        "wallet": "8eZQESuqnHm3hCsiMiN8ch5vGkg6c14EqL1A1byn7hNw",
+        "confidence": 0.6083791316892212,
+        "reasons": [
+          "Burst-triggered: 5/6 buys after bursts",
+          "Template timing: CV=0.09",
+          "Template CU: variance=0",
+          "Fast flips: 4.8s median hold"
+        ],
+        "observations": 13,
+        "trades": 13
+      },
+      {
+        "wallet": "9GABnjFkcBQcnD5N5QVBuRjpK9QFgaYd6MboiQVGQnZd",
+        "confidence": 0.6074219429017776,
+        "reasons": [
+          "Consistent delay: std=0.00s",
+          "Template CU: variance=0",
+          "Fast flips: 4.6s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "GThyrQcYUPsbCqwPxK2XAPWwtBowCYfRmv7qyhjwrD8M",
+        "confidence": 0.6073825685415033,
+        "reasons": [
+          "Template timing: CV=0.03",
+          "Template CU: variance=0"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "7DKakSDEaqCtynfkVqAkMyXQ1f44fr8LDdX7btQcVuun",
+        "confidence": 0.6072809589509481,
+        "reasons": [
+          "Consistent delay: std=0.00s",
+          "Template CU: variance=0",
+          "Fast flips: 4.9s median hold"
+        ],
+        "observations": 7,
+        "trades": 7
+      },
+      {
+        "wallet": "G55vvsQYwtJL64LfLexvJYm5QeWApwToAKqKPaKvJ5Vr",
+        "confidence": 0.6068348904881009,
+        "reasons": [
+          "Burst-triggered: 5/5 buys after bursts",
+          "Template timing: CV=0.19",
+          "Template CU: variance=0"
+        ],
+        "observations": 7,
+        "trades": 7
+      },
+      {
+        "wallet": "7v8jhmX5Y3JPYXB5jArwimoewfwJR2UxCZ3BFVV417eS",
+        "confidence": 0.6064346771713558,
+        "reasons": [
+          "Burst-triggered: 6/6 buys after bursts",
+          "Consistent delay: std=0.25s",
+          "Template CU: variance=0",
+          "Fast flips: 18.8s median hold"
+        ],
+        "observations": 12,
+        "trades": 12
+      },
+      {
+        "wallet": "EHJnuj8SzStJA98j9F56zHvTxSfYwiU6GqdgLigL742q",
+        "confidence": 0.606357091321178,
+        "reasons": [
+          "Template timing: CV=0.30",
+          "Template CU: variance=0"
+        ],
+        "observations": 7,
+        "trades": 7
+      },
+      {
+        "wallet": "H9DaB3fnadkyRwBgjRDovLRLZJ7tVsDhwYEp5Xz69GXj",
+        "confidence": 0.6058686669468671,
+        "reasons": [
+          "Template timing: CV=0.19",
+          "Consistent delay: std=0.28s",
+          "Template CU: variance=0",
+          "Fast flips: 11.3s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "5kTMRBxmE9TmBjwehaZt1eF3wqx8Qv2GNyjKfdajqtBN",
+        "confidence": 0.6055417608280574,
+        "reasons": [
+          "Consistent delay: std=0.00s",
+          "Template CU: variance=0",
+          "Fast flips: 8.0s median hold"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "9NxgJsxwkxDipDU8yLh1fvBKaJ2VSR2BRJoUAVW1cuxr",
+        "confidence": 0.605504509481538,
+        "reasons": [
+          "Template timing: CV=0.13",
+          "Template CU: variance=0"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "GdminU9LcjxbNMKZjixYvgrz7G9ctgfGnkYXp3zX6dkK",
+        "confidence": 0.6051933843213061,
+        "reasons": [
+          "Consistent delay: std=0.02s",
+          "Template CU: variance=0",
+          "Fast flips: 5.5s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "5Js436hrRYGQ256pQ5mJLukUWjnTJM7CtL2NA3uCpRgr",
+        "confidence": 0.6043213930415235,
+        "reasons": [
+          "Template timing: CV=0.30",
+          "Template CU: variance=0"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "8JxE1WEfR5RxftGY5FVxV49NVkJDiiJV3NfgdiTLVZce",
+        "confidence": 0.6040648894272417,
+        "reasons": [
+          "Template timing: CV=0.07",
+          "Consistent delay: std=0.30s"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "Qwko474S1ZsqxyzbmzopeuQsuCaXZugy7dzYnF4SEpt",
+        "confidence": 0.603710664159789,
+        "reasons": [
+          "Consistent delay: std=0.00s",
+          "Template CU: variance=0",
+          "Fast flips: 11.5s median hold"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "2NY3prGefuQeakQHZaQkWnnD2cRt6sL91H4TDPP2a6fK",
+        "confidence": 0.6037025572243375,
+        "reasons": [
+          "Template timing: CV=0.08",
+          "Template CU: variance=0"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "Do7udhMe6Szz1DWf5iz8jYi2igViNke7rbZ3WA6KEkmn",
+        "confidence": 0.6036299180112529,
+        "reasons": [
+          "Consistent delay: std=0.14s",
+          "Template CU: variance=0"
+        ],
+        "observations": 7,
+        "trades": 7
+      },
+      {
+        "wallet": "FJ2d2FruLqnaTUVVYn59WqFTr1hBFZeMYWmLtbhSz7os",
+        "confidence": 0.6035996373753327,
+        "reasons": [
+          "Consistent delay: std=0.00s",
+          "Template CU: variance=0",
+          "Fast flips: 12.6s median hold"
+        ],
+        "observations": 7,
+        "trades": 7
+      },
+      {
+        "wallet": "4XGb4uSqduC5w7H8BkLwJhy5UMJTwN1ePuS1qUimQi4t",
+        "confidence": 0.6035543194439137,
+        "reasons": [
+          "Burst-triggered: 5/5 buys after bursts",
+          "Template timing: CV=0.23",
+          "Template CU: variance=0"
+        ],
+        "observations": 8,
+        "trades": 8
+      },
+      {
+        "wallet": "7LRdzC7rC9QkqrkmBxMvf335HW35hHRGwCE6PARohjfA",
+        "confidence": 0.6032819876003803,
+        "reasons": [
+          "Template timing: CV=0.20",
+          "Consistent delay: std=0.04s",
+          "Fast flips: 4.4s median hold"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "7qphuDdTSeGDmgxxMUMF77oakYJ1A8GwUALE4RrrhvY9",
+        "confidence": 0.6030626701707719,
+        "reasons": [
+          "Template timing: CV=0.39",
+          "Consistent delay: std=0.25s",
+          "Template CU: variance=0",
+          "Fast flips: 13.3s median hold"
+        ],
+        "observations": 12,
+        "trades": 12
+      },
+      {
+        "wallet": "JByEtxuvZAHHMN3Q3tciz4dyChCZDHWMC5FFEkRs8xUJ",
+        "confidence": 0.6020887312880033,
+        "reasons": [
+          "Template timing: CV=0.10",
+          "Template CU: variance=0"
+        ],
+        "observations": 6,
+        "trades": 6
+      }
+    ],
+    "sybil": [
+      {
+        "wallet": "HvqBuT3AeoKakwX3jK5wVnvULxn5UMLUZvrMq3vZe1Wu",
+        "confidence": 0.60043049538891,
+        "reasons": [
+          "Funding cluster: 64 wallets",
+          "Tight timing: 0ms median gap",
+          "Micro-buys: 0.0057 SOL median"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "E82xd3NAcFuVT1BjcbeEGpLoCoMcwaYudZWoEDytrW7Q",
+        "confidence": 0.5945112036098072,
+        "reasons": [
+          "Funding cluster: 43 wallets",
+          "Tight timing: 2ms median gap",
+          "Micro-buys: 0.0086 SOL median"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "AXgzGEvbgaFeb1xhdXkQc5D5CehZUa89ci2F9ugQPLaA",
+        "confidence": 0.5809131270778344,
+        "reasons": [
+          "Funding cluster: 10 wallets",
+          "Tight timing: 132ms median gap",
+          "Micro-buys: 0.0001 SOL median"
+        ],
+        "observations": 103,
+        "trades": 103
+      },
+      {
+        "wallet": "J6vCA7Ps1v1isoxetLSmXPTA46SZyDoTnvr514xJGs57",
+        "confidence": 0.5804285708674758,
+        "reasons": [
+          "Funding cluster: 18 wallets",
+          "Tight timing: 134ms median gap",
+          "Micro-buys: 0.0001 SOL median"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "75xCeX5CHbHL2SudzQ9gwtnKAfuuj36Gx8WBRWVKrWsq",
+        "confidence": 0.5744425167992743,
+        "reasons": [
+          "Funding cluster: 61 wallets",
+          "Tight timing: 0ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "3ZgQqJkCpJ9p971CWbvqpmhiUF2kJSdsLUTNHfTMgvi1",
+        "confidence": 0.5744425167992743,
+        "reasons": [
+          "Funding cluster: 8 wallets",
+          "Tight timing: 0ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "GtPjaTFupGWjh9gJPXCXhq8GWYnUWRD3cjcsQ13hoGgA",
+        "confidence": 0.5744425167992743,
+        "reasons": [
+          "Funding cluster: 26 wallets",
+          "Tight timing: 0ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "GZpBv74gjDpfyXAHBemSF5GtAeKDfP1ATUKyDVbftmR",
+        "confidence": 0.5744425167992743,
+        "reasons": [
+          "Funding cluster: 26 wallets",
+          "Tight timing: 0ms median gap"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "ATcu3XuejKqsYsjWFRAFbBZjg8qeC8yrLwS7TXzxrX2M",
+        "confidence": 0.5741500189072755,
+        "reasons": [
+          "Funding cluster: 29 wallets",
+          "Tight timing: 1ms median gap"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "G1FXmV8DFBfdkpN6XBVqpMKKxKxQPsJTmAAAzXEM9fLT",
+        "confidence": 0.5741497266758,
+        "reasons": [
+          "Funding cluster: 30 wallets",
+          "Tight timing: 1ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "FjxFVnc84DzLgPUuJVGAr1jcwkPbjsuyMoUJNaWg26va",
+        "confidence": 0.5741497266758,
+        "reasons": [
+          "Funding cluster: 87 wallets",
+          "Tight timing: 1ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "4rSLtRsoVVDEHxSp6Ria857E94AjoYDGFWw2LDZdd7FU",
+        "confidence": 0.5741497266758,
+        "reasons": [
+          "Funding cluster: 23 wallets",
+          "Tight timing: 1ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "APSuqQ6x4No7eGdAe2pQihnTHfnGqephJedtmmXgmFmH",
+        "confidence": 0.5741497266758,
+        "reasons": [
+          "Funding cluster: 9 wallets",
+          "Tight timing: 1ms median gap"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "GE5ftBQNrs3fuBMU8LSrfKa95RhH93oHjf6rkLNvHoFi",
+        "confidence": 0.5741494344454416,
+        "reasons": [
+          "Funding cluster: 84 wallets",
+          "Tight timing: 1ms median gap"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "C8c4YWKeLq2UuJYFu82YozDHg8timzd2xeH7WciTzATN",
+        "confidence": 0.5741494344454416,
+        "reasons": [
+          "Funding cluster: 43 wallets",
+          "Tight timing: 1ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "EvA2mKPVUuNthjmw7YbHH21niyBKH33Qc6BQSxysJkUm",
+        "confidence": 0.5741494344454416,
+        "reasons": [
+          "Funding cluster: 30 wallets",
+          "Tight timing: 1ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "6pv2sZnpjVbQAtq1hsRjigeGpVurvMayKRW3P1dBPXQx",
+        "confidence": 0.5741491422162005,
+        "reasons": [
+          "Funding cluster: 15 wallets",
+          "Tight timing: 1ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "D46yUeWniPh9Ty9raaCU5w7Ai1eXz1RoAH7PmTqxZnhr",
+        "confidence": 0.5740028757642356,
+        "reasons": [
+          "Funding cluster: 36 wallets",
+          "Tight timing: 2ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "3gb9x2bu4TnLgYAUmvWhsPpsNdMeTkra9j44AUVog14p",
+        "confidence": 0.574001709095195,
+        "reasons": [
+          "Funding cluster: 54 wallets",
+          "Tight timing: 1ms median gap"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "CdSBTzAWShSofUyN1fTFVVZbarNCkjrEihoWevCyv8kP",
+        "confidence": 0.5740008341051238,
+        "reasons": [
+          "Funding cluster: 21 wallets",
+          "Tight timing: 2ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "GQpFykP54hpjSdrZMfPtweCJTpwBAmuagMu9tdjCnT9p",
+        "confidence": 0.5738583447953491,
+        "reasons": [
+          "Funding cluster: 46 wallets",
+          "Tight timing: 2ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "E3DBdoCRCi3ENTujutLonXzHVeM8J1aaAfynQECPCUDP",
+        "confidence": 0.5738580536790735,
+        "reasons": [
+          "Funding cluster: 54 wallets",
+          "Tight timing: 2ms median gap"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "EGwB1P4fyzy6mYDcf17pLabRqb9q9w123PVUu1cYY6cu",
+        "confidence": 0.5738577625639111,
+        "reasons": [
+          "Funding cluster: 10 wallets",
+          "Tight timing: 2ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "8Mth5NS35mXacwbGi45y188bdnTpb1cLb2NZ6ECeKVqw",
+        "confidence": 0.5738577625639111,
+        "reasons": [
+          "Funding cluster: 11 wallets",
+          "Tight timing: 2ms median gap"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "GZiz1Dv6FkTidVDxDv4rxhzhJCRvs48dr8LvrFrchZLa",
+        "confidence": 0.5737957804005904,
+        "reasons": [
+          "Funding cluster: 29 wallets",
+          "Tight timing: 2ms median gap"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "8NULYAJjU3bN2UqsNFoC7gci9vDM9FW6dRE3GdaGPMZ4",
+        "confidence": 0.5737762941002833,
+        "reasons": [
+          "Funding cluster: 84 wallets",
+          "Tight timing: 2ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "HC4wVJ1R3dRNkmoHrLoidZXoj6H43d9Wip8uosNrBRDQ",
+        "confidence": 0.5737114726688661,
+        "reasons": [
+          "Funding cluster: 25 wallets",
+          "Tight timing: 2ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "4X5D5p8Ciz6xbdLiYP54xLobHQebAzXHSsCdVQ72iRGt",
+        "confidence": 0.5735674939541239,
+        "reasons": [
+          "Funding cluster: 27 wallets",
+          "Tight timing: 3ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "FDUrEKW1ytGFmzR8kkY6g2JVK4gnpYngQauhBcAJFriQ",
+        "confidence": 0.5735674939541239,
+        "reasons": [
+          "Funding cluster: 23 wallets",
+          "Tight timing: 2ms median gap"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "4xmstzCYPob8YS7zEuBayQfJiUrfXEZ41R8ENBVSLRhS",
+        "confidence": 0.5735674939541239,
+        "reasons": [
+          "Funding cluster: 12 wallets",
+          "Tight timing: 3ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "51ft27SmVSXQqSUakuNKhAhA1HuD6NHS8XYXuaUD3qct",
+        "confidence": 0.5735672039503067,
+        "reasons": [
+          "Funding cluster: 54 wallets",
+          "Tight timing: 2ms median gap"
+        ],
+        "observations": 5,
+        "trades": 5
+      },
+      {
+        "wallet": "D6PMwQ4mPx46WYvo8QT6kmLSWd5Wr4DTUVwo43oY5jWZ",
+        "confidence": 0.573419446481651,
+        "reasons": [
+          "Funding cluster: 23 wallets",
+          "Tight timing: 4ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "8gikNLn4P6FHH5JLxMwPmDPjurngt1WAS9CJ6uRjjohK",
+        "confidence": 0.5732783325518118,
+        "reasons": [
+          "Funding cluster: 58 wallets",
+          "Tight timing: 2ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "9hUooKnDrD9JDgkhjETVqVkzvT3TkrXyDV1odjEDEtui",
+        "confidence": 0.5732780436543918,
+        "reasons": [
+          "Funding cluster: 16 wallets",
+          "Tight timing: 4ms median gap"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "71o8LxSyzxrahEKFCMzbvvDnZ4ZXZuF1XaChDntopxaB",
+        "confidence": 0.5732771769687655,
+        "reasons": [
+          "Funding cluster: 26 wallets",
+          "Tight timing: 4ms median gap"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "8Zv163uStAwrPzimohe44V445N2oEwCzyBmwV5fksaC6",
+        "confidence": 0.5732006589855043,
+        "reasons": [
+          "Funding cluster: 33 wallets",
+          "Tight timing: 4ms median gap"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "DRLjvb8k1NKHjHzVrU76uDRw5jNhaZ2bLKLqkwYtMjhN",
+        "confidence": 0.5731317149544123,
+        "reasons": [
+          "Funding cluster: 54 wallets",
+          "Tight timing: 5ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "H24DnSxU7iRmAQFxbMBNKaGBCjBS7wd98BCUWMZExbvD",
+        "confidence": 0.5725575296243406,
+        "reasons": [
+          "Funding cluster: 15 wallets",
+          "Tight timing: 7ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "89zQ9c16JFLnamEKAnJ3Uea7YD7qFrZNUqpTUZUwsaEi",
+        "confidence": 0.5722488537121774,
+        "reasons": [
+          "Funding cluster: 11 wallets",
+          "Tight timing: 8ms median gap"
+        ],
+        "observations": 6,
+        "trades": 6
+      },
+      {
+        "wallet": "D4R29UtNLjjiL2DpmQnpytXUHoYAktLHCyza57Mz1wUR",
+        "confidence": 0.5719871560372278,
+        "reasons": [
+          "Funding cluster: 88 wallets",
+          "Tight timing: 9ms median gap"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "CfWd4xwdyNXnJSfft44YJwqEuc6zf3tHd8mNcLpZ1YQx",
+        "confidence": 0.5718472994988268,
+        "reasons": [
+          "Funding cluster: 63 wallets",
+          "Tight timing: 9ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "6E6DFvfX89BDaUKSoQoZUo3Lo4amMh7e3exfGnEaN2xQ",
+        "confidence": 0.5717031810741817,
+        "reasons": [
+          "Funding cluster: 85 wallets",
+          "Tight timing: 10ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "G4VU3UkB8bDWWaNb16jnbuVUZctWfm8XfnLYFCMzSCSH",
+        "confidence": 0.5715595705038061,
+        "reasons": [
+          "Funding cluster: 46 wallets",
+          "Tight timing: 181ms median gap",
+          "Micro-buys: 0.0010 SOL median"
+        ],
+        "observations": 773,
+        "trades": 773
+      },
+      {
+        "wallet": "4yFE7fjE7Y5ZssAhEt9TJ5TTpnBTdWtbx4gFZZCz8wv5",
+        "confidence": 0.571116548702995,
+        "reasons": [
+          "Funding cluster: 41 wallets",
+          "Tight timing: 15ms median gap"
+        ],
+        "observations": 216,
+        "trades": 216
+      },
+      {
+        "wallet": "99QB6Bc5jDhZhgTY5LU6Ljp39A7pKk3RSfnekp2H2LMh",
+        "confidence": 0.5704353784450713,
+        "reasons": [
+          "Funding cluster: 43 wallets",
+          "Tight timing: 14ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "8NcDmv7q265Dx3Ks44ynt7weVsJVGrQSZ2KbPPKDgV9f",
+        "confidence": 0.5696146876893685,
+        "reasons": [
+          "Funding cluster: 8 wallets",
+          "Tight timing: 17ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "DvSop6ZrzKjuJcohALQ8PZFnf4SeNzm4TAfuQPrCW621",
+        "confidence": 0.5679673077398891,
+        "reasons": [
+          "Funding cluster: 23 wallets",
+          "Tight timing: 23ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "FvdgwYPwjpkVadrrimk6amm37dp79giquCsCq5Cye8RN",
+        "confidence": 0.5670200646691056,
+        "reasons": [
+          "Funding cluster: 29 wallets",
+          "Tight timing: 14ms median gap"
+        ],
+        "observations": 4,
+        "trades": 4
+      },
+      {
+        "wallet": "BMkHjN2N8K2PdCqeC92YYjUovn9ecW4GvFpH6yDggXWJ",
+        "confidence": 0.566518252341182,
+        "reasons": [
+          "Funding cluster: 67 wallets",
+          "Tight timing: 232ms median gap",
+          "Micro-buys: 0.0001 SOL median"
+        ],
+        "observations": 365,
+        "trades": 365
+      },
+      {
+        "wallet": "D5T9BY1uggjt7R8UWUMp8kM5rTW2C5sgbRskeZhq5yoo",
+        "confidence": 0.5664647960918502,
+        "reasons": [
+          "Funding cluster: 37 wallets",
+          "Tight timing: 29ms median gap"
+        ],
+        "observations": 3,
+        "trades": 3
+      }
+    ],
+    "early_exit": [
+      {
+        "wallet": "CR3dMieKfBYhwpt964ZFaqJ9zNgWAP7YtJKyvfg3qWpN",
+        "confidence": 0.7515005110310327,
+        "reasons": [
+          "First seller: 27/27 times",
+          "Prediction accuracy: 100.0%"
+        ],
+        "observations": 27,
+        "trades": 27
+      },
+      {
+        "wallet": "8aHukHE1NfJibPG4yvpWfXFpUasKergmUryxdoSNFLjy",
+        "confidence": 0.7515005110310327,
+        "reasons": [
+          "First seller: 28/28 times",
+          "Prediction accuracy: 100.0%"
+        ],
+        "observations": 28,
+        "trades": 28
+      },
+      {
+        "wallet": "Pnp6xeYufR3tmkZDaSrhBTZDoscjKz5TfvVNF8s5bL1",
+        "confidence": 0.7515005110310327,
+        "reasons": [
+          "First seller: 25/25 times",
+          "Prediction accuracy: 100.0%"
+        ],
+        "observations": 25,
+        "trades": 25
+      },
+      {
+        "wallet": "28KGSZrSFXkiAogDKSG743VxXLgcmuBTiWHpS2m5fP28",
+        "confidence": 0.7472320352904706,
+        "reasons": [
+          "First seller: 11/11 times",
+          "Prediction accuracy: 90.9%",
+          "Quick exits: 2.2s median"
+        ],
+        "observations": 22,
+        "trades": 22
+      },
+      {
+        "wallet": "CUACyr4Fmya9FWefEtECaZburbZrh3X56vFpSYBWfobF",
+        "confidence": 0.7380920702828454,
+        "reasons": [
+          "First seller: 89/90 times",
+          "Prediction accuracy: 74.4%",
+          "Quick exits: 1.0s median"
+        ],
+        "observations": 179,
+        "trades": 179
+      },
+      {
+        "wallet": "8rWpF5XTdH3CMH7scNaGw5YfzyUqkLx6FyESZFLcHg1K",
+        "confidence": 0.7347491803922838,
+        "reasons": [
+          "First seller: 9/10 times",
+          "Prediction accuracy: 88.9%"
+        ],
+        "observations": 18,
+        "trades": 18
+      },
+      {
+        "wallet": "F7YHZXNX2i9jeLKc8HZPuzftFS8fMaPxzsKuFucB169w",
+        "confidence": 0.7343158593616518,
+        "reasons": [
+          "First seller: 14/15 times",
+          "Prediction accuracy: 80.0%",
+          "Quick exits: 2.4s median"
+        ],
+        "observations": 30,
+        "trades": 30
+      },
+      {
+        "wallet": "9tqarSYz15by3oZ43KWeHCMUcyrUZaj5nh4wFubNU4i2",
+        "confidence": 0.7323603327685522,
+        "reasons": [
+          "First seller: 5/6 times",
+          "Prediction accuracy: 100.0%"
+        ],
+        "observations": 23,
+        "trades": 23
+      },
+      {
+        "wallet": "dKMjeGJ4Mk9S3hxdfTThvZ7exks2xMwWqSM5NvN2CTK",
+        "confidence": 0.7318700265153031,
+        "reasons": [
+          "First seller: 39/40 times",
+          "Prediction accuracy: 65.0%",
+          "Quick exits: 0.8s median"
+        ],
+        "observations": 73,
+        "trades": 73
+      },
+      {
+        "wallet": "GsabgfcNpgxhCQiZ59paX6xX7bL81N6FQkUaNTChExWr",
+        "confidence": 0.728257104024608,
+        "reasons": [
+          "First seller: 10/12 times",
+          "Prediction accuracy: 91.7%",
+          "Quick exits: 2.6s median"
+        ],
+        "observations": 24,
+        "trades": 24
+      },
+      {
+        "wallet": "FPtWzL25Su6wJG8jCpVN5mYA9x531KSnf2mtw1mAcPu",
+        "confidence": 0.7275916120509862,
+        "reasons": [
+          "First seller: 55/62 times",
+          "Prediction accuracy: 77.4%",
+          "Quick exits: 1.3s median"
+        ],
+        "observations": 93,
+        "trades": 93
+      },
+      {
+        "wallet": "9e2p6ayBqbMnUiZL68L1kdZdqZqK7aHYxtUXoA3fhrXK",
+        "confidence": 0.7243707107489392,
+        "reasons": [
+          "First seller: 22/26 times",
+          "Prediction accuracy: 80.8%",
+          "Quick exits: 3.2s median"
+        ],
+        "observations": 51,
+        "trades": 51
+      },
+      {
+        "wallet": "GXdTXAMr3o9Q1JpThBih2Uwj2MkcKcdiiDDfh4WYEEY",
+        "confidence": 0.7184186533263665,
+        "reasons": [
+          "First seller: 12/15 times",
+          "Prediction accuracy: 80.0%",
+          "Quick exits: 1.9s median"
+        ],
+        "observations": 29,
+        "trades": 29
+      },
+      {
+        "wallet": "gXzKcqHbo6LAbyr4mWzNuD8Wo8nDMy8BAkN5MRARy4m",
+        "confidence": 0.7132242602767327,
+        "reasons": [
+          "First seller: 23/32 times",
+          "Prediction accuracy: 89.3%",
+          "Quick exits: 5.4s median"
+        ],
+        "observations": 65,
+        "trades": 65
+      },
+      {
+        "wallet": "DrsjSotcLTZtCc1PHe23AESNQEXRoC4ahWNSXoLKTLUE",
+        "confidence": 0.7123102872588939,
+        "reasons": [
+          "Prediction accuracy: 100.0%"
+        ],
+        "observations": 16,
+        "trades": 16
+      },
+      {
+        "wallet": "2YqTcTMDFD2vvVHcc8Wd61zwLiWaDZvAKrzXFW1adZ3K",
+        "confidence": 0.7097419503728007,
+        "reasons": [
+          "First seller: 6/8 times",
+          "Prediction accuracy: 75.0%",
+          "Quick exits: 3.1s median"
+        ],
+        "observations": 16,
+        "trades": 16
+      },
+      {
+        "wallet": "HH3EcqvdELNBwNHxxGfXj2RBvi32NbpbeyRhmBqoseYc",
+        "confidence": 0.7088828328357082,
+        "reasons": [
+          "First seller: 7/9 times",
+          "Prediction accuracy: 66.7%",
+          "Quick exits: 2.6s median"
+        ],
+        "observations": 18,
+        "trades": 18
+      },
+      {
+        "wallet": "A5HsToesC32MUjyonvtR3qXmj4DtjvPrS3JrYTWaFJUX",
+        "confidence": 0.7058222974450166,
+        "reasons": [
+          "First seller: 46/62 times",
+          "Prediction accuracy: 69.4%",
+          "Quick exits: 1.6s median"
+        ],
+        "observations": 124,
+        "trades": 124
+      },
+      {
+        "wallet": "9ofY9fdajncy6DJyKm2fLKWtbkB6XcG7JUJ4KBKnEzBH",
+        "confidence": 0.7054314310506703,
+        "reasons": [
+          "First seller: 9/12 times",
+          "Prediction accuracy: 66.7%",
+          "Quick exits: 1.9s median"
+        ],
+        "observations": 24,
+        "trades": 24
+      },
+      {
+        "wallet": "F6P2ALwPgudtXzPCMcC4ax2eeiechYRzFGjdyz3FHaXF",
+        "confidence": 0.7038547580968131,
+        "reasons": [
+          "First seller: 7/11 times",
+          "Prediction accuracy: 90.9%",
+          "Quick exits: 4.0s median"
+        ],
+        "observations": 22,
+        "trades": 22
+      },
+      {
+        "wallet": "5TeibrGC46yJQzx1wUMxFbbMTkfRD6cBNJzh2n2nNvrM",
+        "confidence": 0.7019076577831613,
+        "reasons": [
+          "First seller: 162/215 times",
+          "Quick exits: 2.3s median"
+        ],
+        "observations": 365,
+        "trades": 365
+      },
+      {
+        "wallet": "GoAT1C5MgqKWUanJRFQxzk1rJMshwsPFzucVNQ3c6GYx",
+        "confidence": 0.6998599616872226,
+        "reasons": [
+          "First seller: 20/25 times",
+          "Quick exits: 3.6s median"
+        ],
+        "observations": 47,
+        "trades": 47
+      },
+      {
+        "wallet": "2ezv4U5HmPpkt2xLsKnw1FyyGmjFBeW7c166p99Hw2xB",
+        "confidence": 0.69621473193594,
+        "reasons": [
+          "First seller: 104/145 times",
+          "Quick exits: 3.7s median"
+        ],
+        "observations": 265,
+        "trades": 265
+      },
+      {
+        "wallet": "AuGE8qvkTuWbki2Sp8jSxNihhFPLixzNanF1sctWeeMX",
+        "confidence": 0.6888586945565878,
+        "reasons": [
+          "First seller: 27/38 times"
+        ],
+        "observations": 38,
+        "trades": 38
+      },
+      {
+        "wallet": "JDj9QqGXMLnymnDhLtSX2YMDfXJUeaHfc9RUXLQkD6Dp",
+        "confidence": 0.687613142945665,
+        "reasons": [
+          "First seller: 21/34 times",
+          "Prediction accuracy: 64.7%",
+          "Quick exits: 1.9s median"
+        ],
+        "observations": 68,
+        "trades": 68
+      },
+      {
+        "wallet": "on1yUpq8wmKxFoW1Arnu7G4xwm6T9yJ8dHwyHDfkiKS",
+        "confidence": 0.6827916829005758,
+        "reasons": [
+          "First seller: 6/10 times",
+          "Quick exits: 4.6s median"
+        ],
+        "observations": 19,
+        "trades": 19
+      },
+      {
+        "wallet": "25nX5BvZvtkXSaC1FRakefyBYUH6TC58uzvQwXfwXhcb",
+        "confidence": 0.682350322561737,
+        "reasons": [
+          "First seller: 42/60 times",
+          "Quick exits: 4.6s median"
+        ],
+        "observations": 89,
+        "trades": 89
+      },
+      {
+        "wallet": "H6tK1ihy1Gx34X6AJ3FCeRMYkzNeaV8cFX66QGfkL14G",
+        "confidence": 0.6795884432644717,
+        "reasons": [
+          "First seller: 123/200 times",
+          "Quick exits: 3.0s median"
+        ],
+        "observations": 400,
+        "trades": 400
+      },
+      {
+        "wallet": "C5CcyJWPDzSiyTWKEn1n6mebaLdb4PxxiqCH7YaPC1G4",
+        "confidence": 0.6784026043718204,
+        "reasons": [
+          "First seller: 33/62 times",
+          "Prediction accuracy: 68.2%",
+          "Quick exits: 3.6s median"
+        ],
+        "observations": 124,
+        "trades": 124
+      },
+      {
+        "wallet": "5BLeAb2sxmVkaPHv73AiVNE27q8TZifw8wp2wLpkaS2t",
+        "confidence": 0.6778297404917019,
+        "reasons": [
+          "First seller: 137/238 times",
+          "Quick exits: 4.2s median"
+        ],
+        "observations": 470,
+        "trades": 470
+      },
+      {
+        "wallet": "EZU6wMvmMUJFAz5mJuZJiKo2JwThwVmZAesw8DBSLYdM",
+        "confidence": 0.676258731771859,
+        "reasons": [
+          "First seller: 8/10 times",
+          "Quick exits: 5.2s median"
+        ],
+        "observations": 17,
+        "trades": 17
+      },
+      {
+        "wallet": "53FjGt6zdFyDia16LKcSgG2Cegzqkn7NPFjAAm1hT6D",
+        "confidence": 0.6760477093331619,
+        "reasons": [
+          "First seller: 35/68 times",
+          "Prediction accuracy: 68.1%"
+        ],
+        "observations": 103,
+        "trades": 103
+      },
+      {
+        "wallet": "5sZfPa7MhW6YpQpJBdtbVLpaqc8qFEiRU5MSYHYHoatM",
+        "confidence": 0.6745535916600599,
+        "reasons": [
+          "First seller: 5/9 times",
+          "Quick exits: 3.2s median"
+        ],
+        "observations": 18,
+        "trades": 18
+      },
+      {
+        "wallet": "3aPpFdXwHgx19zUdYGkL6ijdz8QVhZCX1d58wYKPxCru",
+        "confidence": 0.6733327940321248,
+        "reasons": [
+          "Prediction accuracy: 66.7%",
+          "Quick exits: 9.4s median"
+        ],
+        "observations": 31,
+        "trades": 31
+      },
+      {
+        "wallet": "HX3cLFqw4sqtLwSFu7JVHTuRzuWnEAxfmMD3wZown8Rp",
+        "confidence": 0.6696563292285439,
+        "reasons": [
+          "First seller: 12/16 times",
+          "Quick exits: 12.9s median"
+        ],
+        "observations": 17,
+        "trades": 17
+      },
+      {
+        "wallet": "4RBN2czE5j4KsdJX1nPyMsQ45wN8HkZsCYf2YusnqjTj",
+        "confidence": 0.6696563292285439,
+        "reasons": [
+          "First seller: 10/24 times",
+          "Prediction accuracy: 80.0%",
+          "Quick exits: 7.6s median"
+        ],
+        "observations": 48,
+        "trades": 48
+      },
+      {
+        "wallet": "8DGgcf5zMeevDsRJ8hWYbPqq4JKey3NEnLcyjQTsyDg5",
+        "confidence": 0.668448577863448,
+        "reasons": [
+          "First seller: 18/45 times",
+          "Prediction accuracy: 81.8%"
+        ],
+        "observations": 61,
+        "trades": 61
+      },
+      {
+        "wallet": "GMshkzk65WhorAooRfckSuMdMJaPrHFTnU4TaAGni1SM",
+        "confidence": 0.6648130360222438,
+        "reasons": [
+          "First seller: 8/17 times",
+          "Quick exits: 8.2s median"
+        ],
+        "observations": 33,
+        "trades": 33
+      },
+      {
+        "wallet": "7k4R3Gnj9uVjVSGk8iFgrUidPSQy16BuxM23yUNMKwF3",
+        "confidence": 0.6643709918917025,
+        "reasons": [
+          "First seller: 7/22 times",
+          "Prediction accuracy: 94.1%",
+          "Quick exits: 10.4s median"
+        ],
+        "observations": 40,
+        "trades": 40
+      },
+      {
+        "wallet": "5rwLsmsB58KHKyaD7d6YxTZnmCyr3xbtrFyUMBMkvmy2",
+        "confidence": 0.6633054987232021,
+        "reasons": [
+          "Prediction accuracy: 100.0%"
+        ],
+        "observations": 15,
+        "trades": 15
+      },
+      {
+        "wallet": "79hHqbCNpXt5DRc8iJ9dsVtJxDX1TgpUpZQKNs1BFtZH",
+        "confidence": 0.659252398895275,
+        "reasons": [
+          "First seller: 8/15 times",
+          "Quick exits: 2.1s median"
+        ],
+        "observations": 30,
+        "trades": 30
+      },
+      {
+        "wallet": "5oTUgZbVuczvTXNdu5hkLAABSiqUJdxZ3DaTwMPjhpHb",
+        "confidence": 0.6576594180097346,
+        "reasons": [
+          "Prediction accuracy: 62.5%",
+          "Quick exits: 7.1s median"
+        ],
+        "observations": 26,
+        "trades": 26
+      },
+      {
+        "wallet": "D7LoBvCzjTotnzdgwgQJ69y8npwuYzD1XMFUxcWjN6U4",
+        "confidence": 0.6568951301543345,
+        "reasons": [
+          "First seller: 5/21 times",
+          "Prediction accuracy: 100.0%"
+        ],
+        "observations": 37,
+        "trades": 37
+      },
+      {
+        "wallet": "5AdtwpiT5gD4eupzPkEoYaqcUnXixgmKtFae9CxXJbSD",
+        "confidence": 0.6563199412763929,
+        "reasons": [
+          "First seller: 40/98 times",
+          "Quick exits: 3.7s median"
+        ],
+        "observations": 194,
+        "trades": 194
+      },
+      {
+        "wallet": "E9Yam5Zh3cfFumR5pRjvY2CQtdPQKeZjDhjJY99V34cE",
+        "confidence": 0.6542743234813995,
+        "reasons": [
+          "Prediction accuracy: 62.5%",
+          "Quick exits: 12.3s median"
+        ],
+        "observations": 17,
+        "trades": 17
+      },
+      {
+        "wallet": "32rDmpRo3fSNNU2VUgJyGq6Vvj79PpxACtyjPk1MBb7z",
+        "confidence": 0.6542743234813995,
+        "reasons": [
+          "Prediction accuracy: 62.5%",
+          "Quick exits: 12.3s median"
+        ],
+        "observations": 17,
+        "trades": 17
+      },
+      {
+        "wallet": "9hTfnPgW2fc5dfBjK6cxkXmuQma6XYoutnydBzJtDf8v",
+        "confidence": 0.6537532846616453,
+        "reasons": [
+          "First seller: 12/19 times",
+          "Quick exits: 12.8s median"
+        ],
+        "observations": 27,
+        "trades": 27
+      },
+      {
+        "wallet": "LUxBFwiGAnXpRYQb8Peq8yenn8XEKTXRdz8qL89Axu8",
+        "confidence": 0.6528592171650766,
+        "reasons": [
+          "First seller: 7/12 times",
+          "Quick exits: 4.6s median"
+        ],
+        "observations": 17,
+        "trades": 17
+      },
+      {
+        "wallet": "4MWZntEwx9NpvVtQ1d8oKq4BKgrpupKF4BHDczxFiHja",
+        "confidence": 0.6517251824909384,
+        "reasons": [],
+        "observations": 16,
+        "trades": 16
+      },
+      {
+        "wallet": "3gHrfi6t4xG2KEH4gga9HxLRYqws9iTKdkLG55NwaTZJ",
+        "confidence": 0.6509682021186964,
+        "reasons": [
+          "Prediction accuracy: 66.7%",
+          "Quick exits: 10.6s median"
+        ],
+        "observations": 23,
+        "trades": 23
+      }
+    ]
+  },
+  "note": "Recovered from checkpoint - bot profiling and blacklist generation skipped due to crash"
+}

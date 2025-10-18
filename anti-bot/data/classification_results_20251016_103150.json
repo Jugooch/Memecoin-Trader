@@ -1,0 +1,150 @@
+{
+  "metadata": {
+    "start_time": "2025-10-16T10:30:49.490342",
+    "end_time": "2025-10-16T10:31:50.703831",
+    "runtime_hours": 0.017003746944444446,
+    "transactions_seen": 855,
+    "trades_seen": 836,
+    "wallets_tracked": 534,
+    "mints_tracked": 95
+  },
+  "label_distribution": {
+    "unknown": 520,
+    "deployer": 14
+  },
+  "detection_stats": {
+    "sybil_clusters": 0,
+    "metric_bots": 0,
+    "bait_clusters": 0
+  },
+  "sample_classifications": {
+    "deployer": [
+      {
+        "wallet": "DuFpt33Ju1X2ySkE...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "Hzyn6GamzLuMyNqs...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "DGxiD4mGjmW6JqYd...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "5AmLiWonycEwxGiw...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 3,
+        "trades": 3
+      },
+      {
+        "wallet": "BMwiAQKiMtGXAndS...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "BX8B6qHrH8h8mE8T...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "72RtZLHGntSZtS6K...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "DzHgQFSvBepGHMkd...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "5JDPczx4bknwF92M...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "AxmFqz3pbhj6HDK9...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "BdiLih5bKgQgu4Ag...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "FGSHebdd752z2sQQ...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 1,
+        "trades": 1
+      },
+      {
+        "wallet": "3MGH8SfDnBtkgGRx...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 2,
+        "trades": 2
+      },
+      {
+        "wallet": "7RATRP1ywD8oZac2...",
+        "confidence": 1.0,
+        "reasons": [
+          "Created 1 token(s)"
+        ],
+        "observations": 3,
+        "trades": 3
+      }
+    ]
+  }
+}

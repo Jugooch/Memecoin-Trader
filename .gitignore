@@ -62,6 +62,7 @@ config_aggressive.yml
 config_sniper.yml
 *.env
 .env*
+config*
 
 # Trading data
 trades.db

@@ -31,9 +31,12 @@ class BlockchainAnalytics:
         self.SOL_DECIMALS = 9
         self.LAMPORTS_PER_SOL = 10 ** self.SOL_DECIMALS
         
-        # Cache for SOL price
+        # Cache for SOL price (CRITICAL PATH OPTIMIZATION)
         self._sol_price_cache = {"price": 0.0, "timestamp": 0}
-        self._sol_price_cache_duration = 60  # 60 seconds cache
+        self._sol_price_cache_duration = 300  # 5 minutes cache (SOL price doesn't change much)
+
+        # Background task to keep cache fresh
+        self._price_refresh_task = None
         
         # Store daily starting balance
         self._daily_starting_balance = None
@@ -430,33 +433,81 @@ class BlockchainAnalytics:
                 "sol_price": 0.0
             }
     
-    async def get_sol_price(self) -> float:
-        """Get current SOL price in USD with caching"""
+    async def start_price_refresh_loop(self):
+        """
+        Background task to keep SOL price cache fresh
+        CRITICAL PATH OPTIMIZATION: Ensures get_sol_price() is always instant
+        """
+        self.logger.info("Starting SOL price background refresh loop (every 30s)")
+
+        # Immediately fetch initial price
         try:
-            # Check cache
-            current_time = datetime.utcnow().timestamp()
-            if (self._sol_price_cache["price"] > 0 and 
-                current_time - self._sol_price_cache["timestamp"] < self._sol_price_cache_duration):
-                return self._sol_price_cache["price"]
-            
-            # Try multiple price sources for reliability
             price = await self._fetch_sol_price_coingecko()
-            
             if price <= 0:
-                # Fallback to Coinbase
                 price = await self._fetch_sol_price_coinbase()
-            
             if price > 0:
+                current_time = datetime.utcnow().timestamp()
                 self._sol_price_cache = {"price": price, "timestamp": current_time}
-                return price
-            
-            # Fallback to last known price or default
+                self.logger.info(f"Initial SOL price cached: ${price:.2f}")
+        except Exception as e:
+            self.logger.error(f"Failed to fetch initial SOL price: {e}")
+
+        # Background refresh loop
+        while True:
+            try:
+                await asyncio.sleep(30)  # Refresh every 30 seconds
+
+                price = await self._fetch_sol_price_coingecko()
+                if price <= 0:
+                    price = await self._fetch_sol_price_coinbase()
+
+                if price > 0:
+                    current_time = datetime.utcnow().timestamp()
+                    self._sol_price_cache = {"price": price, "timestamp": current_time}
+                    self.logger.debug(f"SOL price refreshed in background: ${price:.2f}")
+            except Exception as e:
+                self.logger.error(f"Background price refresh error: {e}")
+
+    async def get_sol_price(self) -> float:
+        """
+        Get current SOL price in USD - INSTANT (uses cache)
+        CRITICAL PATH OPTIMIZATION: Returns cached value immediately without HTTP calls
+        """
+        try:
+            # Always return cached value (background task keeps it fresh)
             if self._sol_price_cache["price"] > 0:
+                cache_age = datetime.utcnow().timestamp() - self._sol_price_cache["timestamp"]
+
+                # If cache is fresh (< 5 minutes), return immediately
+                if cache_age < self._sol_price_cache_duration:
+                    return self._sol_price_cache["price"]
+
+                # If cache is stale but not ancient, still return it (better than blocking)
+                if cache_age < 600:  # < 10 minutes
+                    self.logger.warning(f"SOL price cache is stale ({cache_age:.0f}s old) but returning it to avoid blocking")
+                    return self._sol_price_cache["price"]
+
+            # No cache available - try ONE quick fetch with timeout
+            try:
+                self.logger.warning("No SOL price cache - attempting quick fetch")
+                price = await asyncio.wait_for(self._fetch_sol_price_coingecko(), timeout=0.5)
+
+                if price > 0:
+                    current_time = datetime.utcnow().timestamp()
+                    self._sol_price_cache = {"price": price, "timestamp": current_time}
+                    return price
+            except asyncio.TimeoutError:
+                self.logger.warning("SOL price fetch timed out after 0.5s")
+
+            # Last resort fallback
+            if self._sol_price_cache["price"] > 0:
+                self.logger.warning("Using stale SOL price cache as fallback")
                 return self._sol_price_cache["price"]
-            
-            # Default fallback (approximate SOL price)
+
+            # Absolute fallback (approximate SOL price)
+            self.logger.error("No SOL price available - using default $200")
             return 200.0
-            
+
         except Exception as e:
             self.logger.error(f"Error fetching SOL price: {e}")
             return self._sol_price_cache.get("price", 200.0)

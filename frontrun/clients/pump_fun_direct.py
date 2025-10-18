@@ -16,14 +16,17 @@ from solders.instruction import Instruction, AccountMeta
 from solders.message import MessageV0
 from solders.transaction import VersionedTransaction
 from solders.compute_budget import set_compute_unit_limit, set_compute_unit_price
+from solders.system_program import transfer, TransferParams
 from spl.token.instructions import create_associated_token_account, get_associated_token_address
+import random
 
 from core.logger import get_logger
 from core.bonding_curve import (
     BondingCurveState,
     BondingCurveCalculator,
     fetch_bonding_curve_state,
-    derive_bonding_curve_pda
+    derive_bonding_curve_pda,
+    get_initial_bonding_curve_state
 )
 
 logger = get_logger(__name__)
@@ -42,6 +45,20 @@ BUY_DISCRIMINATOR = bytes.fromhex("66063d1201daebea")
 # Sell instruction discriminator
 SELL_DISCRIMINATOR = bytes.fromhex("33e685a4017f83ad")
 
+# Helius Sender Jito tip accounts (for ultra-low latency via Jito validators)
+JITO_TIP_ACCOUNTS = [
+    "4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE",
+    "D2L6yPZ2FmmmTKPgzaMKdhu6EWZcTpLy1Vhx8uvZe7NZ",
+    "9bnz4RShgq1hAnLnZbP8kbgBg1kEmcJBYQq3gQbmnSta",
+    "5VY91ws6B2hMmBFRsXkoAAdsPHBJwRfBht4DXox3xkwn",
+    "2nyhqdwKcJZR2vcqCyrYsaPVdAnFoJjiksCXJ7hfEYgD",
+    "2q5pghRs6arqVjRvT5gfgWfWcHWmw1ZuCzphgd5KfWGJ",
+    "wyvPkWjVZz1M8fHQnMMCDTQDbkManefNNhweYk5WkcF",
+    "3KCKozbAaF75qEU33jtzozcJ29yJuaLJTy2jFdzUY8bT",
+    "4vieeGHPYPG2MmyPRcYjdiDmmhN3ww7hsFNap8pVN3Ey",
+    "4TQLFNWK8AovT1gFvda5jfw2oJeRMKEmw7aH6MGBJ3or",
+]
+
 
 class PumpFunDirectClient:
     """
@@ -54,16 +71,25 @@ class PumpFunDirectClient:
     Critical for sniping new token launches.
     """
 
-    def __init__(self, rpc_manager):
+    def __init__(self, rpc_manager, enable_jito_tips: bool = True, jito_tip_lamports: int = 1_000_000):
         """
         Initialize direct client
 
         Args:
             rpc_manager: RPC manager for chain calls
+            enable_jito_tips: Enable Jito tips for faster inclusion (default: True)
+            jito_tip_lamports: Tip amount in lamports (default: 1_000_000 = 0.001 SOL)
         """
         self.rpc_manager = rpc_manager
         self.calculator = BondingCurveCalculator()
-        logger.info("pump_fun_direct_client_initialized")
+        self.enable_jito_tips = enable_jito_tips
+        self.jito_tip_lamports = jito_tip_lamports
+
+        logger.info(
+            "pump_fun_direct_client_initialized",
+            jito_tips_enabled=enable_jito_tips,
+            jito_tip_lamports=jito_tip_lamports
+        )
 
     async def create_buy_transaction(
         self,
@@ -72,7 +98,11 @@ class PumpFunDirectClient:
         sol_amount: float,
         slippage_bps: int = 500,  # 5% default
         priority_fee_lamports: int = 5_000_000,  # 0.005 SOL for high priority
-        compute_units: int = 120_000
+        compute_units: int = 120_000,
+        curve_state: Optional[BondingCurveState] = None,
+        bonding_curve_address: Optional[str] = None,
+        associated_bonding_curve_address: Optional[str] = None,
+        creator_address: Optional[str] = None
     ) -> Optional[VersionedTransaction]:
         """
         Build buy transaction directly (NO API)
@@ -84,6 +114,10 @@ class PumpFunDirectClient:
             slippage_bps: Slippage tolerance (500 = 5%)
             priority_fee_lamports: Priority fee for faster inclusion
             compute_units: Compute units budget
+            curve_state: Pre-known bonding curve state (optional, skips RPC fetch)
+            bonding_curve_address: Pre-known bonding curve address (optional)
+            associated_bonding_curve_address: Pre-known associated bonding curve (optional)
+            creator_address: Pre-known creator address (optional)
 
         Returns:
             Signed VersionedTransaction ready to submit, or None if failed
@@ -91,13 +125,26 @@ class PumpFunDirectClient:
         try:
             start_time = logger._get_timestamp() if hasattr(logger, '_get_timestamp') else None
 
-            # Fetch bonding curve state
-            curve_data = await fetch_bonding_curve_state(self.rpc_manager, mint_str)
-            if not curve_data:
-                logger.error("bonding_curve_fetch_failed", mint=mint_str[:16])
-                return None
+            # Use pre-known curve state or fetch from RPC
+            if curve_state and bonding_curve_address and associated_bonding_curve_address and creator_address:
+                # Fast path: Use pre-known state (for frontrunning new tokens)
+                bonding_curve = Pubkey.from_string(bonding_curve_address)
+                associated_bonding_curve = Pubkey.from_string(associated_bonding_curve_address)
+                creator = Pubkey.from_string(creator_address)
 
-            curve_state, bonding_curve, associated_bonding_curve, creator = curve_data
+                logger.debug(
+                    "using_preknown_curve_state",
+                    mint=mint_str[:16],
+                    virtual_sol=curve_state.virtual_sol_reserves / 1e9
+                )
+            else:
+                # Slow path: Fetch bonding curve state from RPC
+                curve_data = await fetch_bonding_curve_state(self.rpc_manager, mint_str)
+                if not curve_data:
+                    logger.error("bonding_curve_fetch_failed", mint=mint_str[:16])
+                    return None
+
+                curve_state, bonding_curve, associated_bonding_curve, creator = curve_data
 
             # Validate curve
             if not self.calculator.validate_curve_state(curve_state):
@@ -208,6 +255,23 @@ class PumpFunDirectClient:
                 set_compute_unit_price(priority_fee_lamports // compute_units),  # Micro-lamports per CU
             ]
 
+            # Add Jito tip for ultra-low latency routing via Jito validators
+            if self.enable_jito_tips:
+                tip_account = Pubkey.from_string(random.choice(JITO_TIP_ACCOUNTS))
+                tip_instruction = transfer(
+                    TransferParams(
+                        from_pubkey=user,
+                        to_pubkey=tip_account,
+                        lamports=self.jito_tip_lamports
+                    )
+                )
+                instructions.append(tip_instruction)
+                logger.debug(
+                    "jito_tip_added",
+                    tip_lamports=self.jito_tip_lamports,
+                    tip_account=str(tip_account)[:16] + "..."
+                )
+
             if token_account_instruction:
                 instructions.append(token_account_instruction)
 
@@ -249,7 +313,11 @@ class PumpFunDirectClient:
         token_amount: float,  # UI amount (e.g., 1000000.5)
         slippage_bps: int = 500,  # 5% default
         priority_fee_lamports: int = 5_000_000,  # 0.005 SOL
-        compute_units: int = 120_000
+        compute_units: int = 120_000,
+        curve_state: Optional[BondingCurveState] = None,
+        bonding_curve_address: Optional[str] = None,
+        associated_bonding_curve_address: Optional[str] = None,
+        creator_address: Optional[str] = None
     ) -> Optional[VersionedTransaction]:
         """
         Build sell transaction directly (NO API)
@@ -261,18 +329,35 @@ class PumpFunDirectClient:
             slippage_bps: Slippage tolerance (500 = 5%)
             priority_fee_lamports: Priority fee
             compute_units: Compute units budget
+            curve_state: Pre-known bonding curve state (optional, skips RPC fetch)
+            bonding_curve_address: Pre-known bonding curve address (optional)
+            associated_bonding_curve_address: Pre-known associated bonding curve (optional)
+            creator_address: Pre-known creator address (optional)
 
         Returns:
             Signed VersionedTransaction ready to submit, or None if failed
         """
         try:
-            # Fetch bonding curve state
-            curve_data = await fetch_bonding_curve_state(self.rpc_manager, mint_str)
-            if not curve_data:
-                logger.error("bonding_curve_fetch_failed", mint=mint_str[:16])
-                return None
+            # Use pre-known curve state or fetch from RPC
+            if curve_state and bonding_curve_address and associated_bonding_curve_address and creator_address:
+                # Fast path: Use pre-known state (for newly created tokens)
+                bonding_curve = Pubkey.from_string(bonding_curve_address)
+                associated_bonding_curve = Pubkey.from_string(associated_bonding_curve_address)
+                creator = Pubkey.from_string(creator_address)
 
-            curve_state, bonding_curve, associated_bonding_curve, creator = curve_data
+                logger.debug(
+                    "using_preknown_curve_state_for_sell",
+                    mint=mint_str[:16],
+                    virtual_sol=curve_state.virtual_sol_reserves / 1e9
+                )
+            else:
+                # Slow path: Fetch bonding curve state from RPC
+                curve_data = await fetch_bonding_curve_state(self.rpc_manager, mint_str)
+                if not curve_data:
+                    logger.error("bonding_curve_fetch_failed", mint=mint_str[:16])
+                    return None
+
+                curve_state, bonding_curve, associated_bonding_curve, creator = curve_data
 
             # Validate curve
             if not self.calculator.validate_curve_state(curve_state):
@@ -345,8 +430,26 @@ class PumpFunDirectClient:
             instructions = [
                 set_compute_unit_limit(compute_units),
                 set_compute_unit_price(priority_fee_lamports // compute_units),
-                swap_instruction,
             ]
+
+            # Add Jito tip for ultra-low latency routing via Jito validators
+            if self.enable_jito_tips:
+                tip_account = Pubkey.from_string(random.choice(JITO_TIP_ACCOUNTS))
+                tip_instruction = transfer(
+                    TransferParams(
+                        from_pubkey=user,
+                        to_pubkey=tip_account,
+                        lamports=self.jito_tip_lamports
+                    )
+                )
+                instructions.append(tip_instruction)
+                logger.debug(
+                    "jito_tip_added_to_sell",
+                    tip_lamports=self.jito_tip_lamports,
+                    tip_account=str(tip_account)[:16] + "..."
+                )
+
+            instructions.append(swap_instruction)
 
             # Get recent blockhash
             blockhash_response = await self.rpc_manager.call_http_rpc("getLatestBlockhash", [])

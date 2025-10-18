@@ -105,77 +105,153 @@ class MoralisPositionMonitor:
     
     async def _poll_token_price(self, mint_address: str, symbol: str):
         """Continuously poll price for a specific token until position is closed"""
-        consecutive_failures = 0
-        max_failures = 5
-        
+        consecutive_moralis_failures = 0
+        using_fallback_mode = False
+        current_poll_interval = self.poll_interval
+        max_poll_interval = 10.0  # Max 10 second intervals in fallback mode
+
         while self.running and mint_address in self.monitored_positions:
             try:
                 # Check if position still exists
                 if mint_address not in self.trading_engine.active_positions:
                     logger.info(f"Position {symbol} closed, stopping price polling")
                     break
-                
-                # Get current price from Moralis (fresh=True for real-time monitoring)
+
+                current_price = None
+                price_source = None
+
+                # Try Moralis first (preferred for speed and reduced RPC load)
                 current_price = await self.moralis_client.get_current_price(mint_address, fresh=True)
-                
+
+                if current_price and current_price > 0:
+                    # Got price from Moralis - reset failure counter
+                    if using_fallback_mode:
+                        logger.info(f"✅ Moralis available again for {symbol}, resuming normal polling")
+                        using_fallback_mode = False
+                    consecutive_moralis_failures = 0
+                    current_poll_interval = self.poll_interval
+                    price_source = "Moralis"
+                else:
+                    # Moralis failed - immediately use bonding curve (Pump.fun source of truth)
+                    consecutive_moralis_failures += 1
+
+                    current_price = await self._get_bonding_curve_price(mint_address, symbol)
+
+                    if current_price and current_price > 0:
+                        if not using_fallback_mode:
+                            logger.info(f"⚡ Moralis unavailable for {symbol}, using bonding curve (source of truth)")
+                            using_fallback_mode = True
+
+                        # Slow down polling slightly when using bonding curve directly
+                        current_poll_interval = min(5.0, max_poll_interval)
+                        price_source = "bonding curve"
+                    else:
+                        # Both Moralis and bonding curve failed - can't get real price
+                        # DO NOT use entry price - that's stale data and dangerous for trading decisions
+                        logger.error(f"❌ Cannot get real price for {symbol} - both Moralis and bonding curve unavailable")
+                        logger.warning(f"Will keep monitoring {symbol} but cannot check exit conditions without real price")
+
+                        # Slow down polling to reduce load while we wait for price data
+                        current_poll_interval = min(current_poll_interval * 2, max_poll_interval)
+
+                        # Wait and retry - don't process fake prices
+                        await asyncio.sleep(current_poll_interval)
+                        continue
+
+                # Process price (we only get here if we have a REAL price from Moralis or bonding curve)
                 if current_price and current_price > 0:
                     # Update price cache
                     old_price = self.price_cache.get(mint_address, 0)
                     self.price_cache[mint_address] = current_price
-                    
+
                     # Log price updates occasionally
                     if old_price > 0:
                         price_change = ((current_price / old_price) - 1) * 100
                         if abs(price_change) > 2:  # Log significant price changes
-                            logger.debug(f"Price update {symbol}: ${current_price:.8f} ({price_change:+.1f}%)")
-                    
-                    # Check exit conditions immediately using existing trading engine logic
+                            logger.debug(f"Price update {symbol}: ${current_price:.8f} ({price_change:+.1f}%) [via {price_source}]")
+
+                    # Check exit conditions immediately with REAL price only
                     await self._check_exit_conditions_instantly(mint_address, current_price, symbol)
-                    
+
                     # Log heartbeat periodically
                     await self._maybe_log_heartbeat(mint_address, symbol)
-                    
-                    # Reset failure counter on success
-                    consecutive_failures = 0
-                    
-                else:
-                    consecutive_failures += 1
-                    logger.warning(f"Failed to get price for {symbol} (attempt {consecutive_failures}/{max_failures})")
-                    
-                    if consecutive_failures >= max_failures:
-                        logger.error(f"Max price fetch failures reached for {symbol}, stopping monitoring")
-                        break
-                
+
                 # Wait for next poll
-                await asyncio.sleep(self.poll_interval)
-                
+                await asyncio.sleep(current_poll_interval)
+
             except Exception as e:
-                consecutive_failures += 1
-                logger.error(f"Error polling price for {symbol}: {e} (attempt {consecutive_failures}/{max_failures})")
-                
-                if consecutive_failures >= max_failures:
-                    logger.error(f"Max errors reached for {symbol}, stopping monitoring")
-                    break
-                
-                # Wait before retrying
-                await asyncio.sleep(self.poll_interval)
-        
+                logger.error(f"Error polling price for {symbol}: {e}")
+                # Never give up - just slow down on errors
+                current_poll_interval = min(current_poll_interval * 1.5, max_poll_interval)
+                await asyncio.sleep(current_poll_interval)
+
         # Cleanup when polling ends
         await self._cleanup_token_monitoring(mint_address, symbol)
-    
+
+    async def _get_bonding_curve_price(self, mint_address: str, symbol: str) -> Optional[float]:
+        """
+        Get real-time price directly from Pump.fun bonding curve via Helius RPC
+        This is the source of truth for Pump.fun token prices
+        Uses the same RPC connection that we use for fast execution
+        """
+        try:
+            from core.bonding_curve import fetch_bonding_curve_state
+
+            # Get RPC manager from fast_transaction_submitter (uses Helius)
+            rpc_manager = None
+            if hasattr(self.trading_engine, 'fast_transaction_submitter'):
+                fast_submitter = self.trading_engine.fast_transaction_submitter
+                if fast_submitter and hasattr(fast_submitter, 'rpc_manager'):
+                    rpc_manager = fast_submitter.rpc_manager
+
+            if not rpc_manager:
+                return None
+
+            # Fetch current bonding curve state from Helius
+            curve_data = await fetch_bonding_curve_state(rpc_manager, mint_address)
+
+            if not curve_data:
+                return None
+
+            curve_state, _, _, _ = curve_data
+
+            # Calculate current price from bonding curve reserves
+            # Price per token = (virtual_sol_reserves / virtual_token_reserves) * SOL_USD
+            if curve_state.virtual_token_reserves > 0:
+                price_in_sol = curve_state.virtual_sol_reserves / curve_state.virtual_token_reserves
+
+                # Get current SOL price
+                sol_usd = getattr(self.trading_engine, 'sol_price', 209.0)
+                price_in_usd = price_in_sol * sol_usd
+
+                logger.debug(f"📈 Bonding curve price for {symbol}: ${price_in_usd:.8f} (SOL: ${sol_usd:.2f})")
+                return price_in_usd
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Could not fetch bonding curve price for {symbol}: {e}")
+            return None
+
     async def _check_exit_conditions_instantly(self, mint_address: str, current_price: float, symbol: str):
         """Check exit conditions when price updates - uses existing trading engine logic"""
         if mint_address not in self.trading_engine.active_positions:
             return
-        
+
         position = self.trading_engine.active_positions[mint_address]
-        
+
+        # Calculate current gain
+        current_gain = ((current_price / position.entry_price) - 1) * 100
+
         # Update peak price and gain tracking in position
         if current_price > position.peak_price:
             position.peak_price = current_price
-            position.high_gain_peak = max(position.high_gain_peak, 
-                                         ((current_price / position.entry_price) - 1) * 100)
-        
+            position.high_gain_peak = max(position.high_gain_peak, current_gain)
+
+        # Log every price check with gain percentage
+        logger.debug(f"📊 {symbol} price check: ${current_price:.8f} ({current_gain:+.1f}%) | "
+                    f"Entry: ${position.entry_price:.8f} | Peak: {position.high_gain_peak:.1f}%")
+
         # Use existing sophisticated exit logic from trading engine
         exit_result = await self.trading_engine.check_exit_conditions(mint_address, current_price)
         

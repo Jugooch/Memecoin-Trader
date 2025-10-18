@@ -35,16 +35,31 @@ def setup_logging(level: str = "INFO", log_file: str = "logs/trading.log"):
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
     
-    # File handler
-    file_handler = logging.FileHandler(log_file)
+    # File handler - use UTF-8 encoding for emoji support
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
     file_handler.setLevel(numeric_level)
     file_handler.setFormatter(detailed_formatter)
     root_logger.addHandler(file_handler)
-    
-    # Console handler
+
+    # Console handler - use UTF-8 with error handling for Windows
     console_handler = logging.StreamHandler()
     console_handler.setLevel(numeric_level)
     console_handler.setFormatter(simple_formatter)
+
+    # On Windows, handle emoji characters gracefully
+    import sys
+    import io
+    if sys.platform == 'win32':
+        # Wrap the console stream to handle Unicode errors
+        if hasattr(console_handler.stream, 'buffer'):
+            # Use UTF-8 encoding with backslashreplace for unsupported characters
+            console_handler.stream = io.TextIOWrapper(
+                console_handler.stream.buffer,
+                encoding='utf-8',
+                errors='backslashreplace',
+                line_buffering=True
+            )
+
     root_logger.addHandler(console_handler)
     
     # Create main logger

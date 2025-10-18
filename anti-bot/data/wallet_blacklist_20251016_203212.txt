@@ -1,0 +1,7 @@
+# Anti-Bot Wallet Blacklist
+# Generated: 2025-10-16T20:32:12.545366
+# Total blacklisted: 1
+# Minimum confidence: 0.60
+# Excluded types: DEPLOYER, UNKNOWN, ORGANIC
+
+FSugsWx6Uj2pDKACdvEwv7vZzfURCnQieYmEZ5fVpffa

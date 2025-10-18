@@ -29,12 +29,14 @@ from src.core.wallet_tracker import WalletTracker
 from src.core.trading_engine import TradingEngine
 from src.core.database import Database
 from src.core.moralis_position_monitor import MoralisPositionMonitor
+from src.clients.laserstream_bonding_curve_monitor import LaserStreamBondingCurveMonitor
 from src.core.wallet_rotation_manager import WalletRotationManager
 from src.core.safety_checks import SafetyChecker
 from src.core.risk_manager import AdaptiveRiskManager
 from src.core.entry_gate_manager import EntryGateManager
 from src.utils.logger_setup import setup_logging
 from src.utils.config_loader import load_config, validate_required_keys
+from src.utils.opportunity_tracker import OpportunityTracker
 # Using existing main PumpPortal stream for price monitoring
 
 
@@ -104,6 +106,10 @@ class TradingConfig:
     remaining_position: Dict = None  # Remaining position management after partial exits
     # Dump protection configuration
     dump_protection: Dict = None  # Dump protection settings
+    # Discord notifications
+    discord: Dict = None  # Discord webhook configuration
+    # Fast execution configuration
+    fast_execution: Dict = None  # Fast execution config section
 
 
 class MemecoinTradingBot:
@@ -130,13 +136,42 @@ class MemecoinTradingBot:
         self.wallet_tracker = WalletTracker(self.config.watched_wallets, config=wallet_config)
         self.trading_engine = TradingEngine(self.config, moralis_client=self.moralis)
         self.database = Database(self.config.database_file)
+
+        # ============================================
+        # FAST EXECUTION: Conditional initialization
+        # ============================================
+        self.fast_execution_enabled = self.config.fast_execution.get('enabled', False)
+
+        if self.fast_execution_enabled:
+            self.logger.info("=" * 60)
+            self.logger.info("FAST EXECUTION MODE ENABLED")
+            self.logger.info("Using LaserStream (Geyser) + Jito bundles")
+            self.logger.info("=" * 60)
+
+            # Unified LaserStream monitor initialization will happen after Moralis monitor
+            # It will handle BOTH alpha wallet detection AND position monitoring
+            # Store this for now, actual initialization happens later
+            self.laserstream_monitor = None  # Will be initialized in start() method
+
+            self.logger.info(f"Fast execution initialized:")
+            self.logger.info(f"  Wallet: {self.trading_engine.fast_transaction_submitter.wallet_pubkey[:8]}..." if self.trading_engine.fast_transaction_submitter else "  Wallet: (not initialized)")
+            self.logger.info(f"  Watching {len(self.config.watched_wallets)} wallets")
+            self.logger.info(f"  Unified LaserStream monitor will be initialized in start() method")
+
+        else:
+            self.logger.info("Using legacy execution (BitQuery + standard RPC)")
+            self.laserstream_monitor = None
         
         # Initialize wallet rotation manager (will get discord notifier and realtime client later)
         self.wallet_rotation_manager = WalletRotationManager(
             self.wallet_tracker, self.realtime_client.bitquery_client, self.moralis, self.database, config_path,
-            realtime_client=self.realtime_client
+            realtime_client=self.realtime_client,
+            laserstream_monitor=self.laserstream_monitor
         )
-        
+
+        # Initialize opportunity tracker for metrics
+        self.opportunity_tracker = OpportunityTracker(moralis_client=self.moralis)
+
         # Monitoring state
         self._pumpportal_monitoring = False
         
@@ -174,7 +209,12 @@ class MemecoinTradingBot:
         self.trades_today = 0
         self.last_trade_time = None
         self.current_capital = self.config.initial_capital
-        
+
+        # Discovery concurrency control
+        self._discovery_lock = asyncio.Lock()
+        self._discovery_running = False
+        self._last_discovery_trigger = 0
+
         # Tracking counters for summary logging
         self.tokens_processed = 0
         self.alpha_checks_performed = 0
@@ -288,7 +328,11 @@ class MemecoinTradingBot:
             buffer_stop_loss_pct=config_data.get('buffer_stop_loss_pct', 0.65),
             remaining_position=config_data.get('remaining_position', {}),
             # Dump protection configuration
-            dump_protection=config_data.get('dump_protection', {})
+            dump_protection=config_data.get('dump_protection', {}),
+            # Discord notifications
+            discord=config_data.get('discord', {}),
+            # Fast execution configuration
+            fast_execution=config_data.get('fast_execution', {'enabled': False})
         )
 
     def _get_realtime_config(self) -> Dict:
@@ -328,38 +372,94 @@ class MemecoinTradingBot:
         # Initialize realtime client
         await self.realtime_client.initialize()
         self.logger.info(f"Realtime client initialized with source: {self.realtime_client.get_source()}")
-        
+
+        # CRITICAL PATH OPTIMIZATION: Start SOL price background refresh
+        if hasattr(self.trading_engine, 'blockchain_analytics') and self.trading_engine.blockchain_analytics:
+            asyncio.create_task(self.trading_engine.blockchain_analytics.start_price_refresh_loop())
+            self.logger.info("⚡ SOL price background refresh started (saves 100-300ms per trade)")
+
+        # CRITICAL PATH OPTIMIZATION: Pre-warm RPC connections for fast execution
+        if self.fast_execution_enabled and hasattr(self.trading_engine, 'fast_transaction_submitter'):
+            if self.trading_engine.fast_transaction_submitter:
+                try:
+                    self.logger.info("⚡ Pre-warming RPC connections...")
+                    await self.trading_engine.fast_transaction_submitter.ensure_rpc_started()
+                    self.logger.info("⚡ RPC connections ready (saves 500ms+ per trade)")
+                except Exception as e:
+                    self.logger.error(f"Failed to pre-warm RPC: {e}")
+
         # Initialize and start Moralis position monitor (replaces Bitquery WebSocket streams)
         self.logger.info("Initializing Moralis position monitor...")
         self.moralis_monitor = MoralisPositionMonitor(
-            self.trading_engine, 
-            self.config, 
+            self.trading_engine,
+            self.config,
             self.moralis  # Use existing MoralisClient with key rotation
         )
-        
+
         # Legacy properties for backward compatibility
         self._monitored_positions = {}
         self._price_cache = {}
-        
+
         self.logger.info("Starting Moralis position monitor...")
         await self.moralis_monitor.start()
+
+        # Initialize unified LaserStream monitor (alpha wallet detection + bonding curve monitoring)
+        if self.fast_execution_enabled:
+            try:
+                self.logger.info("Initializing unified LaserStream monitor...")
+                laserstream_config = {
+                    'helius_grpc_endpoint': self.config.fast_execution.get('helius_grpc_endpoint'),
+                    'helius_grpc_token': self.config.fast_execution.get('helius_grpc_token'),
+                    'pump_fun_program': '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P'
+                }
+
+                # Initialize with watched wallets for alpha detection
+                watched_wallets = list(self.wallet_tracker.watched_wallets) if hasattr(self, 'wallet_tracker') else []
+
+                self.laserstream_monitor = LaserStreamBondingCurveMonitor(
+                    laserstream_config,
+                    self.trading_engine,
+                    watched_wallets=watched_wallets
+                )
+
+                # Set up wallet buy callback for alpha detection
+                self.laserstream_monitor.on_wallet_buy = self._handle_fast_wallet_buy
+
+                self.logger.info("✅ Unified LaserStream monitor initialized")
+                self.logger.info(f"  Watching {len(watched_wallets)} alpha wallets")
+                self.logger.info(f"  Handles BOTH wallet detection AND position monitoring")
+
+                # Start monitoring in background task
+                asyncio.create_task(self.laserstream_monitor.start())
+            except Exception as e:
+                self.logger.warning(f"Unified LaserStream monitor unavailable: {e}")
+                self.logger.info("Falling back to Moralis polling for price monitoring")
+                self.laserstream_monitor = None
         
         # Start monitoring tasks
         tasks = [
             self.manage_active_positions(),
             self.daily_reset_task(),
             self.periodic_summary_task(),
-            self.heartbeat_task(),
             self.wallet_rotation_manager.start_rotation_loop()
         ]
-        
-        # Use unified stream for PumpPortal or separate for Bitquery
-        realtime_source = getattr(self.config, 'realtime_source', 'pumpportal')
-        if realtime_source == 'pumpportal':
-            tasks.append(self.monitor_pumpportal_events())
+
+        # ============================================
+        # FAST EXECUTION: Conditional monitoring
+        # ============================================
+        if self.fast_execution_enabled:
+            # Unified LaserStream monitor already started above (line 418)
+            # It handles both alpha wallet detection and position monitoring
+            pass
         else:
-            tasks.append(self.monitor_new_tokens())
-        
+            # Use old PumpPortal/BitQuery monitoring with websockets
+            tasks.append(self.heartbeat_task())  # Monitor websocket health
+            realtime_source = getattr(self.config, 'realtime_source', 'pumpportal')
+            if realtime_source == 'pumpportal':
+                tasks.append(self.monitor_pumpportal_events())
+            else:
+                tasks.append(self.monitor_new_tokens())
+
         await asyncio.gather(*tasks)
 
     async def monitor_new_tokens(self):
@@ -509,6 +609,102 @@ class MemecoinTradingBot:
             self._pumpportal_monitoring = False
             
         self.logger.info("PumpPortal monitoring stopped")
+
+    async def _handle_fast_wallet_buy(self, event):
+        """
+        Handle wallet buy event from LaserStream
+
+        This is the fast execution path - separate from old system
+        """
+        try:
+            wallet = event.wallet
+            mint = event.mint
+            sol_amount = event.sol_amount
+
+            self.logger.info(
+                f"⚡ FAST: Alpha wallet buy detected: {wallet[:8]}... bought {mint[:8]}... ({sol_amount:.3f} SOL)"
+            )
+
+            # Record alpha buy for metrics tracking
+            alpha_count = self.opportunity_tracker.record_alpha_buy(
+                token_mint=mint,
+                wallet=wallet,
+                sol_amount=sol_amount,
+                virtual_sol_reserves=event.virtual_sol_reserves,
+                virtual_token_reserves=event.virtual_token_reserves
+            )
+
+            # Record alpha buy in wallet tracker
+            self.wallet_tracker.record_realtime_alpha_buy(wallet, mint, event.timestamp.timestamp())
+
+            # Check if we have enough alpha signals
+            current_alpha_buyers = self.wallet_tracker.get_realtime_alpha_buyers(
+                mint,
+                self.config.time_window_sec
+            )
+
+            threshold = self.config.threshold_alpha_buys
+
+            self.logger.info(f"Alpha signal: {alpha_count}/{threshold} wallets")
+
+            # Execute if threshold met
+            if alpha_count >= threshold:
+                # Check if already traded
+                if mint in self.processed_tokens:
+                    self.logger.info(f"Token {mint[:8]}... already processed, skipping")
+                    return
+
+                # Check position limits
+                active_positions = len(self.trading_engine.active_positions)
+                if active_positions >= self.config.max_concurrent_positions:
+                    self.logger.warning(f"Max positions reached ({active_positions}), skipping")
+                    return
+
+                self.logger.info(f"🚀 Executing fast buy for {mint[:8]}...")
+
+                # Calculate position size (using TradingEngine's PnL store)
+                available_capital = self.trading_engine.pnl_store.current_equity
+                position_size_usd = available_capital * self.config.max_trade_pct
+                position_size_usd = min(position_size_usd, available_capital * 0.3)  # Max 30% per trade
+
+                # Execute buy via TradingEngine (which uses FastTransactionSubmitter when enabled)
+                result = await self.trading_engine.buy_token(
+                    mint_address=mint,
+                    usd_amount=position_size_usd,
+                    paper_mode=False,  # Live trading
+                    symbol=mint[:8]  # Use first 8 chars of mint as symbol
+                )
+
+                if result.get("success"):
+                    signature = result.get("tx_signature", "unknown")
+                    self.logger.info(f"✅ Fast buy successful: {signature[:16] if signature != 'unknown' else 'no sig'}...")
+
+                    # CRITICAL: Record wallet attribution for performance tracking
+                    # Calculate confidence score based on alpha wallet count
+                    confidence_score = min(100.0, (alpha_count / threshold) * 70.0)  # Scale to 70-100 range
+
+                    # Record that we followed these wallets' trades
+                    self.wallet_tracker.record_trade_follow(current_alpha_buyers, mint, confidence_score)
+                    self.logger.info(f"📊 Recorded trade follow: {len(current_alpha_buyers)} wallets, confidence={confidence_score:.1f}%")
+
+                    # Mark as processed
+                    self.processed_tokens[mint] = {
+                        'timestamp': time.time(),
+                        'status': 'traded',
+                        'reason': 'fast_execution'
+                    }
+
+                    # START POSITION MONITORING (this was missing!)
+                    symbol = result.get('symbol', mint[:8])
+                    metadata = {'symbol': symbol, 'name': symbol}
+                    self.logger.info(f"🚀 Starting position monitoring for fast execution buy: {symbol}")
+                    asyncio.create_task(self.monitor_position(mint, result, metadata))
+                else:
+                    error = result.get("error", "unknown error")
+                    self.logger.error(f"❌ Fast buy failed for {mint[:8]}...: {error}")
+
+        except Exception as e:
+            self.logger.error(f"Error handling fast wallet buy: {e}", exc_info=True)
 
     async def process_new_token(self, token_event: Dict):
         """Process a newly launched token"""
@@ -1373,6 +1569,9 @@ class MemecoinTradingBot:
                     
                 else:
                     # Legacy path for paper trading or already-verified positions
+                    # ALSO handles fast execution with immediate_position status
+                    self.logger.info(f"📊 Position status: {result.get('status', 'unknown')} - starting monitoring for {symbol}")
+
                     trade_record = {
                         'mint': mint_address,
                         'action': 'BUY',
@@ -1391,10 +1590,10 @@ class MemecoinTradingBot:
                             'name': metadata.get('name', 'Unknown Token')
                         }
                     }
-                    
+
                     self.recent_trades.append(trade_record)
                     self._cleanup_old_trades()
-                    
+
                     # Try to record in database
                     try:
                         db_record = trade_record.copy()
@@ -1402,13 +1601,14 @@ class MemecoinTradingBot:
                         await self.database.record_trade(db_record)
                     except Exception as db_error:
                         self.logger.warning(f"Failed to save trade to database: {db_error}")
-                    
+
                     self.trades_today += 1
                     self.last_trade_time = time.time()
-                    
+
                     self._record_token_status(mint_address, 'traded', f'Invested ${trade_amount:.2f}')
-                    
+
                     # Start immediate monitoring (position already exists)
+                    self.logger.info(f"🚀 STARTING POSITION MONITORING for {symbol} ({mint_address[:8]}...)")
                     asyncio.create_task(self.monitor_position(mint_address, result, metadata))
                 
         except Exception as e:
@@ -1495,19 +1695,32 @@ class MemecoinTradingBot:
     async def monitor_position(self, mint_address: str, entry_data: Dict, metadata: Dict = None):
         """Monitor position using Bitquery real-time price monitoring"""
         symbol = metadata.get('symbol', 'UNKNOWN') if metadata else 'UNKNOWN'
-        
+
+        self.logger.info(f"🎬 monitor_position called for {symbol} ({mint_address[:8]}...)")
+
         # Ensure position exists in trading_engine
         if mint_address not in self.trading_engine.active_positions:
-            self.logger.error(f"Position {mint_address} not found in trading_engine!")
+            self.logger.error(f"❌ Position {mint_address} not found in trading_engine!")
+            self.logger.error(f"   Active positions: {list(self.trading_engine.active_positions.keys())}")
             return
-        
-        # Use Moralis monitor for position tracking
-        await self.moralis_monitor.add_position_for_monitoring(mint_address, metadata)
-        
+
+        self.logger.info(f"✅ Position exists in trading_engine for {symbol}")
+
+        # Use LaserStream monitor for ultra-fast monitoring (if available)
+        if self.laserstream_monitor:
+            self.logger.info(f"⚡ Adding {symbol} to LaserStream bonding curve monitor...")
+            await self.laserstream_monitor.add_position_for_monitoring(mint_address, metadata)
+            self.logger.info(f"✅ LaserStream monitoring started for {symbol} (real-time bonding curve updates)")
+        else:
+            # Fallback to Moralis monitor for position tracking
+            self.logger.info(f"🔄 Adding {symbol} to Moralis monitor...")
+            await self.moralis_monitor.add_position_for_monitoring(mint_address, metadata)
+            self.logger.info(f"✅ Moralis monitoring started for {symbol}")
+
         # Wait for position to complete (the monitor handles all the real-time logic)
         while mint_address in self.trading_engine.active_positions:
             await asyncio.sleep(30)  # Keep function alive while position is active
-        
+
         self.logger.info(f"🏁 Position monitoring ended for {mint_address[:8]}...")
     
     async def _check_exit_conditions_instantly(self, mint_address: str, current_price: float, symbol: str):
@@ -1943,10 +2156,17 @@ class MemecoinTradingBot:
                     # Add deduplication savings if significant
                     if dedup_stats['deduped_checks'] > 0:
                         summary += f"\n  API Savings: {dedup_stats['deduped_checks']} duplicate calls avoided ({dedup_stats['savings_pct']:.1f}%)"
-                    
+
+                    # Add opportunity tracker metrics
+                    opp_summary = self.opportunity_tracker.get_summary()
+                    if opp_summary['total_tokens'] > 0:
+                        summary += f"\n  📊 Opportunities: {opp_summary['total_tokens']} tokens tracked"
+                        by_threshold = opp_summary['by_threshold']
+                        summary += f" (1+:{by_threshold['1_plus']}, 2+:{by_threshold['2_plus']}, 3+:{by_threshold['3_plus']})"
+
                     if trade_summary:
                         summary += trade_summary
-                    
+
                     self.logger.info(summary)
                     
                     # Send Discord summary more frequently with caching
@@ -2012,22 +2232,34 @@ class MemecoinTradingBot:
                 self.logger.debug(f"Active wallet count low ({active_wallet_count}) but discovery triggered recently")
     
     async def _trigger_alpha_discovery(self, trigger_reason: str):
-        """Trigger alpha wallet discovery process"""
+        """Trigger alpha wallet discovery process with concurrency protection"""
+        # Check if discovery is already running (non-blocking check)
+        if self._discovery_running:
+            self.logger.warning(f"Discovery already running - skipping trigger (reason: {trigger_reason})")
+            return
+
+        # Acquire lock to prevent concurrent discoveries
+        async with self._discovery_lock:
+            # Double-check in case multiple tasks passed the first check
+            if self._discovery_running:
+                self.logger.warning(f"Discovery already running (caught by lock) - skipping trigger (reason: {trigger_reason})")
+                return
+
+            # Set flag to indicate discovery is running
+            self._discovery_running = True
+            self.logger.info(f"🔍 Starting alpha wallet discovery (reason: {trigger_reason})...")
+
         try:
-            self.logger.info(f"Starting alpha wallet discovery (reason: {trigger_reason})...")
-            
-            # Log discovery start (no Discord notification to avoid spam)
-            
             # Import and run discovery
             from src.discovery.alpha_discovery_v2 import ProvenAlphaFinder
-            
+
             # Create discovery instance
             finder = ProvenAlphaFinder(
                 bitquery=self.realtime_client.bitquery_client,
-                moralis=self.moralis, 
+                moralis=self.moralis,
                 database=self.database
             )
-            
+
             # Run discovery
             discovery_start = time.time()
             new_wallets = await finder.discover_alpha_wallets()
@@ -2071,7 +2303,17 @@ class MemecoinTradingBot:
                     self.logger.info("PumpPortal subscriptions updated successfully")
                 except Exception as e:
                     self.logger.error(f"Failed to update PumpPortal subscriptions after discovery: {e}")
-                    
+
+                # Update LaserStream monitor with new wallet list (for fast execution)
+                if self.laserstream_monitor:
+                    try:
+                        self.logger.info("Updating LaserStream monitor after alpha discovery...")
+                        current_wallets = list(self.wallet_tracker.watched_wallets)
+                        self.laserstream_monitor.update_wallets(current_wallets)
+                        self.logger.info(f"LaserStream monitor updated with {len(current_wallets)} wallets")
+                    except Exception as e:
+                        self.logger.error(f"Failed to update LaserStream monitor after discovery: {e}")
+
             else:
                 self.logger.warning("Alpha discovery found no new wallets")
                 
@@ -2080,14 +2322,19 @@ class MemecoinTradingBot:
                 
         except Exception as e:
             self.logger.error(f"Error during alpha wallet discovery: {e}")
-            
+
             # Send error notification to Discord
             if self.trading_engine.notifier:
                 await self.trading_engine.notifier.send_error_notification(
                     f"Alpha wallet discovery failed: {str(e)}",
                     {"trigger_reason": trigger_reason, "module": "alpha_discovery"}
                 )
-    
+        finally:
+            # Always clear the running flag, even if error occurred
+            self._discovery_running = False
+            discovery_duration = time.time() - discovery_start if 'discovery_start' in locals() else 0
+            self.logger.info(f"✅ Discovery process completed ({discovery_duration:.1f}s) - lock released")
+
     async def _update_config_with_new_wallets(self, finder, new_wallets: List[str]):
         """Update config file with score-aware wallet selection"""
         config_path = "config/config.yml"
@@ -2153,6 +2400,14 @@ class MemecoinTradingBot:
                 self.logger.info("Moralis monitor stopped")
         except Exception as e:
             self.logger.error(f"Error stopping Moralis monitor: {e}")
+
+        # Stop LaserStream bonding curve monitor
+        try:
+            if hasattr(self, 'laserstream_monitor') and self.laserstream_monitor:
+                await self.laserstream_monitor.stop()
+                self.logger.info("LaserStream bonding curve monitor stopped")
+        except Exception as e:
+            self.logger.error(f"Error stopping LaserStream bonding curve monitor: {e}")
         
         # Clean up real-time price tracking
         try:

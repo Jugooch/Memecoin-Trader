@@ -1,0 +1,62 @@
+Now you'll get a 4th output file with ALL bots. Let me show you what it will look like:
+
+  🗄️ NEW: bot_database_.csv
+
+  Complete database of EVERY classified bot (not just samples) with:
+
+  Columns:
+
+  1. wallet_address - FULL address (not truncated!)
+  2. bot_type - sybil, metric_bot, deployer, early_exit
+  3. confidence - 0.500-1.000
+  4. trades - Total trade count
+  5. buys / sells - Buy/sell breakdown
+  6. mints_traded - How many tokens they traded
+  7. mean_buy_sol - Average buy size
+  8. median_hold_sec - How long they hold (seconds)
+  9. mean_cu_price - Average compute unit price
+  10. cluster_size - For sybils: # of wallets in cluster
+  11. burst_follow_rate - For metric bots: % of buys after bursts
+  12. signature - Human-readable description
+  13. reasons - Top 3 detection reasons
+
+  Example Row (Metric Bot):
+
+  7xK9F2...full_address,metric_bot,0.673,24,18,6,5,0.1200,23.4,450000,0,0.722,"Metric bot (72% burst-triggered) | 23s
+  hold","Burst-triggered: 13/18 buys after bursts; Template timing: CV=0.32; Fast flips: 23.4s median hold"
+
+  ---
+  How You Can Use This:
+
+  1. Target Specific High-Confidence Metric Bots
+
+  Filter CSV for:
+  - bot_type = metric_bot
+  - confidence > 0.70
+  - burst_follow_rate > 0.60
+
+  These are the most predictable bots to fade/front-run!
+
+  2. Track Individual Bots Across Runs
+
+  Save full wallet addresses, then in future runs you can:
+  - See if same bots are still active
+  - Track if their behavior changes
+  - Build a personal "known bot" database
+
+  3. Find Large Sybil Clusters to Exploit
+
+  Filter for:
+  - bot_type = sybil
+  - cluster_size > 10
+
+  These are the biggest sybil operations - when they dump, it's a huge signal!
+
+  4. Identify Profitable Deployers to Copy
+
+  Filter for:
+  - bot_type = deployer
+  - mints_traded > 3
+  - Check their history manually
+
+  Snipe their next token launch!

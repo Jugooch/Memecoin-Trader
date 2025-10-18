@@ -375,15 +375,15 @@ class MoralisClient:
             data = await self._make_request(url, cache_type=cache_type)
 
             # Debug logging to see exactly what we're getting
-            self.logger.info(f"Price response for {mint_address[:8]}...: {data}")
+            self.logger.debug(f"Price response for {mint_address[:8]}...: {data}")
 
             if data is None:
-                self.logger.info(f"Price request returned None for {mint_address[:8]}...")
+                self.logger.debug(f"Price request returned None for {mint_address[:8]}...")
                 return 0.0
 
             price = data.get('usdPrice', 0)
             if price is None or price == 0:
-                self.logger.info(f"Price for {mint_address[:8]}... is {price}, full response: {data}")
+                self.logger.debug(f"Price for {mint_address[:8]}... is {price}, full response: {data}")
                 return 0.0
 
             return float(price)

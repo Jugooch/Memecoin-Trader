@@ -3,7 +3,8 @@
     "allow": [
       "Bash(mkdir:*)",
       "Bash(find:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(curl -s https://api.mainnet-beta.solana.com -X POST -H \"Content-Type: application/json\" -d '{\n  \"\"jsonrpc\"\": \"\"2.0\"\",\n  \"\"id\"\": 1,\n  \"\"method\"\": \"\"getTransaction\"\",\n  \"\"params\"\": [\n    \"\"5PYNvfxfjFSpibvhgHzFcdkL2unUvaUGuCmu5Cez8K6UCw1SwXb9PERaK8P3SK3QezWJrW5T6MUCHhr5xWfaxtfU\"\",\n    {\"\"encoding\"\": \"\"jsonParsed\"\", \"\"maxSupportedTransactionVersion\"\": 0}\n  ]\n}')"
     ],
     "deny": []
   }

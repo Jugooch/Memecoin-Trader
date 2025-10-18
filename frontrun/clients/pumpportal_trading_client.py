@@ -124,7 +124,7 @@ class PumpFunClient:
                 "message": str(e)
             }
 
-    async def create_sell_transaction(self, wallet_pubkey: str, mint_address: str, token_amount: float, slippage_bps: int = 300) -> Dict:
+    async def create_sell_transaction(self, wallet_pubkey: str, mint_address: str, token_amount: float, slippage_bps: int = 2000) -> Dict:
         """Create a sell transaction via Pump Portal Local Trading API"""
         try:
             # IMPORTANT: token_amount should be UI amount (human-readable, e.g., 1000.5)

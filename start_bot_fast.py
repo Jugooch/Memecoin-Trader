@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""
+Startup script for the Fast Execution Memecoin Trading Bot
+Uses LaserStream (Geyser) + Jito bundles for sub-2-second execution
+"""
+
+import asyncio
+import signal
+import sys
+import os
+from pathlib import Path
+
+# Add current directory to path
+sys.path.append(str(Path(__file__).parent))
+
+from main import MemecoinTradingBot
+from src.utils.monitoring import PerformanceMonitor, SystemMonitor
+from src.utils.logger_setup import setup_logging
+from src.utils.config_loader import load_config
+
+
+class BotManager:
+    def __init__(self):
+        self.bot = None
+        self.running = False
+
+    async def start_bot(self, config_file: str = "config.yml"):
+        """Start the trading bot with monitoring"""
+        print("Starting Fast Execution Memecoin Trading Bot...")
+        print("=" * 60)
+        print("⚡ Mode: FAST EXECUTION (Geyser + Jito)")
+        print("🚀 Monitoring: LaserStream real-time")
+        print("💎 Execution: Helius premium RPC + Jito bundles")
+        print("=" * 60)
+
+        try:
+            # Initialize bot
+            self.bot = MemecoinTradingBot(config_file)
+
+            # Setup signal handlers
+            signal.signal(signal.SIGINT, self._signal_handler)
+            signal.signal(signal.SIGTERM, self._signal_handler)
+
+            # Start monitoring
+            monitor = PerformanceMonitor(self.bot.database)
+            system_monitor = SystemMonitor()
+
+            # Start monitoring tasks
+            monitoring_tasks = [
+                self._periodic_health_check(system_monitor),
+                self._periodic_metrics_save(monitor),
+                self._periodic_alerts_check(monitor)
+            ]
+
+            print("Bot initialized successfully")
+            print(f"Paper mode: {self.bot.config.paper_mode} | Capital: ${self.bot.config.initial_capital} | Max trades/day: {self.bot.config.max_trades_per_day}")
+            print("Starting monitoring (detailed logs in logs/trading_fast.log)...")
+
+            self.running = True
+
+            # Start bot and monitoring
+            await asyncio.gather(
+                self.bot.start(),
+                *monitoring_tasks,
+                return_exceptions=True
+            )
+
+        except KeyboardInterrupt:
+            print("\nShutdown requested by user")
+            await self.shutdown()
+        except asyncio.CancelledError:
+            print("\nShutdown completed")
+        except Exception as e:
+            print(f"Bot startup failed: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+
+    def _signal_handler(self, signum, frame):
+        """Handle shutdown signals"""
+        print(f"\nReceived signal {signum}")
+        asyncio.create_task(self.shutdown())
+
+    async def shutdown(self):
+        """Gracefully shutdown the bot"""
+        print("Shutting down bot...")
+        self.running = False
+
+        # Cancel all running tasks first
+        try:
+            tasks = [task for task in asyncio.all_tasks() if not task.done()]
+            print(f"Cancelling {len(tasks)} running tasks...")
+
+            for task in tasks:
+                if task != asyncio.current_task():
+                    task.cancel()
+
+            # Wait for tasks to finish cancelling (with timeout)
+            if tasks:
+                try:
+                    await asyncio.wait(tasks, timeout=5.0, return_when=asyncio.ALL_COMPLETED)
+                except asyncio.CancelledError:
+                    pass  # Expected when tasks are cancelled
+
+        except Exception as e:
+            print(f"Error cancelling tasks: {e}")
+
+        if self.bot:
+            try:
+                await self.bot.stop()
+
+                # Close fast execution components
+                if hasattr(self.bot, 'fast_engine') and self.bot.fast_engine:
+                    print("Closing fast execution engine...")
+                    stats = self.bot.fast_engine.get_stats()
+                    print(f"  Total trades: {stats['total_trades']}")
+                    print(f"  Win rate: {stats['win_rate']:.1f}%")
+                    print(f"  Current equity: ${stats['current_equity']:.2f}")
+
+                if hasattr(self.bot, 'laserstream_monitor') and self.bot.laserstream_monitor:
+                    print("Stopping LaserStream monitor...")
+                    await self.bot.laserstream_monitor.stop()
+
+                # Generate final report (with timeout)
+                print("Generating final performance report...")
+                try:
+                    monitor = PerformanceMonitor(self.bot.database)
+                    report = await asyncio.wait_for(monitor.generate_performance_report(7), timeout=10.0)
+
+                    print("\n" + "="*50)
+                    print("FINAL PERFORMANCE REPORT")
+                    print("="*50)
+                    print(f"Total Trades: {report.get('total_trades', 0)}")
+                    print(f"Profitable Trades: {report.get('profitable_trades', 0)}")
+                    print(f"Win Rate: {report.get('win_rate', 0):.1f}%")
+                    print(f"Total Profit: ${report.get('total_profit', 0):.2f}")
+                    print(f"Max Drawdown: {report.get('max_drawdown', 0):.1f}%")
+                    print("="*50)
+                except asyncio.TimeoutError:
+                    print("Report generation timed out - skipping")
+                except Exception as e:
+                    print(f"Report generation failed: {e}")
+
+                # Cleanup
+                try:
+                    if hasattr(self.bot.trading_engine, 'cleanup'):
+                        await asyncio.wait_for(self.bot.trading_engine.cleanup(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    print("Cleanup timed out - forcing shutdown")
+                except Exception as e:
+                    print(f"Cleanup error: {e}")
+
+            except Exception as e:
+                print(f"Error during bot shutdown: {e}")
+
+        print("Bot shutdown complete")
+        sys.exit(0)
+
+    async def _periodic_health_check(self, system_monitor: SystemMonitor):
+        """Periodic system health checks"""
+        while self.running:
+            try:
+                health = await system_monitor.check_system_health()
+
+                # Log warnings for high resource usage
+                if health['memory_used_pct'] > 80:
+                    print(f"WARNING: High memory usage: {health['memory_used_pct']:.1f}%")
+
+                if health['cpu_used_pct'] > 80:
+                    print(f"WARNING: High CPU usage: {health['cpu_used_pct']:.1f}%")
+
+                # Check network connectivity (only show if critical services are down)
+                connectivity = await system_monitor.check_network_connectivity()
+                critical_offline = [name for name, status in connectivity.items()
+                                  if status['status'] == 'offline' and name in ['helius', 'geyser']]
+
+                if critical_offline:
+                    print(f"Critical services offline: {', '.join(critical_offline)}")
+
+                await asyncio.sleep(300)  # Check every 5 minutes
+
+            except Exception as e:
+                print(f"Health check error: {e}")
+                await asyncio.sleep(60)
+
+    async def _periodic_metrics_save(self, monitor: PerformanceMonitor):
+        """Periodic metrics saving"""
+        while self.running:
+            try:
+                await monitor.save_daily_metrics()
+                await asyncio.sleep(3600)  # Save every hour
+            except Exception as e:
+                print(f"Metrics save error: {e}")
+                await asyncio.sleep(300)
+
+    async def _periodic_alerts_check(self, monitor: PerformanceMonitor):
+        """Periodic alerts checking"""
+        while self.running:
+            try:
+                alerts = await monitor.check_performance_alerts()
+
+                for alert in alerts:
+                    icon = "[CRITICAL]" if alert['type'] == 'critical' else "[WARNING]" if alert['type'] == 'warning' else "[INFO]"
+                    print(f"{icon} {alert['message']}")
+
+                await asyncio.sleep(1800)  # Check every 30 minutes
+
+            except Exception as e:
+                print(f"Alerts check error: {e}")
+                await asyncio.sleep(300)
+
+
+def main():
+    """Main entry point"""
+    # Check Python version
+    if sys.version_info < (3, 8):
+        print("Python 3.8 or higher is required")
+        sys.exit(1)
+
+    # Check fast config file exists using shared loader
+    try:
+        config = load_config("config_fast.yml")
+        config_file = "config_fast.yml"  # Will be found by shared loader
+
+        # Verify fast_execution is enabled
+        if not config.get('fast_execution', {}).get('enabled', False):
+            print("ERROR: fast_execution.enabled is not set to true in config_fast.yml")
+            print("Please set fast_execution.enabled: true to use fast execution mode")
+            sys.exit(1)
+
+    except FileNotFoundError:
+        print(f"Fast execution config file not found")
+        print("Please ensure config/config_fast.yml exists")
+        sys.exit(1)
+
+    # Create logs directory
+    os.makedirs("logs", exist_ok=True)
+
+    # Start bot
+    manager = BotManager()
+
+    try:
+        asyncio.run(manager.start_bot(config_file))
+    except KeyboardInterrupt:
+        print("\nGoodbye!")
+    except Exception as e:
+        print(f"Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

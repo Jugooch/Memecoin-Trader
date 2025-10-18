@@ -45,6 +45,26 @@ class SubmitterConfig:
 
 
 @dataclass
+class SimulationResult:
+    """Result of transaction simulation"""
+    success: bool
+    error: Optional[str] = None
+    units_consumed: Optional[int] = None
+    logs: Optional[list] = None
+    accounts: Optional[list] = None  # Post-transaction account balances
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert result to dictionary"""
+        return {
+            "success": self.success,
+            "error": self.error,
+            "units_consumed": self.units_consumed,
+            "logs": self.logs,
+            "accounts": self.accounts
+        }
+
+
+@dataclass
 class TransactionResult:
     """Result of transaction submission"""
     signature: str
@@ -52,6 +72,7 @@ class TransactionResult:
     slot: Optional[int] = None
     error: Optional[str] = None
     submitted_to_rpc: Optional[str] = None
+    simulation: Optional[SimulationResult] = None  # Simulation result if pre-simulated
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert result to dictionary"""
@@ -60,7 +81,8 @@ class TransactionResult:
             "submitted_at": self.submitted_at.isoformat(),
             "slot": self.slot,
             "error": self.error,
-            "submitted_to_rpc": self.submitted_to_rpc
+            "submitted_to_rpc": self.submitted_to_rpc,
+            "simulation": self.simulation.to_dict() if self.simulation else None
         }
 
 
@@ -219,9 +241,26 @@ class TransactionSubmitter:
             # Serialize transaction
             tx_bytes = bytes(signed_tx)
 
+            # Use Sender endpoint (secure_rpc_url) if available, otherwise fall back to standard URL
+            # Sender endpoint provides ultra-low latency with Jito MEV routing
+            submission_url = connection.endpoint.secure_rpc_url or connection.endpoint.url
+
+            if connection.endpoint.secure_rpc_url:
+                logger.info(
+                    "using_sender_endpoint_for_jito_mev",
+                    endpoint=connection.endpoint.label,
+                    sender_url=connection.endpoint.secure_rpc_url
+                )
+            else:
+                logger.warning(
+                    "sender_endpoint_not_configured",
+                    endpoint=connection.endpoint.label,
+                    fallback_url=connection.endpoint.url
+                )
+
             # Submit via RPC
             response = await self._send_transaction_rpc(
-                connection.endpoint.url,
+                submission_url,
                 tx_bytes
             )
 
@@ -291,6 +330,123 @@ class TransactionSubmitter:
                     raise Exception(f"RPC error: {error_msg}")
 
                 return result
+
+    async def simulate_transaction(
+        self,
+        signed_tx: Transaction,
+        include_accounts: bool = True
+    ) -> SimulationResult:
+        """
+        Simulate a transaction before sending it
+
+        Args:
+            signed_tx: Signed transaction to simulate
+            include_accounts: Whether to include post-transaction account states
+
+        Returns:
+            SimulationResult with simulation outcome
+
+        Example:
+            sim = await submitter.simulate_transaction(signed_tx)
+            if sim.success:
+                print(f"CU needed: {sim.units_consumed}")
+                # Check post-balances: sim.accounts
+            else:
+                print(f"Would fail: {sim.error}")
+        """
+        try:
+            # Get healthy RPC connection
+            connection = await self.rpc_manager.get_healthy_connection()
+            if connection is None:
+                return SimulationResult(
+                    success=False,
+                    error="No healthy RPC connection available"
+                )
+
+            # Serialize transaction to base64
+            tx_bytes = bytes(signed_tx)
+            tx_base64 = base64.b64encode(tx_bytes).decode('utf-8')
+
+            # Build simulateTransaction RPC request
+            payload = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "simulateTransaction",
+                "params": [
+                    tx_base64,
+                    {
+                        "encoding": "base64",
+                        "replaceRecentBlockhash": True,  # Use latest blockhash for simulation
+                        "sigVerify": False,  # Skip signature verification for speed
+                        "accounts": {
+                            "encoding": "base64",
+                            "addresses": []  # Empty means return all account states
+                        } if include_accounts else None
+                    }
+                ]
+            }
+
+            # Send HTTP POST request with short timeout (simulation is fast)
+            timeout = aiohttp.ClientTimeout(total=3)  # 3 second timeout
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(connection.endpoint.url, json=payload) as response:
+                    result = await response.json()
+
+                    # Check for RPC errors
+                    if "error" in result:
+                        error_msg = result["error"].get("message", str(result["error"]))
+                        logger.warning(
+                            "simulation_rpc_error",
+                            error=error_msg
+                        )
+                        return SimulationResult(
+                            success=False,
+                            error=error_msg
+                        )
+
+                    # Parse simulation result
+                    sim_result = result.get("result", {}).get("value", {})
+
+                    # Check if simulation failed
+                    if sim_result.get("err"):
+                        error_detail = str(sim_result["err"])
+                        logger.info(
+                            "simulation_failed",
+                            error=error_detail
+                        )
+                        return SimulationResult(
+                            success=False,
+                            error=error_detail,
+                            logs=sim_result.get("logs", [])
+                        )
+
+                    # Simulation succeeded
+                    units_consumed = sim_result.get("unitsConsumed")
+                    logs = sim_result.get("logs", [])
+                    accounts = sim_result.get("accounts") if include_accounts else None
+
+                    logger.info(
+                        "simulation_success",
+                        units_consumed=units_consumed,
+                        log_count=len(logs)
+                    )
+
+                    return SimulationResult(
+                        success=True,
+                        units_consumed=units_consumed,
+                        logs=logs,
+                        accounts=accounts
+                    )
+
+        except Exception as e:
+            logger.error(
+                "simulation_exception",
+                error=str(e)
+            )
+            return SimulationResult(
+                success=False,
+                error=f"Simulation exception: {str(e)}"
+            )
 
     async def submit_and_confirm(
         self,

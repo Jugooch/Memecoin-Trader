@@ -15,9 +15,9 @@ from src.clients.moralis_client import MoralisClient
 from src.core.database import Database
 
 class WalletRotationManager:
-    def __init__(self, wallet_tracker: WalletTracker, bitquery: BitqueryClient, 
+    def __init__(self, wallet_tracker: WalletTracker, bitquery: BitqueryClient,
                  moralis: MoralisClient, database: Database, config_path: str = "config/config.yml",
-                 discord_notifier=None, realtime_client=None):
+                 discord_notifier=None, realtime_client=None, laserstream_monitor=None):
         self.wallet_tracker = wallet_tracker
         self.bitquery = bitquery
         self.moralis = moralis
@@ -25,12 +25,17 @@ class WalletRotationManager:
         self.config_path = config_path
         self.discord_notifier = discord_notifier
         self.realtime_client = realtime_client  # Add realtime client for updating subscriptions
+        self.laserstream_monitor = laserstream_monitor  # Add LaserStream monitor for fast wallet detection
         self.logger = logging.getLogger(__name__)
         
         # Load config from file
         from src.utils.config_loader import load_config
-        self.config = load_config(config_path.split('/')[-1]) if '/' in config_path else load_config(config_path)
-        
+        # Extract just the filename from path (e.g., "config/config_fast.yml" -> "config_fast.yml")
+        self.config_filename = config_path.split('/')[-1] if '/' in config_path else config_path
+        self.config = load_config(self.config_filename)
+
+        self.logger.info(f"WalletRotationManager loaded config from: {self.config_filename}")
+
         # Rotation settings - read from config or use defaults
         rotation_config = self.config.get('wallet_rotation', {})
         self.rotation_interval = rotation_config.get('interval_hours', 2) * 3600  # Convert hours to seconds
@@ -115,23 +120,23 @@ class WalletRotationManager:
         
         # Step 3: Discover new alpha wallets
         new_wallets = []
-        
+
         # Check if discovery is enabled
         discover_new_wallets = self.config.get('api_optimization', {}).get('discover_new_wallets', True)
-        
+
         if target_new_wallets > 0 and discover_new_wallets:
             discovery_start = time.time()
             try:
                 self.logger.info("Discovery enabled - searching for new alpha wallets...")
                 finder = ProvenAlphaFinder(self.bitquery, self.moralis, self.database, self.config)
                 discovered_wallets = await finder.discover_alpha_wallets()
-                
+
                 if discovered_wallets:
                     # Filter out wallets we already have
                     existing_wallets = self.wallet_tracker.watched_wallets
                     filtered_wallets = [w for w in discovered_wallets if w not in existing_wallets]
                     new_wallets = filtered_wallets[:target_new_wallets]
-                    
+
                     discovery_time = time.time() - discovery_start
                     self.logger.info(f"Discovery completed in {discovery_time:.1f}s: "
                                    f"discovered {len(discovered_wallets)} total, "
@@ -139,11 +144,42 @@ class WalletRotationManager:
                                    f"taking {len(new_wallets)} for rotation")
                 else:
                     self.logger.warning("Alpha discovery returned no new wallets")
-                    
+
             except Exception as e:
                 self.logger.error(f"Error during alpha discovery: {e}")
         elif target_new_wallets > 0 and not discover_new_wallets:
-            self.logger.info(f"Discovery disabled - skipping search for {target_new_wallets} new wallets")
+            self.logger.info(f"Discovery disabled - selecting best {target_new_wallets} wallets from existing cache")
+
+            # SMART SELECTION: Score ALL existing wallets and take the top performers
+            # This ensures we get active, high-scoring wallets even without discovery
+            all_existing_wallets = list(self.wallet_tracker.watched_wallets)
+
+            # Score each wallet
+            scored_wallets = []
+            for wallet in all_existing_wallets:
+                score = self.wallet_tracker.performance_tracker.evaluate_wallet(wallet)
+                scored_wallets.append((wallet, score))
+
+            # Sort by score (highest first)
+            scored_wallets.sort(key=lambda x: x[1], reverse=True)
+
+            # Log top scorers for visibility
+            top_5 = scored_wallets[:5]
+            self.logger.info(f"Top 5 existing wallets by score:")
+            for wallet, score in top_5:
+                self.logger.info(f"  {wallet[:8]}... = {score:.1f} points")
+
+            # Take the top N wallets to fill our target
+            top_wallets = [w for w, s in scored_wallets[:target_new_wallets]]
+
+            # Add them as "new" wallets (they're not really new, just best from cache)
+            new_wallets = top_wallets
+
+            # Move low-scoring wallets from "replace" to "candidates" (keep them as backup)
+            candidates.update(replace_wallets)
+            replace_wallets.clear()
+
+            self.logger.info(f"Selected {len(new_wallets)} top-scoring wallets from existing cache (no discovery)")
         elif target_new_wallets == 0:
             self.logger.info("No new wallets needed for rotation")
         
@@ -196,6 +232,15 @@ class WalletRotationManager:
                 self.logger.info("PumpPortal subscriptions updated successfully")
             except Exception as e:
                 self.logger.error(f"Failed to update PumpPortal subscriptions: {e}")
+
+        # Step 7b: Update LaserStream monitor with new wallet list (for fast execution)
+        if self.laserstream_monitor:
+            try:
+                self.logger.info("Updating LaserStream monitor with new wallet list...")
+                self.laserstream_monitor.update_wallets(list(final_wallets))
+                self.logger.info(f"LaserStream monitor updated successfully with {len(final_wallets)} wallets")
+            except Exception as e:
+                self.logger.error(f"Failed to update LaserStream monitor: {e}")
         
         # Step 8: Record the rotation
         self.wallet_tracker.performance_tracker.record_rotation(
@@ -260,13 +305,18 @@ class WalletRotationManager:
         """Update the config file with new wallet list using safe atomic write"""
         try:
             from src.utils.config_loader import safe_update_config
-            
-            # Use safe atomic update
+            from pathlib import Path
+
+            # Build correct config path using the same config file we loaded from
+            project_root = Path(__file__).parent.parent.parent
+            config_file_path = str(project_root / "config" / self.config_filename)
+
+            # Use safe atomic update with correct config path
             updates = {'watched_wallets': wallet_list}
-            safe_update_config(updates)
-            
-            self.logger.info(f"Updated config file with {len(wallet_list)} wallets (safe atomic write)")
-            
+            safe_update_config(updates, config_path=config_file_path)
+
+            self.logger.info(f"Updated {self.config_filename} with {len(wallet_list)} wallets (safe atomic write)")
+
         except Exception as e:
             self.logger.error(f"Failed to update config file: {e}")
     

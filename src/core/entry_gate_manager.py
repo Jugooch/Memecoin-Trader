@@ -6,6 +6,7 @@ Prevents farming exploitation while maintaining <500ms decision time
 import asyncio
 import json
 import logging
+import os
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -92,12 +93,13 @@ class EntryGateManager:
                 
                 reputation_file = Path("data/wallet_reputation.json")
                 reputation_file.parent.mkdir(exist_ok=True)
-                
-                # Write to temp file first then rename (atomic operation)
+
+                # Write to temp file first then replace (atomic operation, works on Windows)
                 temp_file = reputation_file.with_suffix('.tmp')
                 with open(temp_file, 'w') as f:
                     json.dump(data, f, indent=2)
-                temp_file.rename(reputation_file)
+                # Use os.replace() instead of Path.rename() - works on Windows even if file exists
+                os.replace(temp_file, reputation_file)
                 
             except Exception as e:
                 self.logger.error(f"Error persisting reputation data: {e}")
